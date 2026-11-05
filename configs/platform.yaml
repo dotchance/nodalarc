@@ -94,10 +94,11 @@ platform:
   # network.queueMemory.bytesPerPacket replaces it at install.
   queue_memory_bytes_per_packet: 2299
   # The share of each server's Kubernetes allocatable memory that a session's
-  # delay queues on that server may hold; a session over it is refused before
-  # its pods are created. Allocatable memory is the server's capacity for
-  # pods, not its unused memory, so the share leaves room for everything else
-  # the server runs. Chart value network.queueMemory.serverShare replaces it.
+  # link queues on that server may hold; a session over it is refused before
+  # its pods are created, and again before wiring on the servers its pods are
+  # on. Allocatable memory is the server's capacity for pods, not its unused
+  # memory, so the share leaves room for everything else the server runs.
+  # Chart value network.queueMemory.serverShare replaces it.
   queue_memory_server_share: 0.1
 
   # Whether the Node Agent loads the kernel modules a session needs (MPLS)

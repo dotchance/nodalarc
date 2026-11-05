@@ -63,6 +63,7 @@ def _snapshot_source(
         pending_teardowns={},
         ranges_km=ranges_km,
         latencies_ms=latencies_ms,
+        contacts_opened={},
     )
 
 

@@ -73,7 +73,7 @@ class PlatformConfig(BaseModel):
     # Kernel memory one queued packet of the envelope's size occupies, measured on the
     # installation's kernel. Set at install (chart value network.queueMemory.bytesPerPacket).
     queue_memory_bytes_per_packet: int = Field(gt=0)
-    # The share of each server's Kubernetes allocatable memory that a session's delay queues on
+    # The share of each server's Kubernetes allocatable memory that a session's link queues on
     # that server may hold. Allocatable memory is the server's capacity for pods, not its unused
     # memory, so the share leaves room for every other consumer. Set at install (chart value
     # network.queueMemory.serverShare).

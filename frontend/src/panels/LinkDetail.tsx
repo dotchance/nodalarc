@@ -182,6 +182,20 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
         <span className="detail-label">Type</span>
         <span className="detail-value">{translateLinkType(link.link_type)}</span>
       </div>
+      <div
+        className="detail-row"
+        title={
+          link.contact_id
+            ? "A long-delay link: when its contact ends, packets already sent keep arriving " +
+              "for each direction's delay."
+            : "A local link: when its contact ends, packets still in flight are lost."
+        }
+      >
+        <span className="detail-label">Class</span>
+        <span className="detail-value">
+          {link.contact_id ? `Long-delay, contact ${link.contact_id}` : "Local"}
+        </span>
+      </div>
       {link.link_rule_id && (
         <div className="detail-row">
           <span className="detail-label">Rule</span>

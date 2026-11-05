@@ -64,6 +64,7 @@ from nodalarc.models.events import (
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.link_state import contact_id
 from nodalarc.models.ome_lifecycle import MbbTeardownLifecycleDetails
 from nodalarc.models.resolved_session import InterfaceRates, NodeKind, NodeRole, ResolvedNode
 from nodalarc.models.scheduler_ops import (
@@ -75,6 +76,8 @@ from nodalarc.models.scheduler_ops import (
 from nodalarc.models.vs_api import (
     AlmanacState,
     BodySamplesFrame,
+    ContactLoss,
+    DrainingDirection,
     HistoryRecordingState,
     LinkDecisionTrace,
     LinkState,
@@ -122,6 +125,8 @@ log = logging.getLogger(__name__)
 
 STALE_THRESHOLD_S: float = 15.0
 GROUND_DECISION_SAMPLE_LIMIT: int = 720
+# The ended contacts with losses that the page lists, newest last.
+_CONTACT_LOSSES_KEPT: int = 50
 
 
 class SessionInactiveError(RuntimeError):
@@ -250,6 +255,7 @@ class SessionContext:
         self.latest_ground_link_decision_snapshot: GroundLinkDecisionSnapshot | None = None
         self.ground_decision_samples_by_gs: dict[str, deque] = {}
         self.recent_events: list[RecentEvent] = []
+        self.contact_losses: list[ContactLoss] = []
         # Unknown until the session clock reports it; no reader substitutes
         # wall time for it.
         self.sim_time: str | None = None
@@ -862,6 +868,11 @@ class SessionContext:
                     scheduling_state=link.scheduling_state,
                     teardown_remaining_ticks=link.teardown_remaining_ticks,
                     successor_pair=link.successor_pair,
+                    contact_id=(
+                        contact_id(snapshot.epoch_id, link.contact_opened_at)
+                        if link.contact_opened_at is not None
+                        else None
+                    ),
                 )
                 new_traces[key] = self._trace_from_snapshot_link(
                     link,
@@ -1062,6 +1073,7 @@ class SessionContext:
                 link_rule_id=data.get("link_rule_id"),
                 topology_mode=data.get("topology_mode"),
                 endpoint_segments=data.get("endpoint_segments"),
+                contact_id=event.contact_id,
             )
             self.link_decision_traces[key] = trace
         self._notify_link_change(node_a, node_b, up=True)
@@ -1079,6 +1091,20 @@ class SessionContext:
         with self.state_lock:
             self.links.pop(key, None)
             self.link_decision_traces.pop(key, None)
+            if event.losses:
+                self.contact_losses.append(
+                    ContactLoss(
+                        node_a=node_a,
+                        node_b=node_b,
+                        contact_id=event.contact_id,
+                        reason=event.reason,
+                        sim_time=event.sim_time,
+                        wall_time=event.wall_time,
+                        ends=list(event.losses),
+                    )
+                )
+                # The page lists the latest; the history database keeps every LinkDown.
+                del self.contact_losses[:-_CONTACT_LOSSES_KEPT]
         self._notify_link_change(node_a, node_b, up=False)
         self._add_recent_event(data, "link_down")
         self._record_history(
@@ -1215,6 +1241,7 @@ class SessionContext:
                 "generation": snap.wiring_generation,
                 "pairs": pairs,
                 "pending": pending,
+                "draining": tuple(snap.draining_contacts),
                 "emitted_at": snap.emitted_at,
                 "received_at": received_at,
             }
@@ -1233,6 +1260,35 @@ class SessionContext:
         if not self.actual_links_by_instance:
             return frozenset()
         return frozenset().union(*(rec["pairs"] for rec in self.actual_links_by_instance.values()))
+
+    def draining_directions(self) -> list[DrainingDirection]:
+        """Each direction of a long-delay link still delivering after its contact ended: every
+        draining end of the Scheduler's contacts is the receiver of the direction its peer sent.
+        Caller holds ``state_lock``."""
+        directions = []
+        for rec in self.actual_links_by_instance.values():
+            for contact in rec.get("draining", ()):
+                node_a, node_b = contact.pair
+                interface_of = dict(zip(contact.pair, contact.interfaces, strict=True))
+                for end in contact.ends:
+                    if end.node_id not in interface_of:
+                        raise ValueError(
+                            f"draining contact {contact.contact_id} of {node_a}<->{node_b} names "
+                            f"an end {end.node_id} that is not on its link"
+                        )
+                    peer = node_b if end.node_id == node_a else node_a
+                    directions.append(
+                        DrainingDirection(
+                            contact_id=contact.contact_id,
+                            transmitter_node_id=peer,
+                            transmitter_interface=interface_of[peer],
+                            receiver_node_id=end.node_id,
+                            receiver_interface=end.interface,
+                            stopped_at=contact.stopped_at,
+                            last_arrival_at=end.receives_until,
+                        )
+                    )
+        return sorted(directions, key=lambda d: (d.transmitter_node_id, d.receiver_node_id))
 
     def pending_actuation(self, now: datetime) -> dict[tuple[str, str], PendingActuation]:
         """Scheduler-owned divergence timing for currently-pending pairs, skew-free.

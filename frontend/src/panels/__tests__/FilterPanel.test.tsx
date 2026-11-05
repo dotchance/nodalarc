@@ -50,6 +50,8 @@ function snapshot(): StateSnapshot {
     ],
     links: [],
     kernel_actual_pairs: [],
+    draining_directions: [],
+    contact_losses: [],
     traced_paths: [],
     recent_events: [],
     routing_stack: "isis-plain",

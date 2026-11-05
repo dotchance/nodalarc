@@ -52,8 +52,10 @@ def diff_isl_visibility_events(
     feasibility: Mapping[tuple[str, str], IslFeasibilityResult],
     scheduled_links: Mapping[tuple[str, str], ScheduledIsl],
     previous_state: Mapping[tuple[str, str], tuple[bool, bool]],
+    long_delay_pairs: frozenset[tuple[str, str]],
 ) -> IslEventDiff:
-    """Emit ISL VisibilityEvents for changed feasibility/scheduling state."""
+    """Emit ISL VisibilityEvents for changed feasibility/scheduling state. The event that brings
+    a long-delay link up opens its contact, at the event's sim time."""
     state = dict(previous_state)
     events: list[VisibilityEvent] = []
 
@@ -109,6 +111,9 @@ def diff_isl_visibility_events(
                 link_type="isl",
                 visibility_reject_reason=visibility_reject_reason,
                 unscheduled_reason=unscheduled_reason,
+                contact_opened_at=(
+                    sim_time if visible and scheduled and pair in long_delay_pairs else None
+                ),
             )
         )
 

@@ -357,10 +357,15 @@ def apply_long_delay_transmit_shaping(pid: int, ifname: str, transmit_mbps: floa
 
 
 def apply_receive_delay_queue(
-    host_ifname: str, receive_mbps: float, delay_ms: float, limit_packets: int
+    host_ifname: str, receive_mbps: float, delay_ms: float, limit_packets: int, *, fresh: bool
 ) -> None:
     """Give a long-delay end's host-side veth its receive queue: the terminal's receive rate and
-    the delay of the direction the end receives, held in a queue of ``limit_packets``."""
+    the delay of the direction the end receives, held in a queue of ``limit_packets``.
+
+    ``fresh`` (the end carries no contact) starts a new queue: the end's last queue was emptied
+    at its close, and a new qdisc's counters count this contact alone. On a host-side veth that
+    lives for the session, keeping the old qdisc would add every earlier contact's drops to this
+    one's. A contact that reopens while the last one drains keeps the queue and its packets."""
     delay_ns = delay_ms_to_netem_ns(delay_ms)
 
     def _op(ipr: IPRoute) -> None:
@@ -368,6 +373,10 @@ def apply_receive_delay_queue(
         if not links:
             raise FileNotFoundError(f"Host interface {host_ifname} not found")
         idx = links[0]
+        if fresh:
+            root = next((q for q in interface_qdiscs(idx) if q["parent"] == TC_H_ROOT), None)
+            if root is not None and root["handle"] != 0:
+                ipr.tc("del", index=idx, parent=TC_H_ROOT)
         _rate_limit_egress(ipr, idx, receive_mbps)
         ipr.tc(
             "replace",

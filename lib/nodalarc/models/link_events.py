@@ -8,7 +8,7 @@ Published via NATS JetStream.
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 # The `reason` of the LinkActive rows a recorded history writes, never sent on the wire: the links
 # the kernel had up when recording began, or when it resumed after VS-API restarted.
@@ -65,10 +65,41 @@ class LinkUp(BaseModel):
     reason: str  # vis_gained, gs_above_horizon, scenario_inject_up, scenario_reconciliation
     link_type: Literal["isl", "ground"]
     provenance: LinkDecisionProvenance | None = None
+    # The contact that opened, on a fixed long-delay link (``link_state.contact_id``).
+    contact_id: str | None = None
+
+
+# Why a link end's contact ended. A local link closes when its contact ends ("end_of_contact").
+# A long-delay end closes when the last packet sent before its peer stopped admitting has had the
+# light time of the direction it receives ("drain_deadline"); a seek or a scenario command closes
+# it before then. A long-delay end whose next contact opens while it still drains keeps its
+# queue for that contact ("reopened"): nothing is discarded, and only what the stopped admission
+# took is the ended contact's.
+type LinkEndCloseCause = Literal["end_of_contact", "drain_deadline", "seek", "scenario", "reopened"]
+
+
+class LinkEndLoss(BaseModel):
+    """What one link end's queues lost when it closed, from the Node Agent's close.
+
+    ``discarded_at_close`` is what the end's delay queue still held. With ``discarded_exact`` it is
+    a count: admission had stopped at both ends, so nothing entered the queue between the read
+    and the reset. Without it, it is a sample read just before the close of a local link, which
+    keeps admitting until then. ``queue_dropped`` is what the queue dropped at its limit
+    (substrate resource loss), and ``admission_taken`` what the stopped admission filter took."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node_id: str
+    interface: str
+    cause: LinkEndCloseCause
+    admission_taken: int = Field(ge=0)
+    queue_dropped: int = Field(ge=0)
+    discarded_at_close: int = Field(ge=0)
+    discarded_exact: bool
 
 
 class LinkDown(BaseModel):
-    """Link went down between two nodes."""
+    """Link went down between two nodes: every end of its contact closed."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -78,8 +109,12 @@ class LinkDown(BaseModel):
     node_b: str
     interface_a: str
     interface_b: str
-    reason: str  # vis_lost, tracking_exceeded, terminal_exhausted, gs_below_horizon, scenario_inject_down, scenario_reconciliation, satellite_loss
+    reason: str  # vis_lost, tracking_exceeded, terminal_exhausted, gs_below_horizon, scenario_inject_down, scenario_reconciliation, satellite_loss, seek
     link_type: Literal["isl", "ground"]
+    # The contact that closed, on a fixed long-delay link (``link_state.contact_id``).
+    contact_id: str | None = None
+    # One entry per closed end that reported its queues.
+    losses: tuple[LinkEndLoss, ...] = ()
 
 
 class LatencyUpdate(BaseModel):

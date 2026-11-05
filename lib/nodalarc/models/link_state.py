@@ -17,11 +17,11 @@ Published via NATS JetStream with MaxMsgsPerSubject=1 retention.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from nodalarc.models.link_rules import TopologyMode
 
@@ -84,7 +84,37 @@ class LinkState(BaseModel):
     scheduling_state: SchedulingState = "active"
     teardown_remaining_ticks: int | None = None
     successor_pair: tuple[str, str] | None = None
+    # The sim time the link's current contact opened, on a fixed long-delay link whose carrier is
+    # up; None on every other link. With the snapshot's epoch it names the contact
+    # (``contact_id``): the Node Agent keeps one delay queue per contact, and a command for one
+    # contact never changes another.
+    contact_opened_at: datetime | None = None
     sim_time: datetime
+
+    @model_validator(mode="after")
+    def _contact_only_on_an_up_isl(self) -> LinkState:
+        if self.contact_opened_at is None:
+            return self
+        if self.link_type != "isl" or self.carrier != CarrierState.UP:
+            raise ValueError(
+                f"link {self.node_a}<->{self.node_b}: a contact opening belongs only to a fixed "
+                f"link whose carrier is up (link_type={self.link_type}, carrier={self.carrier})"
+            )
+        if self.contact_opened_at > self.sim_time:
+            raise ValueError(
+                f"link {self.node_a}<->{self.node_b}: its contact opened at "
+                f"{self.contact_opened_at.isoformat()}, after the snapshot time "
+                f"{self.sim_time.isoformat()}"
+            )
+        return self
+
+
+def contact_id(epoch_id: int, opened_at: datetime) -> str:
+    """The name of one long-delay contact: the OME epoch and the sim time it opened. A seek starts
+    a new epoch, so a contact that opens at the same sim time after a seek is a different contact.
+    The Node Agent records it on the receiving host-side veth and refuses to change a contact it
+    does not carry."""
+    return f"{epoch_id}@{opened_at.astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%S.%fZ')}"
 
 
 class LinkStateSnapshot(BaseModel):

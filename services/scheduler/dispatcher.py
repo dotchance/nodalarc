@@ -47,6 +47,7 @@ import json
 import logging
 import os
 import socket
+import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -63,7 +64,7 @@ from nodalarc.models.events import (
     VisibilityEvent,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
-from nodalarc.models.link_events import LinkDecisionProvenance
+from nodalarc.models.link_events import LinkDecisionProvenance, LinkEndLoss
 from nodalarc.models.link_state import LinkStateSnapshot, SchedulingState
 from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.models.scheduler_ops import (
@@ -71,6 +72,8 @@ from nodalarc.models.scheduler_ops import (
     ActuationFailureClass,
     ActuationOpsDetails,
     ActuationState,
+    DrainingContact,
+    DrainingLinkEnd,
     OperatorRepairCommand,
     OperatorRepairResponse,
     PendingActuationPair,
@@ -99,6 +102,7 @@ from nodalarc.nats_channels import (
     scheduling_checkpoint_subject,
     session_ephemeris_subject,
 )
+from nodalarc.proto import node_agent_pb2
 from nodalarc.substrate.measurement_contract import RequiredSubstratePair, SubstrateMeasurement
 from pydantic import ValidationError
 
@@ -109,16 +113,27 @@ from scheduler.actuation import (
 )
 from scheduler.agent_health import AgentHealthTracker, AgentHealthTransition
 from scheduler.agent_pool import AgentPool
+from scheduler.contact_drain import (
+    LongDelayPlan,
+    due_ends,
+    next_close_due,
+    plan_long_delay_contacts,
+    remaining_ends,
+    start_drain,
+)
 from scheduler.desired_state import (
     ActiveLinkInfo,
     desired_link_from_snapshot_link,
     desired_link_from_visibility,
 )
 from scheduler.dispatch_actuator import (
+    end_loss_records,
+    publish_link_down,
     send_authoritative_latency_updates,
     send_batch_down,
     send_batch_up,
     verify_ground_kernel_inventory,
+    verify_long_delay_ends,
 )
 from scheduler.dispatch_planner import (
     classify_mbb_changes,
@@ -166,7 +181,7 @@ class DispatchIntent:
     down_reasons: dict[tuple[str, str], str]
     forced_bbm_pairs: frozenset[tuple[str, str]]
     sim_time: datetime
-    source: Literal["ome_event", "snapshot", "scenario", "resume"]
+    source: Literal["ome_event", "snapshot", "scenario", "resume", "drain"]
     rebaseline_counts: bool = False
 
 
@@ -231,8 +246,22 @@ class Dispatcher:
         now: Callable[[], datetime] | None = None,
         read_lifecycle_identity: Callable[[], tuple[str | None, tuple[str, str] | None]]
         | None = None,
+        long_delay_pairs: frozenset[tuple[str, str]] | None = None,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
         self._now = now if now is not None else lambda: datetime.now(UTC)
+        # Drain deadlines are elapsed real time: the kernel releases queued packets on its
+        # monotonic clock, at every playback speed and through a pause.
+        self._monotonic = monotonic if monotonic is not None else time.monotonic
+        if long_delay_pairs is None:
+            raise ValueError("long_delay_pairs is required: the resolved session's link classes")
+        unmapped = sorted(pair for pair in long_delay_pairs if pair not in interface_map)
+        if unmapped:
+            raise ValueError(f"long-delay links with no fixed interfaces: {unmapped}")
+        # The fixed links the resolver classes long-delay: their contacts drain at their end.
+        self._long_delay_pairs = long_delay_pairs
+        # Wakes the dispatch worker when the next draining end is due to close.
+        self._drain_wakeup: asyncio.Task | None = None
         # Authoritative lifecycle reader: returns (ConstellationSpec
         # status.sessionRunId | None, wiring manifest (session_id,
         # wiring_generation) | None), None meaning absent. Used only to
@@ -741,7 +770,7 @@ class Dispatcher:
     def _build_dispatch_intent(
         self,
         sim_time: datetime,
-        source: Literal["ome_event", "snapshot", "scenario", "resume"],
+        source: Literal["ome_event", "snapshot", "scenario", "resume", "drain"],
         rebaseline_counts: bool = False,
     ) -> DispatchIntent:
         """Build a DispatchIntent from current desired + override state.
@@ -1059,6 +1088,8 @@ class Dispatcher:
         finally:
             # Stop the dispatch worker
             self._running = False
+            if self._drain_wakeup is not None:
+                self._drain_wakeup.cancel()
             substrate_refresh_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await substrate_refresh_task
@@ -1393,8 +1424,9 @@ class Dispatcher:
             sim_time=self._current_sim_time,
             epoch_id=self._last_snapshot_epoch_id,
             snapshot_seq=self._last_snapshot_seq,
-            active_pairs=self._pair_rows(set(self._actual_links)),
+            active_pairs=self._pair_rows(self._open_pairs()),
             pending_pairs=self._pending_pair_rows(),
+            draining_contacts=self._draining_contact_rows(),
             emitted_at=self._now(),
         )
         await js.publish(
@@ -1404,6 +1436,46 @@ class Dispatcher:
         # Reached only on a successful publish; a raise above leaves the dirty flag set
         # so the next reconcile retries the publish.
         self._actual_links_publish_dirty = False
+
+    def _open_pairs(self) -> set[tuple[str, str]]:
+        """The actual links that carry traffic: every one but the draining long-delay contacts."""
+        return {pair for pair, info in self._actual_links.items() if info.drain is None}
+
+    def _actual_membership(self) -> frozenset[tuple[tuple[str, str], frozenset[str] | None]]:
+        """Each actual link with the ends it still drains (None while open): a stop, or the close
+        of one end, changes what the retained snapshot shows."""
+        return frozenset(
+            (
+                pair,
+                None if info.drain is None else frozenset(end.node_id for end in info.drain.ends),
+            )
+            for pair, info in self._actual_links.items()
+        )
+
+    def _draining_contact_rows(self) -> list[DrainingContact]:
+        rows = []
+        for pair, info in sorted(self._actual_links.items()):
+            if info.drain is None:
+                continue
+            if info.contact is None:
+                raise RuntimeError(f"draining link {pair} has no contact")
+            rows.append(
+                DrainingContact(
+                    pair=[pair[0], pair[1]],
+                    interfaces=[info.interface_a, info.interface_b],
+                    contact_id=info.contact.contact_id,
+                    stopped_at=info.drain.stopped_at,
+                    ends=[
+                        DrainingLinkEnd(
+                            node_id=end.node_id,
+                            interface=end.interface,
+                            receives_until=end.receives_until,
+                        )
+                        for end in info.drain.ends
+                    ],
+                )
+            )
+        return rows
 
     def _pending_pair_rows(self) -> list[PendingActuationPair]:
         """The desired-but-not-kernel-actual pairs as wire records, sorted for replay."""
@@ -1428,7 +1500,8 @@ class Dispatcher:
         pair's age keeps growing; a converge-then-diverge handover re-stamps fresh. This
         is the divergence timing the bound measures, owned by the actuation owner.
         """
-        pending = set(desired) - set(self._actual_links)
+        # A draining contact carries no new traffic: desired again, it is pending until it reopens.
+        pending = set(desired) - self._open_pairs()
         for pair in pending:
             if pair not in self._pending_since:
                 self._pending_since[pair] = (
@@ -1442,7 +1515,7 @@ class Dispatcher:
 
     async def _publish_actual_links_if_changed(
         self,
-        actual_before: frozenset[tuple[str, str]],
+        actual_before: frozenset[tuple[tuple[str, str], frozenset[str] | None]],
         pending_before: frozenset[tuple[str, str]],
     ) -> None:
         """Publish the kernel-actual + pending set only when membership changed.
@@ -1460,7 +1533,7 @@ class Dispatcher:
         change. A stable set with no prior failure is neither changed nor dirty -> no-op.
         """
         if (
-            frozenset(self._actual_links) != actual_before
+            self._actual_membership() != actual_before
             or frozenset(self._pending_since) != pending_before
         ):
             self._actual_links_publish_dirty = True
@@ -2253,6 +2326,33 @@ class Dispatcher:
         ):
             self._last_clean_kernel_audit_at = now
             await self._audit_clean_ground_kernel_state(sim_time=sim_time)
+            await self._audit_long_delay_ends(sim_time=sim_time)
+
+    async def _audit_long_delay_ends(self, *, sim_time: datetime) -> None:
+        """Read-only proof that every long-delay end in the link record is in the stage the
+        Scheduler holds it in: its contact, admission open or stopped, its receive queue. A
+        mismatch is fatal, as every unproven ISL is."""
+        ends = {
+            pair: remaining_ends(pair, info)
+            for pair, info in self._actual_links.items()
+            if info.contact is not None
+        }
+        if not ends:
+            return
+        proven = await verify_long_delay_ends(
+            ends=ends,
+            actual_links=self._actual_links,
+            locator=self._loc,
+            pool=self._pool,
+            sim_iso=sim_time.isoformat(),
+            interface_rates=self._interface_rates,
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
+            writer_epoch=self._writer_epoch,
+        )
+        await self._handle_actuation_result(
+            proven, sim_time=sim_time, operation_context="long_delay_audit"
+        )
 
     async def _run_due_kernel_verifications(
         self, *, sim_time: datetime, include_clean_audit: bool = True
@@ -2355,6 +2455,10 @@ class Dispatcher:
                         vis,
                         interface_map=self._interface_map,
                         ground_station_ids=ground_station_ids,
+                        long_delay_pairs=self._long_delay_pairs,
+                        # Events of a new epoch reach the Scheduler only after the seek that
+                        # started it set this epoch.
+                        epoch_id=self._last_snapshot_epoch_id,
                     )
                     self._desired_links[pair] = info
             elif not vis.visible:
@@ -2434,6 +2538,8 @@ class Dispatcher:
                 ground_station_ids=ground_station_ids,
                 snapshot_sim_time=snapshot.sim_time,
                 snapshot_seq=snapshot.snapshot_seq,
+                long_delay_pairs=self._long_delay_pairs,
+                epoch_id=snapshot.epoch_id,
             )
             if built is None:
                 continue
@@ -2801,7 +2907,7 @@ class Dispatcher:
         # Repair tears down and rewires _actual_links; capture entry membership so
         # the recoverable kernel-actual set is republished if repair changed it —
         # on success or on a partial-then-failed repair, not just at the next tick.
-        actual_before = frozenset(self._actual_links)
+        actual_before = self._actual_membership()
         pending_before = frozenset(self._pending_since)
         before = self._repair_original_states.pop(cmd.intervention_id, self._ground_state(gs_id))
         active_recovery = RecoveryStatus(
@@ -3231,12 +3337,28 @@ class Dispatcher:
         # finally, that raise would skip the publish and leave the retained snapshot
         # listing a torn-down pair as still up — the exact masking this fix removes.
         # Mirrors _run_operator_repair_locked, which publishes outside its try/except.
-        actual_before = frozenset(self._actual_links)
+        actual_before = self._actual_membership()
         pending_before = frozenset(self._pending_since)
         try:
             await self._run_due_kernel_verifications(sim_time=sim_time, include_clean_audit=False)
 
-            diff = diff_link_state(self._actual_links, desired)
+            # Long-delay contacts follow their own order (stop admission, then close each end
+            # when its last packet has arrived); every other link closes and opens as before.
+            long_delay = plan_long_delay_contacts(
+                {p: i for p, i in self._actual_links.items() if p in self._long_delay_pairs},
+                {p: i for p, i in desired.items() if p in self._long_delay_pairs},
+                epoch_id=self._last_snapshot_epoch_id,
+                down_reasons=down_reasons,
+            )
+            due = {
+                pair: ends
+                for pair, ends in due_ends(self._actual_links, now_mono=self._monotonic()).items()
+                if pair not in long_delay.forced and pair not in long_delay.open
+            }
+            diff = diff_link_state(
+                {p: i for p, i in self._actual_links.items() if p not in self._long_delay_pairs},
+                {p: i for p, i in desired.items() if p not in self._long_delay_pairs},
+            )
             to_remove = self._filter_ground_down_mutations(
                 diff.to_remove, operation="BatchLinkDown"
             )
@@ -3266,7 +3388,7 @@ class Dispatcher:
                 actual_info.authority_source = desired_info.authority_source
                 actual_info.authority_sequence = desired_info.authority_sequence
 
-            if not (to_remove or to_add or to_update_latency):
+            if not (to_remove or to_add or to_update_latency or due) and long_delay.empty:
                 await self._run_due_clean_kernel_audit(sim_time=sim_time)
                 return
 
@@ -3283,10 +3405,15 @@ class Dispatcher:
                 await self._publish_actual_links_if_changed(actual_before, pending_before)
             except Exception:
                 log.exception("Failed to publish pending clock before dispatch awaits")
-            actual_before = frozenset(self._actual_links)
+            actual_before = self._actual_membership()
             pending_before = frozenset(self._pending_since)
 
             sim_iso = sim_time.isoformat()
+
+            if due or not long_delay.empty:
+                await self._reconcile_long_delay(
+                    long_delay, due, desired, sim_iso, sim_time, nc, down_reasons
+                )
 
             if not self._mbb_dispatch:
                 # Two-phase BBM dispatch — sorted for deterministic replay
@@ -3366,6 +3493,7 @@ class Dispatcher:
                 await self._publish_actual_links_if_changed(actual_before, pending_before)
             except Exception:
                 log.exception("Failed to publish kernel-actual snapshot at reconcile exit")
+            self._arm_drain_wakeup()
 
     async def _send_authoritative_latency_updates(
         self,
@@ -3568,7 +3696,7 @@ class Dispatcher:
         nc,
         down_reasons: dict[tuple[str, str], str] | None = None,
     ) -> ActuationResult:
-        """Send BatchLinkDown to Node Agents. Returns structured proof results."""
+        """Close local links at once. Returns structured proof results."""
         if down_reasons is None:
             down_reasons = {}
         return await send_batch_down(
@@ -3585,6 +3713,250 @@ class Dispatcher:
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
             writer_epoch=self._writer_epoch,
+            stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
+        )
+
+    async def _send_long_delay_stage(
+        self,
+        pairs: set[tuple[str, str]],
+        *,
+        stage: int,
+        sim_iso: str,
+        sim_time: datetime,
+        ends: Mapping[tuple[str, str], frozenset[str]] | None = None,
+    ) -> ActuationResult:
+        """One stage of long-delay contacts: STOP_ADMISSION at both ends of each pair, or CLOSE
+        of the named ends. The Dispatcher records the result and the teardown."""
+        return await send_batch_down(
+            pairs=pairs,
+            actual_links=self._actual_links,
+            locator=self._loc,
+            pool=self._pool,
+            js=self._js,
+            subj_link_down=self._subj_link_down,
+            sim_iso=sim_iso,
+            sim_time=sim_time,
+            down_reasons={},
+            gs_capacities=self._gs_capacities,
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
+            writer_epoch=self._writer_epoch,
+            stage=stage,
+            ends=ends,
+        )
+
+    async def _record_long_delay_teardown(
+        self,
+        pair: tuple[str, str],
+        info: ActiveLinkInfo,
+        *,
+        sim_time: datetime,
+        reason: str,
+        losses: tuple[LinkEndLoss, ...],
+    ) -> None:
+        """Every end of a long-delay contact closed: the link record goes and its LinkDown, with
+        what each end lost, is published."""
+        self._actual_links.pop(pair, None)
+        self._last_latencies.pop(pair, None)
+        await publish_link_down(
+            js=self._js,
+            subject=self._subj_link_down,
+            pair=pair,
+            info=info,
+            sim_time=sim_time,
+            reason=reason,
+            losses=losses,
+        )
+
+    async def _reconcile_long_delay(
+        self,
+        plan: LongDelayPlan,
+        due: Mapping[tuple[str, str], frozenset[str]],
+        desired: dict[tuple[str, str], ActiveLinkInfo],
+        sim_iso: str,
+        sim_time: datetime,
+        nc,
+        down_reasons: Mapping[tuple[str, str], str],
+    ) -> None:
+        """Move each long-delay contact one step: forced closes, stops, due closes, opens and
+        delay changes, in that order. A failure of any stage is fatal, as for every ISL."""
+        stop_stage = node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION
+        close_stage = node_agent_pb2.LINK_DOWN_STAGE_CLOSE
+
+        # A seek or a scenario command ends the contact at once. Both transmitters stop first,
+        # so nothing enters a queue between its count and its reset; then every end still open
+        # or draining closes, and what it held is discarded and counted with the cause.
+        if plan.forced:
+            open_forced = {pair for pair in plan.forced if self._actual_links[pair].drain is None}
+            if open_forced:
+                stopped = await self._send_long_delay_stage(
+                    open_forced, stage=stop_stage, sim_iso=sim_iso, sim_time=sim_time
+                )
+                await self._handle_actuation_result(
+                    stopped, sim_time=sim_time, operation_context="long_delay_forced_stop"
+                )
+            ends = {pair: remaining_ends(pair, self._actual_links[pair]) for pair in plan.forced}
+            closed = await self._send_long_delay_stage(
+                set(plan.forced), stage=close_stage, sim_iso=sim_iso, sim_time=sim_time, ends=ends
+            )
+            await self._handle_actuation_result(
+                closed, sim_time=sim_time, operation_context="long_delay_forced_close"
+            )
+            for pair in sorted(closed.succeeded_pairs):
+                info = self._actual_links[pair]
+                cause = plan.forced[pair]
+                earlier = info.drain.closed if info.drain is not None else ()
+                await self._record_long_delay_teardown(
+                    pair,
+                    info,
+                    sim_time=sim_time,
+                    reason="seek" if cause == "seek" else down_reasons[pair],
+                    losses=earlier + end_loss_records(closed, pair=pair, info=info, cause=cause),
+                )
+
+        # A contact OME ended: both transmitters stop admitting, and packets already sent keep
+        # arriving. The contact stays in the link record, draining, until its ends close.
+        if plan.stop:
+            stopped = await self._send_long_delay_stage(
+                set(plan.stop), stage=stop_stage, sim_iso=sim_iso, sim_time=sim_time
+            )
+            await self._handle_actuation_result(
+                stopped, sim_time=sim_time, operation_context="long_delay_stop"
+            )
+            # The stop is proven when the acks arrive; the deadlines count from then, never from
+            # before the filters were in place.
+            stopped_mono = self._monotonic()
+            stopped_wall = self._now()
+            for pair in sorted(stopped.succeeded_pairs):
+                info = self._actual_links[pair]
+                if info.contact is None:
+                    raise RuntimeError(f"stopped long-delay link {pair} has no contact")
+                info.drain = start_drain(
+                    pair,
+                    info,
+                    stopped_mono=stopped_mono,
+                    stopped_wall=stopped_wall,
+                    reason="vis_lost",
+                )
+                log.info(
+                    "Long-delay contact %s of %s<->%s stopped admitting; ends close at %s",
+                    info.contact.contact_id,
+                    pair[0],
+                    pair[1],
+                    ", ".join(
+                        f"{end.node_id} {end.receives_until.isoformat()}" for end in info.drain.ends
+                    ),
+                )
+
+        # Ends whose last packet has arrived: the Node Agent first proves each is still the
+        # draining contact the Scheduler stopped, then closes it and counts what it still held.
+        if due:
+            proven = await verify_long_delay_ends(
+                ends=due,
+                actual_links=self._actual_links,
+                locator=self._loc,
+                pool=self._pool,
+                sim_iso=sim_iso,
+                interface_rates=self._interface_rates,
+                session_id=self._session_id,
+                wiring_generation=self._wiring_generation,
+                writer_epoch=self._writer_epoch,
+            )
+            await self._handle_actuation_result(
+                proven, sim_time=sim_time, operation_context="long_delay_drain_proof"
+            )
+            closed = await self._send_long_delay_stage(
+                set(due), stage=close_stage, sim_iso=sim_iso, sim_time=sim_time, ends=due
+            )
+            await self._handle_actuation_result(
+                closed, sim_time=sim_time, operation_context="long_delay_close"
+            )
+            for pair in sorted(closed.succeeded_pairs):
+                info = self._actual_links[pair]
+                if info.drain is None:
+                    raise RuntimeError(f"closed an end of {pair}, which was not draining")
+                info.drain = replace(
+                    info.drain,
+                    ends=tuple(end for end in info.drain.ends if end.node_id not in due[pair]),
+                    closed=info.drain.closed
+                    + end_loss_records(closed, pair=pair, info=info, cause="drain_deadline"),
+                )
+                if not info.drain.ends:
+                    await self._record_long_delay_teardown(
+                        pair,
+                        info,
+                        sim_time=sim_time,
+                        reason=info.drain.reason,
+                        losses=info.drain.closed,
+                    )
+
+        # Contacts to open. A pair that still drains, or whose contact OME renamed, reopens in
+        # place: its queue keeps the packets in flight, which go to this same receiver. The
+        # contact that ended is recorded with what its stopped admission took.
+        if plan.open:
+            ended = {
+                pair: self._actual_links[pair] for pair in plan.open if pair in self._actual_links
+            }
+            opened = await self._send_batch_up(set(plan.open), desired, sim_iso, sim_time, nc)
+            await self._handle_actuation_result(
+                opened, sim_time=sim_time, operation_context="long_delay_open"
+            )
+            for pair in sorted(opened.succeeded_pairs):
+                self._actual_links[pair] = desired[pair]
+                self._last_latencies[pair] = desired[pair].latencies_ms
+                old = ended.get(pair)
+                if old is None:
+                    continue
+                draining = remaining_ends(pair, old) if old.drain is not None else frozenset()
+                # Admission counts of ends already closed cover the time the end had no
+                # contact; they were counted for the ended contact at its close.
+                taken = tuple(
+                    loss
+                    for loss in end_loss_records(opened, pair=pair, info=old, cause="reopened")
+                    if loss.node_id in draining
+                )
+                await publish_link_down(
+                    js=self._js,
+                    subject=self._subj_link_down,
+                    pair=pair,
+                    info=old,
+                    sim_time=sim_time,
+                    reason=old.drain.reason if old.drain is not None else "vis_lost",
+                    losses=(old.drain.closed if old.drain is not None else ()) + taken,
+                )
+
+        if plan.latency:
+            changed = await self._send_authoritative_latency_updates(
+                set(plan.latency), desired, sim_time
+            )
+            await self._handle_actuation_result(
+                changed, sim_time=sim_time, operation_context="long_delay_latency"
+            )
+
+    def _arm_drain_wakeup(self) -> None:
+        """Wake the dispatch worker when the next draining end is due to close. The wake-up only
+        queues an intent; the worker closes the end."""
+        if self._drain_wakeup is not None:
+            self._drain_wakeup.cancel()
+            self._drain_wakeup = None
+        due = next_close_due(self._actual_links)
+        if due is None or not self._running:
+            return
+        self._drain_wakeup = asyncio.create_task(self._wake_for_drain(due))
+
+    async def _wake_for_drain(self, due: float) -> None:
+        await asyncio.sleep(max(0.0, due - self._monotonic()))
+        if self._current_sim_time is None:
+            # A contact drains only after links went up on OME's clock; an end due with no
+            # clock seen is a broken lifecycle, and dispatch stops on it.
+            self._dispatch_blocked_reason = (
+                "a long-delay end is due to close and no ClockTick has arrived"
+            )
+            log.critical("Dispatch stopped: %s", self._dispatch_blocked_reason)
+            self.stop()
+            return
+        await self._dispatch_queue.put(
+            self._build_dispatch_intent(sim_time=self._current_sim_time, source="drain")
         )
 
     async def _send_batch_up(

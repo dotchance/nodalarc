@@ -35,6 +35,8 @@ function snapshot(history_recording: HistoryRecordingState | null): StateSnapsho
     stale: false,
     history_recording,
     kernel_actual_pairs: [],
+    draining_directions: [],
+    contact_losses: [],
     playback_achieved: null,
     pacing_degraded: false,
     actuation_notices: [],

@@ -3368,6 +3368,13 @@ def _resolve_link_candidates(
         role_a, role_b = _candidate_side_roles(
             candidate, node_a, node_b, rules_by_id[candidate.rule_id]
         )
+        delay_class, longest_delay_s = _candidate_delay(
+            candidate.rule_id,
+            (left, role_a),
+            (right, role_b),
+            bodies,
+            resolved.long_delay_bound_s,
+        )
         candidates.append(
             ResolvedLinkCandidate(
                 rule_id=candidate.rule_id,
@@ -3381,13 +3388,8 @@ def _resolve_link_candidates(
                 topology_mode=candidate.topology_mode,
                 priority=candidate.priority,
                 endpoint_segments=candidate.endpoint_segments,
-                delay_class=_candidate_delay_class(
-                    candidate.rule_id,
-                    (left, role_a),
-                    (right, role_b),
-                    bodies,
-                    resolved.long_delay_bound_s,
-                ),
+                delay_class=delay_class,
+                longest_delay_s=longest_delay_s,
             )
         )
     _validate_fixed_interface_capacity(candidates, node_by_id)
@@ -3413,14 +3415,15 @@ def _largest_terminal_range_km(node: ResolvedNode, role: MountRole, rule_id: str
     return max(ranges)
 
 
-def _candidate_delay_class(
+def _candidate_delay(
     rule_id: str,
     end_a: tuple[ResolvedNode, MountRole],
     end_b: tuple[ResolvedNode, MountRole],
     bodies: Mapping[str, ResolvedBodyFacts],
     bound_s: float,
-) -> LinkDelayClass:
-    """A candidate's link class, from every one-way delay the candidate can have.
+) -> tuple[LinkDelayClass, float]:
+    """A candidate's link class, from every one-way delay the candidate can have, and its
+    longest delay, which sizes the memory its queues can hold.
 
     The delays are bounded once, from the endpoints' bodies, orbit sizes and site radii, the two
     bodies' separation over the shipped data's whole coverage, and the farthest the endpoints'
@@ -3440,9 +3443,9 @@ def _candidate_delay_class(
         node_link_end(left, bodies), node_link_end(right, bodies), range_limit_km=terminal_reach_km
     )
     if longest_s < bound_s:
-        return "local"
+        return "local", longest_s
     if shortest_s > bound_s:
-        return "long_delay"
+        return "long_delay", longest_s
     raise UnsupportedFeatureError(
         [
             UnsupportedFeature(

@@ -638,6 +638,7 @@ def _run_scheduler() -> None:
             substrate_measurements=substrate_measurements,
             read_lifecycle_identity=_make_lifecycle_identity_reader(k8s_v1, ns),
             writer_epoch=writer_epoch,
+            long_delay_pairs=resolved.long_delay_fixed_pairs(),
         )
 
     try:

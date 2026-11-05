@@ -405,6 +405,7 @@ def _neighbors_from_resolved(
                     peer_node_id=candidate.node_b,
                     link_type=link_type,
                     priority=candidate.priority,
+                    long_delay=candidate.delay_class == "long_delay",
                 ),
             )
         )
@@ -416,6 +417,7 @@ def _neighbors_from_resolved(
                     peer_node_id=candidate.node_a,
                     link_type=link_type,
                     priority=candidate.priority,
+                    long_delay=candidate.delay_class == "long_delay",
                 ),
             )
         )

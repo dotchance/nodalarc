@@ -3,8 +3,13 @@
 /** Network summary — shown when nothing is selected. */
 
 import { instanceLabel } from "../routing/instances";
-import { translateLinkType } from "../translate";
-import type { PublicLinkType, StateSnapshot } from "../generated/vsApi";
+import { formatDuration, translateLinkType } from "../translate";
+import type {
+  LinkEndCloseCause,
+  LinkEndLoss,
+  PublicLinkType,
+  StateSnapshot,
+} from "../generated/vsApi";
 import type { NodeRole } from "../builder/generated/builderApi";
 
 const ROLES: readonly NodeRole[] = ["router", "host", "forwarding_only"];
@@ -14,6 +19,25 @@ const ROLE_COUNT_LABELS: Record<NodeRole, string> = {
   host: "Hosts",
   forwarding_only: "Forwarding only",
 };
+
+// The ended contacts the overview lists, newest first.
+const CONTACT_LOSSES_SHOWN = 10;
+
+const CLOSE_CAUSE_LABELS: Record<LinkEndCloseCause, string> = {
+  end_of_contact: "contact ended",
+  drain_deadline: "drain deadline",
+  seek: "seek",
+  scenario: "scenario command",
+  reopened: "reopened while draining",
+};
+
+/** One end's losses: what its queue still held at the close (a count when both transmitters
+ *  had stopped, a sample on a local link), what its queue dropped at its limit, and what its
+ *  stopped transmitter refused. */
+function endLossText(end: LinkEndLoss): string {
+  const held = `${end.discarded_at_close} discarded (${end.discarded_exact ? "count" : "sample"})`;
+  return `${CLOSE_CAUSE_LABELS[end.cause]}: ${held}, ${end.queue_dropped} dropped at the queue limit, ${end.admission_taken} refused after the stop`;
+}
 
 interface InstanceTally {
   label: string;
@@ -111,6 +135,63 @@ export function NetworkSummary({ snapshot }: NetworkSummaryProps) {
           <span className="detail-value">{kindCounts.get(kind)}</span>
         </div>
       ))}
+
+      {snapshot.draining_directions.length > 0 && (
+        <>
+          <h3>Draining</h3>
+          {snapshot.draining_directions.map((direction) => {
+            const remainingMs =
+              Date.parse(direction.last_arrival_at) - Date.parse(snapshot.wall_time);
+            return (
+              <div
+                className="detail-row"
+                key={`${direction.contact_id}:${direction.transmitter_node_id}->${direction.receiver_node_id}`}
+                title={
+                  "The contact ended and the transmitter stopped sending. Packets it sent " +
+                  "before then are still in flight and arrive until the last arrival, in " +
+                  "wall time at every playback speed."
+                }
+              >
+                <span className="detail-label">
+                  {direction.transmitter_node_id} → {direction.receiver_node_id}
+                </span>
+                <span className="detail-value">
+                  {remainingMs > 0
+                    ? `last arrival in ${formatDuration(remainingMs)}`
+                    : "last arrival due"}
+                </span>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {snapshot.contact_losses.length > 0 && (
+        <>
+          <h3>Contact Losses</h3>
+          {[...snapshot.contact_losses]
+            .reverse()
+            .slice(0, CONTACT_LOSSES_SHOWN)
+            .map((contact) => (
+              <div key={`${contact.node_a}|${contact.node_b}|${contact.wall_time}`}>
+                <div className="detail-row">
+                  <span className="detail-label">
+                    {contact.node_a} ↔ {contact.node_b}
+                  </span>
+                  <span className="detail-value">{contact.reason}</span>
+                </div>
+                {contact.ends.map((end) => (
+                  <div className="detail-row" key={`${end.node_id}/${end.interface}`}>
+                    <span className="detail-label">
+                      {end.node_id}/{end.interface}
+                    </span>
+                    <span className="detail-value">{endLossText(end)}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+        </>
+      )}
 
       <h3>Routing Instances</h3>
       {[...instances.entries()].map(([domainId, tally]) => (

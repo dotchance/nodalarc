@@ -143,6 +143,7 @@ def test_local_ground_link_down_plan_preserves_single_agent_bridge_operation():
         actual_links=actual,
         locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
         gs_capacities={"gs-den": 1},
+        stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
     )
 
     assert set(plan.agent_ifaces) == {"agent-sat-a"}
@@ -248,3 +249,112 @@ def test_every_end_carries_the_delay_of_the_direction_it_transmits(locality):
     assert described == set(transmits)
     for (node_a, node_b), info in desired.items():
         assert info.commanded_netem_ms == (transmits[node_a], transmits[node_b])
+
+
+# A long-delay trunk between an Earth relay and a Mars relay: about 1,113 s each way, unequal
+# because both ends move during the light time.
+TRUNK = ("earth-relay", "mars-relay")
+TRUNK_DELAYS_MS = (1_113_442.7, 1_113_451.9)
+
+
+def _trunk(*, contact_epoch: int = 0) -> ActiveLinkInfo:
+    from datetime import UTC, datetime
+
+    from scheduler.desired_state import Contact
+
+    return ActiveLinkInfo(
+        interface_a="isl3",
+        interface_b="isl0",
+        latency_a_to_b_ms=TRUNK_DELAYS_MS[0],
+        latency_b_to_a_ms=TRUNK_DELAYS_MS[1],
+        link_type="isl",
+        range_km=3.338e8,
+        contact=Contact(epoch_id=contact_epoch, opened_at=datetime(2027, 2, 19, tzinfo=UTC)),
+    )
+
+
+def test_a_long_delay_link_up_names_its_contact_and_the_delay_each_end_receives():
+    plan = build_link_up_batch_plan(
+        pairs={TRUNK},
+        desired={TRUNK: _trunk()},
+        locator=_Locator(
+            node_agent_pb2.LOCALITY_CROSS_NODE,
+            {"k3s-earth-relay": "10.0.0.1", "k3s-mars-relay": "10.0.0.2"},
+        ),
+        gs_capacities={},
+        compensation_for_pair=_compensation,
+        interface_rates=ANY_INTERFACE_RATES,
+    )
+    earth = plan.agent_ifaces["agent-earth-relay"][0]
+    mars = plan.agent_ifaces["agent-mars-relay"][0]
+    assert earth.contact_id == mars.contact_id == "0@2027-02-19T00:00:00.000000Z"
+    # Each end's receive queue holds the direction its peer transmits, less the substrate's
+    # 1 ms one-way share (the compensation stand-in above).
+    assert earth.receive_latency_ms == pytest.approx(TRUNK_DELAYS_MS[1] - 1.0)
+    assert mars.receive_latency_ms == pytest.approx(TRUNK_DELAYS_MS[0] - 1.0)
+
+
+def test_a_long_delay_stop_reaches_both_ends_with_its_stage_and_contact():
+    plan = build_link_down_batch_plan(
+        pairs={TRUNK},
+        actual_links={TRUNK: _trunk()},
+        locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
+        gs_capacities={},
+        stage=node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION,
+    )
+    entries = [entry for entries in plan.agent_ifaces.values() for entry in entries]
+    assert {(entry.node_id, entry.interface_name) for entry in entries} == {
+        ("earth-relay", "isl3"),
+        ("mars-relay", "isl0"),
+    }
+    assert {entry.stage for entry in entries} == {node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION}
+    assert {entry.contact_id for entry in entries} == {"0@2027-02-19T00:00:00.000000Z"}
+
+
+def test_a_long_delay_close_reaches_only_the_ends_it_names():
+    plan = build_link_down_batch_plan(
+        pairs={TRUNK},
+        actual_links={TRUNK: _trunk()},
+        locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
+        gs_capacities={},
+        stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
+        ends={TRUNK: frozenset({"mars-relay"})},
+    )
+    (entry,) = [entry for entries in plan.agent_ifaces.values() for entry in entries]
+    assert (entry.node_id, entry.interface_name, entry.stage) == (
+        "mars-relay",
+        "isl0",
+        node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
+    )
+    assert plan.pair_agent_ifaces[TRUNK] == {("agent-mars-relay", "mars-relay", "isl0")}
+
+
+def test_a_close_that_names_no_end_never_reaches_a_long_delay_queue():
+    with pytest.raises(ValueError, match="closes end by end"):
+        build_link_down_batch_plan(
+            pairs={TRUNK},
+            actual_links={TRUNK: _trunk()},
+            locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
+            gs_capacities={},
+            stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
+        )
+
+
+def test_a_local_link_has_no_admission_stage():
+    pair = ("sat-a", "sat-b")
+    local = ActiveLinkInfo(
+        interface_a="isl0",
+        interface_b="isl1",
+        latency_a_to_b_ms=10.0,
+        latency_b_to_a_ms=10.0,
+        link_type="isl",
+        range_km=2997.9,
+    )
+    with pytest.raises(ValueError, match="closes at once"):
+        build_link_down_batch_plan(
+            pairs={pair},
+            actual_links={pair: local},
+            locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
+            gs_capacities={},
+            stage=node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION,
+        )

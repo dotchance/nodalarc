@@ -89,7 +89,13 @@ network:
     burstPackets: 1000
   # Kernel memory per queued packet of the envelope's size (measured on the
   # installation's kernel), and the share of each server's allocatable memory
-  # a session's delay queues may hold there.
+  # a session's link queues may hold there. A session whose queues would need
+  # more on a server is refused, naming the server and its largest link ends.
+  # Allocatable memory is what Kubernetes offers pods on the server (its
+  # capacity less system reservations), not the memory unused at the time, so
+  # the share leaves room for everything else the server runs. The defaults
+  # were measured on the development cluster; another kernel, NIC or server
+  # size needs its own numbers.
   queueMemory:
     bytesPerPacket: 2299
     serverShare: 0.1

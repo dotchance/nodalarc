@@ -96,7 +96,7 @@ from ome.telemetry import (
     SEG_VISIBILITY,
     StepTimings,
 )
-from ome.types import GroundVisibilityDecisionMap, MbbTeardownState, ReceiveWindows
+from ome.types import GroundVisibilityDecisionMap, IslContacts, MbbTeardownState, ReceiveWindows
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +305,16 @@ class StepContext:
         return isl + ground
 
     @cached_property
+    def long_delay_pairs(self) -> frozenset[tuple[str, str]]:
+        """The fixed links the resolver classed long-delay, by canonical pair."""
+        return frozenset(
+            (min(node_id, assignment.peer_node_id), max(node_id, assignment.peer_node_id))
+            for node_id, assignments in self.by_node.items()
+            for assignment in assignments
+            if assignment.long_delay
+        )
+
+    @cached_property
     def ground_geometry(self) -> GroundGeometry:
         """Every declared ground candidate's limits, resolved once for the session."""
         return GroundGeometry(
@@ -379,6 +389,7 @@ class TimelineWindowResult:
     associations: dict[tuple[str, str], tuple[int, int]]
     pending_teardowns: MbbTeardownState
     receive_windows: ReceiveWindows
+    isl_contacts: IslContacts
     predictive: bool = False
 
 
@@ -703,6 +714,7 @@ def _build_link_snapshot_source(
     *,
     isl_feasibility: Mapping[tuple[str, str], IslFeasibilityResult],
     isl_links: Mapping[tuple[str, str], ScheduledIsl],
+    isl_contacts: IslContacts,
     ground_decisions: GroundVisibilityDecisionMap,
     ground_allocation: GroundAllocationResult,
 ) -> LinkSnapshotSource:
@@ -762,7 +774,28 @@ def _build_link_snapshot_source(
         pending_teardowns=dict(ground_allocation.pending_teardowns),
         ranges_km=ranges_km,
         latencies_ms=latencies_ms,
+        # A copy: the pacing loop changes the contacts in place on the next tick, and the
+        # snapshot is built later on the publisher thread.
+        contacts_opened=dict(isl_contacts),
     )
+
+
+def _track_isl_contacts(
+    isl_contacts: IslContacts,
+    *,
+    long_delay_pairs: frozenset[tuple[str, str]],
+    isl_state: Mapping[tuple[str, str], tuple[bool, bool]],
+    sim_time: datetime,
+) -> None:
+    """Open a contact on each long-delay link that is visible and scheduled and has none, at this
+    tick; end the contact of each that is not. A caller that starts with no contacts (one tick,
+    or a window from a given ISL state) opens the contacts of the links already up at its first
+    tick."""
+    for pair in long_delay_pairs:
+        if isl_state.get(pair) == (True, True):
+            isl_contacts.setdefault(pair, sim_time)
+        else:
+            isl_contacts.pop(pair, None)
 
 
 def compute_step(
@@ -777,6 +810,7 @@ def compute_step(
     mbb_pending_teardowns: MbbTeardownState | None = None,
     dwell_state: dict[tuple[str, str], DwellPassState] | None = None,
     receive_windows: ReceiveWindows | None = None,
+    isl_contacts: IslContacts | None = None,
 ) -> StepResult:
     """Compute one step of the timeline. Mutates isl_state and gs_state in place.
 
@@ -790,6 +824,10 @@ def compute_step(
     state: a caller that runs more than one tick threads it, or terminals look free while they
     still receive. A single-tick caller passes None and starts from no reception.
 
+    isl_contacts holds the opening of each long-delay link's open contact, mutated in place and
+    reset wherever isl_state resets. A caller that passes None starts from no contacts, so the
+    long-delay links up at this tick open their contacts at it.
+
     Returns a StepResult with named physics, scheduling, and allocation fields.
 
     Pure computation — no I/O, no wall-time awareness.
@@ -799,6 +837,8 @@ def compute_step(
         current_associations = {}
     if mbb_pending_teardowns is None:
         mbb_pending_teardowns = {}
+    if isl_contacts is None:
+        isl_contacts = {}
     timings = StepTimings()
     dt = step * step_seconds
     timestamp_s = dt + timestamp_offset
@@ -872,9 +912,16 @@ def compute_step(
             feasibility=isl_feasibility,
             scheduled_links=isl_links,
             previous_state=isl_state,
+            long_delay_pairs=ctx.long_delay_pairs,
         )
         isl_state.clear()
         isl_state.update(isl_diff.state)
+        _track_isl_contacts(
+            isl_contacts,
+            long_delay_pairs=ctx.long_delay_pairs,
+            isl_state=isl_state,
+            sim_time=sim_time,
+        )
         events.extend(
             TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in isl_diff.events
         )
@@ -968,6 +1015,7 @@ def compute_step(
         link_snapshot_source = _build_link_snapshot_source(
             isl_feasibility=isl_feasibility,
             isl_links=isl_links,
+            isl_contacts=isl_contacts,
             ground_decisions=ground_visibility.decisions,
             ground_allocation=ground_allocation,
         )
@@ -1004,6 +1052,7 @@ def precompute_timeline_window_from_context(
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     initial_pending_teardowns: MbbTeardownState | None = None,
     initial_receive_windows: ReceiveWindows | None = None,
+    initial_isl_contacts: IslContacts | None = None,
     timestamp_offset: float = 0.0,
     predictive: bool = False,
 ) -> TimelineWindowResult:
@@ -1030,6 +1079,7 @@ def precompute_timeline_window_from_context(
     )
     dwell_state: dict[tuple[str, str], DwellPassState] = {}
     receive_windows: ReceiveWindows = dict(initial_receive_windows or {})
+    isl_contacts: IslContacts = dict(initial_isl_contacts or {})
 
     events: list[TimelineEvent] = []
     steps = int(duration_s / step_seconds)
@@ -1046,6 +1096,7 @@ def precompute_timeline_window_from_context(
             pending_teardowns,
             dwell_state=dwell_state,
             receive_windows=receive_windows,
+            isl_contacts=isl_contacts,
         )
         events.extend(result.events)
         associations = result.associations
@@ -1058,6 +1109,7 @@ def precompute_timeline_window_from_context(
         associations=associations,
         pending_teardowns=pending_teardowns,
         receive_windows=receive_windows,
+        isl_contacts=isl_contacts,
         predictive=predictive,
     )
 

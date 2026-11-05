@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import get_args
 
 from nodalarc.body_frames import SUPPORTED_BODY_NAMES, SupportedSurfaceBody
@@ -42,6 +43,10 @@ class ReceiveWindow:
 
 # Keyed by (node id, terminal index): a station's termN or a satellite's gndN.
 ReceiveWindows = dict[tuple[str, int], ReceiveWindow]
+
+# The sim time each fixed long-delay link's open contact opened, by canonical pair. Carried from
+# tick to tick like the ISL state, reset at a seek, and captured in the replay anchor.
+IslContacts = dict[tuple[str, str], datetime]
 
 
 @dataclass(frozen=True)

@@ -45,6 +45,11 @@ from nodalarc.session_identity import require_resolved_session_run_id
 from nodalarc.session_nodes import available_session_nodes
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.substrate.manifest_contract import POD_OWNER_UID_LABEL, WIRING_MANIFEST_CONFIGMAP
+from nodalarc.substrate.queue_budget import (
+    QueueMemoryRefused,
+    check_queue_budget,
+    session_queue_demand,
+)
 from nodalarc.substrate.routing_requirements import (
     address_family_sysctls,
     routing_kernel_requirements,
@@ -213,6 +218,54 @@ def _ensure_immutable_configmap(
 def discover_available_nodes() -> list[str]:
     """The Kubernetes nodes that accept session pods."""
     return available_session_nodes(_get_v1(), get_platform_config().kubernetes_namespace)
+
+
+def _server_allocatable_memory(
+    v1: kubernetes.client.CoreV1Api, servers: set[str]
+) -> dict[str, int]:
+    """The allocatable memory, in bytes, Kubernetes reports for each of ``servers``. A server
+    that reports none is left out, and the budget check refuses it."""
+    from kubernetes.utils import parse_quantity
+
+    memory: dict[str, int] = {}
+    for node in v1.list_node().items:
+        name = node.metadata.name
+        if name not in servers:
+            continue
+        allocatable = (node.status.allocatable or {}) if node.status is not None else {}
+        quantity = allocatable.get("memory")
+        if quantity is not None:
+            memory[name] = int(parse_quantity(quantity))
+    return memory
+
+
+def check_session_queue_memory(
+    v1: kubernetes.client.CoreV1Api,
+    resolved_session: ResolvedSession,
+    placement: Mapping[str, str],
+) -> None:
+    """Refuse a session whose link queues would exceed a server's memory budget where
+    ``placement`` puts its pods: the placement computed before pod creation, or the one observed
+    before wiring (``nodalarc.substrate.queue_budget``)."""
+    config = get_platform_config()
+    demand = session_queue_demand(
+        resolved_session,
+        placement,
+        envelope=config.long_delay_envelope,
+        bytes_per_packet=config.queue_memory_bytes_per_packet,
+    )
+    check_queue_budget(
+        demand,
+        allocatable_bytes=_server_allocatable_memory(v1, set(demand)),
+        share=config.queue_memory_server_share,
+    )
+    for server, server_demand in demand.items():
+        log.info(
+            "Link queue memory on %s: up to %d bytes over %d link ends",
+            server,
+            server_demand.bytes,
+            len(server_demand.interfaces),
+        )
 
 
 def _node_internal_ips(
@@ -577,6 +630,15 @@ def ensure_session_configmaps(
         ", ".join(f"{n}={c}" for n, c in sorted(node_counts.items())),
     )
 
+    # --- Step 9: Link queue memory on each server of the placement ---
+    _progress("Checking link queue memory on each server")
+    try:
+        check_session_queue_memory(v1, resolved_session, pod_placement)
+    except QueueMemoryRefused as exc:
+        import kopf
+
+        raise kopf.PermanentError(f"Session refused: {exc}") from exc
+
     return {
         "session_id": session_id,
         "session_run_id": session_run_id,
@@ -855,6 +917,10 @@ def write_wiring_manifest(
     resolved_session = resolution.resolved
 
     v1 = _get_v1()
+
+    # The pods are where Kubernetes put them, which a reconciliation that recreated some of them
+    # may not have computed: the queue memory is checked again on the observed placement.
+    check_session_queue_memory(v1, resolved_session, pod_placement)
 
     # A new manifest needs no proof cleanup: each pod's wiring proof names its
     # session and wiring generation, and no proof of another generation is

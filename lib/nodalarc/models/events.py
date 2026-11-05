@@ -188,6 +188,26 @@ class VisibilityEvent(BaseModel):
     scheduling_state: SchedulingState = "active"
     visibility_reject_reason: VisibilityRejectReason
     unscheduled_reason: UnscheduledReason | None
+    # On the event that opens a contact on a fixed long-delay link: the contact's opening, which
+    # is this event's sim_time (the LinkState field of the same name). None on every other event.
+    contact_opened_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _contact_opens_with_the_event(self) -> VisibilityEvent:
+        if self.contact_opened_at is None:
+            return self
+        if self.link_type != "isl" or not (self.visible and self.scheduled):
+            raise ValueError(
+                f"VisibilityEvent {self.node_a}<->{self.node_b}: a contact opens only on a fixed "
+                "link that becomes visible and scheduled"
+            )
+        if self.contact_opened_at != self.sim_time:
+            raise ValueError(
+                f"VisibilityEvent {self.node_a}<->{self.node_b}: the contact it opens opened at "
+                f"{self.contact_opened_at.isoformat()}, not at the event's sim time "
+                f"{self.sim_time.isoformat()}"
+            )
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -835,6 +855,9 @@ class ReplayAnchor(BaseModel):
     pending_teardowns: dict[str, TeardownEntry]
     # Ground terminals still receiving from a peer the allocator released, keyed "node:index".
     receive_windows: dict[str, ReceiveWindowEntry]
+    # The opening sim time of each fixed long-delay link's open contact, keyed "a:b". Replay
+    # rebuilds it like isl_state: a contact keeps its name across an OME restart.
+    isl_contacts: dict[str, datetime]
     written_at: float
 
 

@@ -9,10 +9,51 @@ fails loudly when required authority is missing.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from nodalarc.models.events import VisibilityEvent
-from nodalarc.models.link_state import AdminState, CarrierState, LinkState
+from nodalarc.models.link_events import LinkEndLoss
+from nodalarc.models.link_state import AdminState, CarrierState, LinkState, contact_id
+
+
+@dataclass(frozen=True, slots=True)
+class Contact:
+    """One contact of a fixed long-delay link, as OME names it: the epoch of the authority that
+    opened it and the sim time it opened."""
+
+    epoch_id: int
+    opened_at: datetime
+
+    @property
+    def contact_id(self) -> str:
+        return contact_id(self.epoch_id, self.opened_at)
+
+
+@dataclass(frozen=True, slots=True)
+class DrainingEnd:
+    """One end of a draining contact that still receives. It closes at ``close_due`` on the
+    Scheduler's monotonic clock: the proven stop plus the OME light time of the direction it
+    receives. ``receives_until`` is the same instant on the wall clock, for observation."""
+
+    node_id: str
+    interface: str
+    close_due: float
+    receives_until: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class Drain:
+    """A long-delay contact whose transmitters both stopped admitting.
+
+    ``ends`` are the ends still receiving; ``closed`` holds what each closed end lost. The
+    contact's teardown is recorded when the last end closes. ``reason`` is why the contact
+    ended (the LinkDown reason)."""
+
+    stopped_at: datetime
+    reason: str
+    ends: tuple[DrainingEnd, ...]
+    closed: tuple[LinkEndLoss, ...] = ()
 
 
 class ActiveLinkInfo:
@@ -39,6 +80,8 @@ class ActiveLinkInfo:
         "authority_sim_time",
         "authority_source",
         "authority_sequence",
+        "contact",
+        "drain",
     )
 
     @property
@@ -58,6 +101,7 @@ class ActiveLinkInfo:
         authority_source: str | None = None,
         authority_sequence: int | None = None,
         commanded_netem_ms: tuple[float, float] | None = None,
+        contact: Contact | None = None,
     ) -> None:
         self.interface_a = interface_a
         self.interface_b = interface_b
@@ -75,6 +119,15 @@ class ActiveLinkInfo:
         self.authority_sim_time = authority_sim_time
         self.authority_source = authority_source
         self.authority_sequence = authority_sequence
+        # The contact on a fixed long-delay link (OME names it); None on a local link.
+        self.contact = contact
+        # Set on an actual long-delay link once both transmitters proved admission stopped;
+        # cleared when the link record goes (last end closed) or the pair reopens.
+        self.drain: Drain | None = None
+
+    @property
+    def long_delay(self) -> bool:
+        return self.contact is not None
 
 
 def require_ome_geometry(
@@ -105,6 +158,30 @@ def require_ome_geometry(
             f"b_to_a={latency_b_to_a_ms}"
         )
     return range_km, latency_a_to_b_ms, latency_b_to_a_ms
+
+
+def _contact(
+    pair: tuple[str, str],
+    *,
+    opened_at: datetime | None,
+    long_delay_pairs: frozenset[tuple[str, str]],
+    epoch_id: int,
+    source: str,
+) -> Contact | None:
+    """The contact of an up link: OME names one on every fixed long-delay link and on no other.
+    A disagreement between OME and the resolver's class stops dispatch."""
+    if pair in long_delay_pairs:
+        if opened_at is None:
+            raise ValueError(
+                f"{source} for long-delay link {pair} names no contact; the Scheduler cannot "
+                "target its queues"
+            )
+        return Contact(epoch_id=epoch_id, opened_at=opened_at)
+    if opened_at is not None:
+        raise ValueError(
+            f"{source} names a contact on {pair}, which the resolved session classes local"
+        )
+    return None
 
 
 def _ground_interfaces(
@@ -142,6 +219,8 @@ def desired_link_from_visibility(
     *,
     interface_map: dict[tuple[str, str], tuple[str, str]],
     ground_station_ids: frozenset[str],
+    long_delay_pairs: frozenset[tuple[str, str]],
+    epoch_id: int,
 ) -> tuple[tuple[str, str], ActiveLinkInfo]:
     """Build one desired link from a scheduled visible OME event."""
     pair = (vis.node_a, vis.node_b)
@@ -177,6 +256,13 @@ def desired_link_from_visibility(
         range_km=range_km,
         authority_sim_time=vis.sim_time,
         authority_source="visibility_event",
+        contact=_contact(
+            pair,
+            opened_at=vis.contact_opened_at,
+            long_delay_pairs=long_delay_pairs,
+            epoch_id=epoch_id,
+            source="VisibilityEvent",
+        ),
     )
 
 
@@ -187,6 +273,8 @@ def desired_link_from_snapshot_link(
     ground_station_ids: frozenset[str],
     snapshot_sim_time: datetime,
     snapshot_seq: int,
+    long_delay_pairs: frozenset[tuple[str, str]],
+    epoch_id: int,
 ) -> tuple[tuple[str, str], ActiveLinkInfo] | None:
     """Build one desired link from an authoritative snapshot link entry."""
     if link.admin != AdminState.UP or link.carrier != CarrierState.UP:
@@ -232,4 +320,11 @@ def desired_link_from_snapshot_link(
         authority_sim_time=snapshot_sim_time,
         authority_source="link_state_snapshot",
         authority_sequence=snapshot_seq,
+        contact=_contact(
+            pair,
+            opened_at=link.contact_opened_at,
+            long_delay_pairs=long_delay_pairs,
+            epoch_id=epoch_id,
+            source="LinkStateSnapshot",
+        ),
     )

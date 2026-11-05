@@ -70,6 +70,7 @@ function link(node_a: string, node_b: string): LinkState {
     endpoint_segments: null,
     teardown_remaining_ticks: null,
     successor_pair: null,
+    contact_id: null,
     latency_a_to_b_ms: 1,
     latency_b_to_a_ms: 1,
     transmit_mbps_a: 1000,
@@ -105,6 +106,8 @@ function snapshot(): StateSnapshot {
       ["leo-sat-p00s00", "meo-sat-p00s00"],
       ["ground-gs-denver", "leo-sat-p00s00"],
     ],
+    draining_directions: [],
+    contact_losses: [],
     traced_paths: [
       traced(["ground-gs-denver", "leo-sat-p00s00"], []),
       traced(["leo-sat-p00s00", "meo-sat-p00s00"], []),

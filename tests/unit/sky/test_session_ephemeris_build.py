@@ -395,6 +395,7 @@ class TestLinkStateSnapshotEpochId:
                 pending_teardowns={},
                 ranges_km={pair: 2000.0},
                 latencies_ms={pair: (6.6713, 6.6716)},
+                contacts_opened={},
             ),
             interface_map={pair: ("isl0", "isl1")},
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),

@@ -49,6 +49,8 @@ describe("NetworkSummary", () => {
         node("host", "ground_station", "host", []),
       ],
       links: [],
+      draining_directions: [],
+      contact_losses: [],
     } as unknown as StateSnapshot;
 
     render(<NetworkSummary snapshot={snapshot} />);
@@ -62,5 +64,89 @@ describe("NetworkSummary", () => {
     expect(value("AS Boundary Routers")).toBe("1");
     expect(value("IS-IS earth")).toBe("3 participants");
     expect(value("Area 49.0002")).toBe("2 nodes");
+  });
+
+  it("lists each draining direction with the time to its last arrival", () => {
+    const snapshot = {
+      nodes: [],
+      links: [],
+      wall_time: "2027-02-19T00:00:00Z",
+      draining_directions: [
+        {
+          contact_id: "0@2027-02-19T00:00:00.000000Z",
+          transmitter_node_id: "mars-relay",
+          transmitter_interface: "isl0",
+          receiver_node_id: "earth-relay",
+          receiver_interface: "isl3",
+          stopped_at: "2027-02-18T23:50:00Z",
+          last_arrival_at: "2027-02-19T00:08:33.451Z",
+        },
+      ],
+      contact_losses: [],
+    } as unknown as StateSnapshot;
+
+    render(<NetworkSummary snapshot={snapshot} />);
+
+    expect(value("mars-relay → earth-relay")).toBe("last arrival in 8.56 min");
+  });
+
+  it("labels each end's discarded packets as a count or a sample, with its cause", () => {
+    const snapshot = {
+      nodes: [],
+      links: [],
+      draining_directions: [],
+      contact_losses: [
+        {
+          node_a: "earth-relay",
+          node_b: "mars-relay",
+          contact_id: "0@2027-02-19T00:00:00.000000Z",
+          reason: "vis_lost",
+          sim_time: "2027-02-19T06:00:00Z",
+          wall_time: "2027-02-19T00:20:00Z",
+          ends: [
+            {
+              node_id: "earth-relay",
+              interface: "isl3",
+              cause: "drain_deadline",
+              admission_taken: 412,
+              queue_dropped: 3,
+              discarded_at_close: 0,
+              discarded_exact: true,
+            },
+          ],
+        },
+        {
+          node_a: "sat-1",
+          node_b: "sat-2",
+          contact_id: null,
+          reason: "vis_lost",
+          sim_time: "2027-02-19T06:01:00Z",
+          wall_time: "2027-02-19T00:21:00Z",
+          ends: [
+            {
+              node_id: "sat-1",
+              interface: "isl0",
+              cause: "end_of_contact",
+              admission_taken: 0,
+              queue_dropped: 0,
+              discarded_at_close: 17,
+              discarded_exact: false,
+            },
+          ],
+        },
+      ],
+    } as unknown as StateSnapshot;
+
+    render(<NetworkSummary snapshot={snapshot} />);
+
+    expect(value("earth-relay/isl3")).toBe(
+      "drain deadline: 0 discarded (count), 3 dropped at the queue limit, 412 refused after the stop",
+    );
+    expect(value("sat-1/isl0")).toBe(
+      "contact ended: 17 discarded (sample), 0 dropped at the queue limit, 0 refused after the stop",
+    );
+    // Newest first.
+    const pairs = screen.getAllByText(/ ↔ /).map((element) => element.textContent);
+    expect(pairs).toEqual(["sat-1 ↔ sat-2", "earth-relay ↔ mars-relay"]);
   });
 });

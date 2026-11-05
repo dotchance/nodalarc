@@ -46,6 +46,17 @@ class GroundActuationState:
 
 
 @dataclass(frozen=True, slots=True)
+class EndLossCounts:
+    """What one closed link end's queues lost, as its Node Agent counted it (the proto
+    ``LinkEndLoss``); the cause is the Scheduler's, added when it records the close."""
+
+    admission_taken: int
+    queue_dropped: int
+    discarded_at_close: int
+    discarded_exact: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AgentCommandResult:
     agent_addr: str
     operation: str
@@ -59,6 +70,8 @@ class AgentCommandResult:
     # commands the session. Always also a fence failure.
     writer_fenced: bool
     details: dict[str, Any]
+    # The loss each successful entry reported, by (node_id, interface_name).
+    end_losses: Mapping[tuple[str, str], EndLossCounts] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +141,14 @@ class ActuationResult:
 
     def node_agent_details(self) -> list[dict[str, Any]]:
         return [result.details for result in self.agent_results]
+
+    @property
+    def end_losses(self) -> dict[tuple[str, str], EndLossCounts]:
+        """The loss every successful entry of every agent reported, by (node_id, interface)."""
+        merged: dict[tuple[str, str], EndLossCounts] = {}
+        for result in self.agent_results:
+            merged.update(result.end_losses)
+        return merged
 
 
 FENCE_CODES = {
@@ -229,6 +250,20 @@ def classify_agent_response(
             for entry in entries
         ],
     }
+    end_losses = {
+        (entry.node_id, entry.interface_name): EndLossCounts(
+            admission_taken=entry.loss.admission_taken,
+            queue_dropped=entry.loss.queue_dropped,
+            discarded_at_close=entry.loss.discarded_at_close,
+            discarded_exact=entry.loss.discarded_exact,
+        )
+        for entry in entries
+        if entry.success
+        and entry.verified
+        # Latency and inventory results carry no loss field.
+        and "loss" in entry.DESCRIPTOR.fields_by_name
+        and entry.HasField("loss")
+    }
     return AgentCommandResult(
         agent_addr=agent_addr,
         operation=operation,
@@ -240,6 +275,7 @@ def classify_agent_response(
         fence_failure=fence_failure,
         writer_fenced=writer_fenced,
         details=details,
+        end_losses=end_losses,
     )
 
 

@@ -15,6 +15,7 @@ function link(overrides: Partial<LinkState> = {}): LinkState {
     link_reason: "link_state_snapshot",
     teardown_remaining_ticks: null,
     successor_pair: null,
+    contact_id: null,
     latency_a_to_b_ms: 42,
     latency_b_to_a_ms: 42,
     transmit_mbps_a: 1000,
@@ -44,6 +45,8 @@ function snapshot(): StateSnapshot {
     nodes: [],
     links: [],
     kernel_actual_pairs: [],
+    draining_directions: [],
+    contact_losses: [],
     traced_paths: [],
     recent_events: [],
     routing_stack: "isis-plain",
@@ -105,6 +108,22 @@ describe("LinkDetail", () => {
     expect(rates.getByText("leo-sat-p00s00")).toBeTruthy();
     expect(rates.getByText("meo-sat-p00s00")).toBeTruthy();
     expect(screen.queryByText("leo-sat-p00s00 → meo-sat-p00s00")).toBeNull();
+  });
+
+  it("names a long-delay link's class and contact, and a local link's class", () => {
+    render(
+      <LinkDetail
+        link={link({ contact_id: "2@2027-02-19T00:00:00.000000Z" })}
+        snapshot={snapshot()}
+      />,
+    );
+    expect(screen.getByText("Class").nextElementSibling?.textContent).toBe(
+      "Long-delay, contact 2@2027-02-19T00:00:00.000000Z",
+    );
+    cleanup();
+
+    render(<LinkDetail link={link()} snapshot={snapshot()} />);
+    expect(screen.getByText("Class").nextElementSibling?.textContent).toBe("Local");
   });
 
   it("states the sim time its range and latency describe", () => {

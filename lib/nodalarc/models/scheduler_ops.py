@@ -151,6 +151,35 @@ class PendingActuationPair(BaseModel):
     snapshot_seq: int | None = None
 
 
+class DrainingLinkEnd(BaseModel):
+    """One end of a draining contact that still receives: the packets its peer sent before
+    admission stopped keep arriving until ``receives_until`` (Scheduler wall clock, UTC), the
+    proven stop plus the light time of the direction the end receives."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node_id: str
+    interface: str
+    receives_until: datetime
+
+
+class DrainingContact(BaseModel):
+    """A long-delay contact whose transmitters stopped admitting and whose ends still receive.
+
+    ``stopped_at`` is when the Scheduler had the Node Agents' proof that both transmitters
+    stopped (Scheduler wall clock, UTC). ``ends`` lists the ends not yet closed; the contact
+    leaves the snapshot when the last one closes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pair: list[str]
+    # The link's interfaces, in pair order.
+    interfaces: list[str]
+    contact_id: str
+    stopped_at: datetime
+    ends: list[DrainingLinkEnd] = Field(min_length=1)
+
+
 class ActualLinkSnapshot(BaseModel):
     """One Scheduler instance's verified kernel-actual link set, recoverable.
 
@@ -184,6 +213,8 @@ class ActualLinkSnapshot(BaseModel):
     snapshot_seq: int | None = None
     active_pairs: list[list[str]] = Field(default_factory=list)
     pending_pairs: list[PendingActuationPair] = Field(default_factory=list)
+    # Long-delay contacts that stopped admitting and still deliver; never in ``active_pairs``.
+    draining_contacts: list[DrainingContact] = Field(default_factory=list)
     emitted_at: datetime
 
 

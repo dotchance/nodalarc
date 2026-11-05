@@ -2,10 +2,11 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """The packet limit of every link delay queue, for both link classes.
 
-One function sizes a queue wherever a queue is sized: the Node Agent's initial shaping, every later
-delay update, and the Operator's per-server memory budget. Rejected alternative: sizing at each
-site. The first delay update would then restore whatever the initial shaping did not use, and the
-budget would count queues the kernel does not hold.
+One function sizes a queue wherever a queue is sized: the Node Agent's initial shaping and every
+later delay update. The Operator's per-server memory budget counts each queue's occupancy under
+the envelope with the same arithmetic (``envelope_occupancy_packets``). Rejected alternative:
+sizing at each site. The first delay update would then restore whatever the initial shaping did
+not use, and the budget would count queues the kernel does not hold.
 
 A local link's queue holds what its terminal transmits in flight at line rate, counted at a
 standard Ethernet MTU, plus a buffer of the kernel's default netem limit, which every link ran with
@@ -49,6 +50,15 @@ def _bytes_in_flight(rate_mbps: float, delay_ms: float) -> float:
     return rate_mbps * 1_000_000 / 8 * delay_ms / 1000.0
 
 
+def envelope_occupancy_packets(envelope: TrafficEnvelope, delay_ms: float) -> int:
+    """The packets a delay queue holds when one direction carries the envelope for
+    ``delay_ms``: the sustained load in flight, at the envelope's packet size, plus its burst."""
+    if delay_ms < 0 or not math.isfinite(delay_ms):
+        raise ValueError(f"a delay must be non-negative and finite, got {delay_ms}")
+    sustained = _bytes_in_flight(envelope.sustained_mbps, delay_ms) / envelope.packet_bytes
+    return math.ceil(sustained) + envelope.burst_packets
+
+
 def queue_limit_packets(
     *,
     long_delay: bool,
@@ -63,8 +73,7 @@ def queue_limit_packets(
     if long_delay:
         if envelope is None:
             raise ValueError("a long-delay queue is sized from the traffic envelope; none given")
-        sustained = _bytes_in_flight(envelope.sustained_mbps, delay_ms) / envelope.packet_bytes
-        return math.ceil(sustained) + envelope.burst_packets
+        return envelope_occupancy_packets(envelope, delay_ms)
     if not (transmit_mbps > 0 and math.isfinite(transmit_mbps)):
         raise ValueError(f"a transmit rate must be positive and finite, got {transmit_mbps}")
     in_flight = _bytes_in_flight(transmit_mbps, delay_ms) / LOCAL_IN_FLIGHT_PACKET_BYTES

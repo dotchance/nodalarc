@@ -255,10 +255,14 @@ class TestCrossBodyAuthority:
                 sat_states=states,
                 by_node={
                     "earth-iss-sat-p00s00": [
-                        NeighborAssignment("isl0", "luna-relay-sat-p00s00", "cross_plane_isl", 0)
+                        NeighborAssignment(
+                            "isl0", "luna-relay-sat-p00s00", "cross_plane_isl", 0, False
+                        )
                     ],
                     "luna-relay-sat-p00s00": [
-                        NeighborAssignment("isl0", "earth-iss-sat-p00s00", "cross_plane_isl", 0)
+                        NeighborAssignment(
+                            "isl0", "earth-iss-sat-p00s00", "cross_plane_isl", 0, False
+                        )
                     ],
                 },
                 terminal_constraints={

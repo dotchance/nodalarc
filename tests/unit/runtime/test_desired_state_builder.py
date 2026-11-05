@@ -74,6 +74,8 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
         event,
         interface_map={PAIR: ("isl0", "isl1")},
         ground_station_ids=frozenset(),
+        long_delay_pairs=frozenset(),
+        epoch_id=0,
     )
 
     assert pair == PAIR
@@ -110,6 +112,8 @@ def test_ground_visibility_event_uses_terminal_indices():
         event,
         interface_map={},
         ground_station_ids=frozenset({"gs-a"}),
+        long_delay_pairs=frozenset(),
+        epoch_id=0,
     )
 
     assert pair == ("gs-a", "sat-a")
@@ -141,6 +145,8 @@ def test_ground_visibility_event_maps_interfaces_by_endpoint_role_for_sat_first_
         event,
         interface_map={},
         ground_station_ids=frozenset({"lunar-ground-gs-nearside-relay-site"}),
+        long_delay_pairs=frozenset(),
+        epoch_id=0,
     )
 
     assert pair == ("luna-sat-p01s00", "lunar-ground-gs-nearside-relay-site")
@@ -173,6 +179,8 @@ def test_ground_visibility_event_requires_exactly_one_ground_endpoint():
             event,
             interface_map={},
             ground_station_ids=frozenset({"gs-a"}),
+            long_delay_pairs=frozenset(),
+            epoch_id=0,
         )
 
     with pytest.raises(ValueError, match="two ground endpoints"):
@@ -180,6 +188,8 @@ def test_ground_visibility_event_requires_exactly_one_ground_endpoint():
             event,
             interface_map={},
             ground_station_ids=frozenset({"sat-a", "sat-b"}),
+            long_delay_pairs=frozenset(),
+            epoch_id=0,
         )
 
 
@@ -205,6 +215,8 @@ def test_missing_isl_interface_map_fails_loudly():
             event,
             interface_map={},
             ground_station_ids=frozenset(),
+            long_delay_pairs=frozenset(),
+            epoch_id=0,
         )
 
 
@@ -230,6 +242,8 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
             ground_station_ids=frozenset(),
             snapshot_sim_time=SIM,
             snapshot_seq=42,
+            long_delay_pairs=frozenset(),
+            epoch_id=0,
         )
         is None
     )
@@ -249,6 +263,8 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
         ground_station_ids=frozenset(),
         snapshot_sim_time=SIM,
         snapshot_seq=42,
+        long_delay_pairs=frozenset(),
+        epoch_id=0,
     )
     assert pair == PAIR
     assert info.range_km == 3333.0
@@ -283,6 +299,8 @@ def test_snapshot_ground_link_maps_interfaces_by_endpoint_role_for_sat_first_pai
         ground_station_ids=frozenset({"lunar-ground-gs-nearside-relay-site"}),
         snapshot_sim_time=SIM,
         snapshot_seq=11,
+        long_delay_pairs=frozenset(),
+        epoch_id=0,
     )
 
     assert built_pair == pair
@@ -314,4 +332,6 @@ def test_snapshot_link_sim_time_mismatch_fails_loudly():
             ground_station_ids=frozenset(),
             snapshot_sim_time=SIM,
             snapshot_seq=42,
+            long_delay_pairs=frozenset(),
+            epoch_id=0,
         )

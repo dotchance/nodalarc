@@ -488,6 +488,7 @@ def test_link_candidate_maps_and_ground_candidates() -> None:
         priority=0,
         endpoint_segments=("ground", "leo"),
         delay_class="local",
+        longest_delay_s=0.05,
     )
     rs = _resolved_session(
         nodes=(sat, gs),
@@ -526,6 +527,7 @@ def test_link_interface_map_contains_only_fixed_candidates() -> None:
         priority=0,
         endpoint_segments=("leo", "leo"),
         delay_class="local",
+        longest_delay_s=0.05,
     )
     resolved = _resolved_session(
         nodes=(left, right),
@@ -551,6 +553,7 @@ def test_access_candidate_rejects_fabricated_fixed_interfaces() -> None:
             priority=0,
             endpoint_segments=("ground", "leo"),
             delay_class="local",
+            longest_delay_s=0.05,
         )
 
 
@@ -568,6 +571,7 @@ def test_fixed_candidate_requires_both_interfaces() -> None:
             priority=0,
             endpoint_segments=("leo", "leo"),
             delay_class="local",
+            longest_delay_s=0.05,
         )
 
 
@@ -586,6 +590,7 @@ def test_link_candidate_rejects_self_pair() -> None:
             priority=0,
             endpoint_segments=("leo", "leo"),
             delay_class="local",
+            longest_delay_s=0.05,
         )
 
 

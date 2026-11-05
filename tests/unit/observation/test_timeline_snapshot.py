@@ -86,6 +86,7 @@ def _four_node_runtime():
                         peer_node_id=by_location[(plane, 1 - slot)],
                         link_type="intra_plane_isl",
                         priority=0,
+                        long_delay=False,
                     ),
                 ),
                 (
@@ -95,6 +96,7 @@ def _four_node_runtime():
                         peer_node_id=by_location[(1 - plane, slot)],
                         link_type="cross_plane_isl",
                         priority=1,
+                        long_delay=False,
                     ),
                 ),
             )

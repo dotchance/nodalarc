@@ -1057,12 +1057,13 @@ def _long_delay_limit(delay_ms: float, transmit_mbps: float) -> int:
 
 def _open_long_delay_contact(
     pid: int, host_ifname: str, iface: node_agent_pb2.InterfaceUp
-) -> list[kernel_verifier.Proof]:
+) -> tuple[list[kernel_verifier.Proof], int | None]:
     """Open a contact on a long-delay end: admission open on the transmitting pod interface,
     which keeps only the terminal's rate; the received direction's delay queue on the host-side
     veth, sized from the traffic envelope; and the contact recorded on that veth. Returns the
-    proofs. A contact that reopens while the last one drains keeps the drained packets in the same
-    queue: they were sent to this same receiver."""
+    proofs, and the packets the admission filter took while stopped (None when admission was
+    open). A contact that reopens while the last one drains keeps the drained packets in the
+    same queue: they were sent to this same receiver."""
     if not iface.contact_id:
         raise ValueError(
             f"long-delay LinkUp of {iface.node_id}/{iface.interface_name} names no contact"
@@ -1072,12 +1073,13 @@ def _open_long_delay_contact(
             f"long-delay LinkUp of {iface.node_id}/{iface.interface_name} has no received delay"
         )
     limit = _long_delay_limit(iface.receive_latency_ms, iface.rates.receive_mbps)
-    admission.open_admission(pid, iface.interface_name)
+    fresh = namespace_ops.contact_of(host_ifname) is None
+    taken = admission.open_admission(pid, iface.interface_name)
     namespace_ops.apply_long_delay_transmit_shaping(
         pid, iface.interface_name, iface.rates.transmit_mbps
     )
     namespace_ops.apply_receive_delay_queue(
-        host_ifname, iface.rates.receive_mbps, iface.receive_latency_ms, limit
+        host_ifname, iface.rates.receive_mbps, iface.receive_latency_ms, limit, fresh=fresh
     )
     namespace_ops.tag_contact(host_ifname, iface.contact_id)
     return [
@@ -1093,7 +1095,7 @@ def _open_long_delay_contact(
             limit=limit,
         ),
         kernel_verifier.verify_contact(host_ifname, iface.contact_id),
-    ]
+    ], taken
 
 
 def _isl_link_up_carrier_stage(
@@ -1126,8 +1128,9 @@ def _isl_link_up_carrier_stage(
             )
         host_ifname = _isl_host_ifname(iface)
         long_delay = handles[iface.node_id].is_long_delay(iface.interface_name)
+        taken_while_stopped: int | None = None
         if long_delay:
-            proofs = _open_long_delay_contact(pid, host_ifname, iface)
+            proofs, taken_while_stopped = _open_long_delay_contact(pid, host_ifname, iface)
         else:
             namespace_ops.apply_transmit_shaping(
                 pid, iface.interface_name, iface.latency_ms, iface.rates.transmit_mbps
@@ -1182,7 +1185,17 @@ def _isl_link_up_carrier_stage(
                     kernel_verifier.verify_host_interface_state(host_b, admin_up=True),
                 ]
             )
-        return _combine_proofs("ISL LinkUp verified", proofs)
+        outcome = _combine_proofs("ISL LinkUp verified", proofs)
+        if taken_while_stopped is not None:
+            # The end reopened during a drain: what the stopped admission took is the only loss
+            # of the contact that ended; its queue carries on into this one, nothing discarded.
+            outcome = replace(
+                outcome,
+                loss=node_agent_pb2.LinkEndLoss(
+                    admission_taken=taken_while_stopped, discarded_exact=True
+                ),
+            )
+        return outcome
     except Exception as exc:
         msg = f"ISL up carrier stage failed {iface.node_id}/{iface.interface_name}: {exc}"
         log.warning(msg)

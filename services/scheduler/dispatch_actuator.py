@@ -17,7 +17,13 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.link_events import (
+    LatencyUpdate,
+    LinkDown,
+    LinkEndCloseCause,
+    LinkEndLoss,
+    LinkUp,
+)
 from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.models.scheduler_ops import ActuationFailureClass
 from nodalarc.proto import node_agent_pb2
@@ -429,7 +435,7 @@ async def _send_kernel_inventory_to_agent(
         items=entries,
         pool=pool,
         operation="KernelInventory",
-        operation_id_base=f"{sim_iso}-kernel-inventory-{gs_id}-{addr}",
+        operation_id_base=f"{sim_iso}-kernel-inventory-{gs_id or 'long-delay'}-{addr}",
         session_id=session_id,
         wiring_generation=wiring_generation,
         writer_epoch=writer_epoch,
@@ -511,6 +517,167 @@ async def verify_ground_kernel_inventory(
     )
 
 
+def end_loss_records(
+    result: ActuationResult,
+    *,
+    pair: LinkPair,
+    info: ActiveLinkInfo,
+    cause: LinkEndCloseCause,
+) -> tuple[LinkEndLoss, ...]:
+    """What each end of ``pair`` that this result closed reported losing, with the cause."""
+    pair_ends = {(pair[0], info.interface_a), (pair[1], info.interface_b)}
+    return tuple(
+        LinkEndLoss(
+            node_id=node_id,
+            interface=interface,
+            cause=cause,
+            admission_taken=counts.admission_taken,
+            queue_dropped=counts.queue_dropped,
+            discarded_at_close=counts.discarded_at_close,
+            discarded_exact=counts.discarded_exact,
+        )
+        for (node_id, interface), counts in sorted(result.end_losses.items())
+        if (node_id, interface) in pair_ends
+    )
+
+
+async def publish_link_down(
+    *,
+    js: Any,
+    subject: str,
+    pair: LinkPair,
+    info: ActiveLinkInfo,
+    sim_time: datetime,
+    reason: str,
+    losses: tuple[LinkEndLoss, ...],
+) -> None:
+    """Record a link's teardown: every end of its contact closed."""
+    event = LinkDown(
+        sim_time=sim_time,
+        wall_time=datetime.now(UTC),
+        node_a=pair[0],
+        node_b=pair[1],
+        interface_a=info.interface_a,
+        interface_b=info.interface_b,
+        reason=reason,
+        link_type=info.link_type,
+        contact_id=info.contact.contact_id if info.contact is not None else None,
+        losses=losses,
+    )
+    await js.publish(subject, event.model_dump_json().encode())
+
+
+def long_delay_inventory_entries(
+    *,
+    pair: LinkPair,
+    info: ActiveLinkInfo,
+    node_ids: frozenset[str],
+    locator: Any,
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
+) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
+    """KernelInventory entries proving the named ends of a long-delay contact in the stage the
+    Scheduler holds it in: open (admission open) or draining (admission stopped); either way
+    the contact on the host-side veth and the received direction's delay queue as commanded."""
+    if info.contact is None:
+        raise ValueError(f"{pair} is a local link; its ends have no contact stage")
+    if info.commanded_netem_ms is None:
+        raise ValueError(f"long-delay link {pair} has no commanded delay to prove")
+    node_a, node_b = pair
+    locality = locator.link_locality(node_a, node_b)
+    vni = (
+        compute_vni(node_a, node_b, info.interface_a, info.interface_b)
+        if locality == node_agent_pb2.LOCALITY_CROSS_NODE
+        else 0
+    )
+    entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
+    ack_keys: set[InterfaceAck] = set()
+    for nid, ifname, peer_nid, peer_ifname in [
+        (node_a, info.interface_a, node_b, info.interface_b),
+        (node_b, info.interface_b, node_a, info.interface_a),
+    ]:
+        if nid not in node_ids:
+            continue
+        agent = locator.agent_addr(nid)
+        entry = node_agent_pb2.KernelInventoryEntry(
+            node_id=nid,
+            interface_name=ifname,
+            link_type=node_agent_pb2.LINK_TYPE_ISL,
+            peer_node_id=peer_nid,
+            peer_interface_name=peer_ifname,
+            locality=locality,
+            vni=vni,
+            remote_node_ip=(
+                locator.node_ip(locator.k3s_node(peer_nid))
+                if locality == node_agent_pb2.LOCALITY_CROSS_NODE
+                else ""
+            ),
+            expected_admin_up=True,
+            contact_id=info.contact.contact_id,
+            receive_latency_ms=egress_ms(pair, peer_nid, info.commanded_netem_ms),
+            expected_admission_stopped=info.drain is not None,
+        )
+        entry.rates.CopyFrom(terminal_rates_message(interface_rates, nid, ifname))
+        entries_by_agent.setdefault(agent, []).append(entry)
+        ack_keys.add((agent, nid, ifname))
+    return entries_by_agent, ack_keys
+
+
+async def verify_long_delay_ends(
+    *,
+    ends: Mapping[LinkPair, frozenset[str]],
+    actual_links: Mapping[LinkPair, ActiveLinkInfo],
+    locator: Any,
+    pool: Any,
+    sim_iso: str,
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
+    session_id: str,
+    wiring_generation: str,
+    writer_epoch: int,
+) -> ActuationResult:
+    """Read-only proof of long-delay contact ends in the stage the Scheduler holds them in."""
+    entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
+    pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
+    for pair, node_ids in sorted(ends.items()):
+        agent_entries, ack_keys = long_delay_inventory_entries(
+            pair=pair,
+            info=actual_links[pair],
+            node_ids=node_ids,
+            locator=locator,
+            interface_rates=interface_rates,
+        )
+        pair_agent_ifaces[pair] = ack_keys
+        for agent, entries in agent_entries.items():
+            entries_by_agent.setdefault(agent, []).extend(entries)
+    agent_results: list[AgentCommandResult] = []
+    if entries_by_agent:
+        agent_results = list(
+            await asyncio.gather(
+                *[
+                    _send_kernel_inventory_to_agent(
+                        addr=agent_addr,
+                        entries=entries_by_agent[agent_addr],
+                        pool=pool,
+                        sim_iso=sim_iso,
+                        session_id=session_id,
+                        wiring_generation=wiring_generation,
+                        writer_epoch=writer_epoch,
+                        gs_id="",
+                    )
+                    for agent_addr in sorted(entries_by_agent)
+                ]
+            )
+        )
+    requested = sorted(ends)
+    return build_actuation_result(
+        operation="KernelInventory",
+        requested_pairs=requested,
+        pair_agent_ifaces=pair_agent_ifaces,
+        pair_link_type=dict.fromkeys(requested, "isl"),
+        pair_gs_id=dict.fromkeys(requested),
+        agent_results=agent_results,
+    )
+
+
 async def send_batch_down(
     *,
     pairs: set[LinkPair],
@@ -526,14 +693,23 @@ async def send_batch_down(
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
+    stage: int,
+    ends: Mapping[LinkPair, frozenset[str]] | None = None,
 ) -> ActuationResult:
-    """Send BatchLinkDown to Node Agents and publish LinkDown proof events."""
+    """Send BatchLinkDown to Node Agents.
+
+    A local link closes at once, and its LinkDown is published here with what each end's queue
+    held (a sample). A long-delay contact's stages are recorded by the Dispatcher, which
+    publishes its LinkDown when the last end closes.
+    """
     sorted_pairs = sorted(pairs)
     plan = build_link_down_batch_plan(
         pairs=sorted_pairs,
         actual_links=actual_links,
         locator=locator,
         gs_capacities=gs_capacities,
+        stage=stage,
+        ends=ends,
     )
     agent_results: list[AgentCommandResult] = []
     agent_addrs = list(plan.agent_ifaces.keys())
@@ -581,22 +757,24 @@ async def send_batch_down(
             result=result,
         )
 
-    now = datetime.now(UTC)
     for pair in sorted(result.succeeded_pairs):
         info = actual_links.get(pair)
-        if not info:
+        if not info or info.contact is not None:
             continue
-        event = LinkDown(
+        await publish_link_down(
+            js=js,
+            subject=subj_link_down,
+            pair=pair,
+            info=info,
             sim_time=sim_time,
-            wall_time=now,
-            node_a=pair[0],
-            node_b=pair[1],
-            interface_a=info.interface_a,
-            interface_b=info.interface_b,
             reason=down_reasons.get(pair, "vis_lost"),
-            link_type=info.link_type,
+            losses=end_loss_records(
+                result,
+                pair=pair,
+                info=info,
+                cause="scenario" if pair in down_reasons else "end_of_contact",
+            ),
         )
-        await js.publish(subj_link_down, event.model_dump_json().encode())
     return result
 
 
@@ -698,6 +876,7 @@ async def send_batch_up(
             reason="vis_gained",
             link_type=info.link_type,
             provenance=link_provenance(info, plan.pair_compensation[pair], sim_time),
+            contact_id=info.contact.contact_id if info.contact is not None else None,
         )
         await js.publish(subj_link_up, event.model_dump_json().encode())
     return result
@@ -778,18 +957,22 @@ async def send_authoritative_latency_updates(
                     ),
                 )
         else:
-            for nid, ifname in [(node_a, info.interface_a), (node_b, info.interface_b)]:
-                _add_entry(
-                    pair,
-                    locator.agent_addr(nid),
-                    node_agent_pb2.LatencyEntry(
-                        node_id=nid,
-                        interface_name=ifname,
-                        latency_ms=egress_ms(pair, nid, netem),
-                        rates=terminal_rates_message(interface_rates, nid, ifname),
-                        link_type=node_agent_pb2.LINK_TYPE_ISL,
-                    ),
+            for nid, ifname, peer_nid in [
+                (node_a, info.interface_a, node_b),
+                (node_b, info.interface_b, node_a),
+            ]:
+                entry = node_agent_pb2.LatencyEntry(
+                    node_id=nid,
+                    interface_name=ifname,
+                    latency_ms=egress_ms(pair, nid, netem),
+                    rates=terminal_rates_message(interface_rates, nid, ifname),
+                    link_type=node_agent_pb2.LINK_TYPE_ISL,
                 )
+                if info.contact is not None:
+                    # A long-delay end's delay queue holds the direction its peer transmits.
+                    entry.contact_id = info.contact.contact_id
+                    entry.receive_latency_ms = egress_ms(pair, peer_nid, netem)
+                _add_entry(pair, locator.agent_addr(nid), entry)
 
     agent_results: list[AgentCommandResult] = []
     dispatch_started = time.monotonic()

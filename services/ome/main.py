@@ -70,7 +70,7 @@ from ome.event_stream import (
     precompute_timeline,
     write_timeline_jsonl,
 )
-from ome.types import MbbTeardownLifecycleEvent, MbbTeardownState, ReceiveWindows
+from ome.types import IslContacts, MbbTeardownLifecycleEvent, MbbTeardownState, ReceiveWindows
 
 if TYPE_CHECKING:
     pass
@@ -1037,6 +1037,8 @@ def _run_pacing(
     # Ground terminals still receiving from a released peer; allocator state carried like the
     # pending teardowns, mutated in place by compute_step.
     receive_windows: ReceiveWindows = {}
+    # The opening of each fixed long-delay link's open contact; carried like isl_state.
+    isl_contacts: IslContacts = {}
     current_associations: dict[tuple[str, str], tuple[int, int]] = {}
     mbb_pending_teardowns: MbbTeardownState = {}
     step = 0
@@ -1223,6 +1225,7 @@ def _run_pacing(
                 associations=step_result.associations,
                 teardowns=step_result.pending_teardowns,
                 receive_windows=dict(receive_windows),
+                isl_contacts=dict(isl_contacts),
                 ground_station_ids=frozenset(step_ctx.gs_mbb_overlap_ticks),
                 written_at=time.time(),
             ),
@@ -1417,6 +1420,7 @@ def _run_pacing(
             current_associations = seeded[2]
             mbb_pending_teardowns = seeded[3]
             receive_windows.update(seeded[4])
+            isl_contacts.update(seeded[5])
             replay_start = recovered_anchor.step + 1
             logging.info(
                 "Bounded replay: anchor at step %d covers %d steps; replaying %d",
@@ -1464,6 +1468,7 @@ def _run_pacing(
                 mbb_pending_teardowns,
                 dwell_state=dwell_state,
                 receive_windows=receive_windows,
+                isl_contacts=isl_contacts,
             )
             initial_step_result = replay_result
             current_associations = replay_result.associations
@@ -1494,6 +1499,7 @@ def _run_pacing(
             mbb_pending_teardowns,
             dwell_state=dwell_state,
             receive_windows=receive_windows,
+            isl_contacts=isl_contacts,
         )
         current_associations = initial_step_result.associations
         mbb_pending_teardowns = initial_step_result.pending_teardowns
@@ -1610,6 +1616,7 @@ def _run_pacing(
                 gs_state = {}
                 dwell_state = {}
                 receive_windows = {}
+                isl_contacts = {}
                 current_associations = {}
                 mbb_pending_teardowns = {}
                 step = 0
@@ -1634,6 +1641,7 @@ def _run_pacing(
                         mbb_pending_teardowns,
                         dwell_state=dwell_state,
                         receive_windows=receive_windows,
+                        isl_contacts=isl_contacts,
                     )
                 except Exception as exc:
                     target_master_sim_time = datetime.fromtimestamp(epoch_unix, UTC).isoformat()
@@ -1774,6 +1782,7 @@ def _run_pacing(
                 mbb_pending_teardowns,
                 dwell_state=dwell_state,
                 receive_windows=receive_windows,
+                isl_contacts=isl_contacts,
             )
             if _epoch_id != tick_epoch_id or _seek_target is not None:
                 logging.info(

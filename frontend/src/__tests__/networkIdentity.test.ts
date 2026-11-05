@@ -52,6 +52,7 @@ function link(link_type: LinkState["link_type"]): LinkState {
     endpoint_segments: null,
     teardown_remaining_ticks: null,
     successor_pair: null,
+    contact_id: null,
     latency_a_to_b_ms: 1,
     latency_b_to_a_ms: 1,
     transmit_mbps_a: 1,

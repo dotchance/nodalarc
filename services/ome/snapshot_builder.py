@@ -70,6 +70,8 @@ class LinkSnapshotSource:
     # Each link's committed one-way light times (pair[0] to pair[1], pair[1] to pair[0]) from
     # the tick's signals.
     latencies_ms: Mapping[tuple[str, str], tuple[float, float]]
+    # The opening sim time of each fixed long-delay link's open contact.
+    contacts_opened: Mapping[tuple[str, str], datetime]
 
 
 def build_link_decision_snapshot(
@@ -165,6 +167,13 @@ def build_link_state_snapshot(
 
     links: list[LinkState] = []
 
+    for pair in source.contacts_opened:
+        if source.isl_state.get(pair) != (True, True):
+            raise ValueError(
+                f"Cannot build LinkStateSnapshot: long-delay link {pair[0]}<->{pair[1]} has an "
+                "open contact but its carrier is not up"
+            )
+
     for pair, (visible, scheduled) in source.isl_state.items():
         if pair not in interface_map:
             raise ValueError(
@@ -195,6 +204,7 @@ def build_link_state_snapshot(
                 link_rule_id=rule_meta.link_rule_id if rule_meta is not None else None,
                 topology_mode=rule_meta.topology_mode if rule_meta is not None else None,
                 endpoint_segments=rule_meta.endpoint_segments if rule_meta is not None else None,
+                contact_opened_at=source.contacts_opened.get(pair),
                 sim_time=sim_time,
             )
         )

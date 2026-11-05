@@ -3,7 +3,7 @@
 import json
 import os
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
 from typing import get_args
@@ -3305,3 +3305,95 @@ def test_a_debug_control_request_with_no_nats_connection_records_a_failure(monke
 
     assert control.outcome == "failed"
     assert m._debug_control == {"ome": control}
+
+
+class TestLongDelayContacts:
+    """VS-API serves each draining direction and each ended contact's losses as the Scheduler
+    and the Node Agents reported them."""
+
+    _STOPPED = datetime(2027, 2, 19, 0, 0, 0, tzinfo=UTC)
+
+    def test_each_draining_end_is_the_receiver_of_its_peers_direction(self):
+        import asyncio
+
+        from nodalarc.models.scheduler_ops import (
+            ActualLinkSnapshot,
+            DrainingContact,
+            DrainingLinkEnd,
+        )
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        # The Earth end's receive deadline passed and it closed; the Mars end still receives.
+        mars_last = self._STOPPED + timedelta(milliseconds=1_113_442.7)
+        msg = _Message()
+        msg.data = (
+            ActualLinkSnapshot(
+                session_id="test",
+                wiring_generation="gen-1",
+                scheduler_instance_id="sched-1",
+                hostname="sched-1-host",
+                active_pairs=[],
+                draining_contacts=[
+                    DrainingContact(
+                        pair=["earth-relay", "mars-relay"],
+                        interfaces=["isl3", "isl0"],
+                        contact_id="0@2027-02-18T12:00:00.000000Z",
+                        stopped_at=self._STOPPED,
+                        ends=[
+                            DrainingLinkEnd(
+                                node_id="mars-relay", interface="isl0", receives_until=mars_last
+                            )
+                        ],
+                    )
+                ],
+                emitted_at=self._STOPPED,
+            )
+            .model_dump_json()
+            .encode()
+        )
+        asyncio.run(ctx._on_actual_links(msg))
+
+        (direction,) = ctx.draining_directions()
+        assert (direction.transmitter_node_id, direction.transmitter_interface) == (
+            "earth-relay",
+            "isl3",
+        )
+        assert (direction.receiver_node_id, direction.receiver_interface) == ("mars-relay", "isl0")
+        assert direction.last_arrival_at == mars_last
+        # A draining contact carries no new traffic: it is not kernel-actual.
+        assert ctx.actual_kernel_pairs() == frozenset()
+
+    def test_a_contact_that_ended_with_losses_is_listed_with_each_ends_cause(self):
+        import asyncio
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ends = [
+            {
+                "node_id": "earth-relay",
+                "interface": "isl3",
+                "cause": "drain_deadline",
+                "admission_taken": 412,
+                "queue_dropped": 3,
+                "discarded_at_close": 0,
+                "discarded_exact": True,
+            }
+        ]
+        asyncio.run(
+            ctx._on_link_down(
+                _message(
+                    _make_link_down_event(
+                        "earth-relay",
+                        "mars-relay",
+                        contact_id="0@2027-02-18T12:00:00.000000Z",
+                        losses=ends,
+                    )
+                )
+            )
+        )
+        asyncio.run(ctx._on_link_down(_message(_make_link_down_event())))
+
+        (contact,) = ctx.contact_losses
+        assert contact.contact_id == "0@2027-02-18T12:00:00.000000Z"
+        assert [end.model_dump() for end in contact.ends] == ends

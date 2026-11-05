@@ -125,6 +125,7 @@ def test_isl_event_diff_emits_only_state_changes_and_preserves_authority_values(
         feasibility={pair: result},
         scheduled_links={pair: _scheduled(pair)},
         previous_state={},
+        long_delay_pairs=frozenset(),
     )
 
     assert diff.state[pair] == (True, True)
@@ -141,6 +142,7 @@ def test_isl_event_diff_emits_only_state_changes_and_preserves_authority_values(
         feasibility={pair: result},
         scheduled_links={pair: _scheduled(pair)},
         previous_state=diff.state,
+        long_delay_pairs=frozenset(),
     )
     assert unchanged.events == ()
     assert unchanged.state == diff.state
@@ -153,6 +155,7 @@ def test_isl_event_diff_maps_capacity_to_terminal_capacity_reason():
         feasibility={pair: _isl_result(pair)},
         scheduled_links={pair: _scheduled(pair, scheduled=False)},
         previous_state={},
+        long_delay_pairs=frozenset(),
     )
 
     assert diff.state[pair] == (True, False)

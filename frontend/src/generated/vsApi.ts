@@ -118,6 +118,17 @@ export interface CandidateFacts {
   readonly viable_withheld: boolean;
 }
 
+/** What a link's ended contact lost, end by end, with each end's cause: a local link's in-flight packets at its close (a sample), a long-delay end's packets still queued at its drain deadline, a seek or a scenario command (counts), and packets each stopped transmitter refused while its contact drained. */
+export interface ContactLoss {
+  readonly node_a: string;
+  readonly node_b: string;
+  readonly contact_id: string | null;
+  readonly reason: string;
+  readonly sim_time: string;
+  readonly wall_time: string;
+  readonly ends: ReadonlyArray<LinkEndLoss>;
+}
+
 /** The continuous trace now runs between these two nodes. */
 export interface ContinuousTraceStarted {
   readonly ok: true;
@@ -231,6 +242,17 @@ export type DecisionSampleState = "scheduled" | "eligible_unselected" | "expecte
 export interface DecisionTimelineQuery {
   readonly gs: string;
   readonly limit?: number;
+}
+
+/** One direction of a long-delay link whose contact ended. Its transmitter stopped admitting packets at ``stopped_at``; the packets it emitted before then keep arriving at the receiver until ``last_arrival_at``. Both are Scheduler wall times: the kernel delays packets in wall time at every simulation speed. A direction absent from the list is open (its link is in ``links``) or closed. */
+export interface DrainingDirection {
+  readonly contact_id: string;
+  readonly transmitter_node_id: string;
+  readonly transmitter_interface: string;
+  readonly receiver_node_id: string;
+  readonly receiver_interface: string;
+  readonly stopped_at: string;
+  readonly last_arrival_at: string;
 }
 
 /** The combined envelope a user cannot infer by eye. Under a local-vertical GROUND boresight, elevation and field-of-regard collapse to a single floor: `effective_min_elevation_deg = max(configured_min_elevation, 90 - FoR/2)`. `binding_source` names which constraint produced the floor and `dead_knobs` lists configured values that are non-binding because another constraint dominates (e.g. a 25 deg mask under a FoR-derived 30 deg floor). The collapse is ground-specific; `ground`/`satellite` carry each terminal's raw constraints and `binding_endpoint` names which terminal the binding gate rejected at, so a hint points at the terminal that actually limits the link. */
@@ -491,6 +513,20 @@ export interface LinkDecisionTracesQuery {
   readonly node_b?: string | null;
 }
 
+/**  */
+export type LinkEndCloseCause = "end_of_contact" | "drain_deadline" | "seek" | "scenario" | "reopened";
+
+/** What one link end's queues lost when it closed, from the Node Agent's close. ``discarded_at_close`` is what the end's delay queue still held. With ``discarded_exact`` it is a count: admission had stopped at both ends, so nothing entered the queue between the read and the reset. Without it, it is a sample read just before the close of a local link, which keeps admitting until then. ``queue_dropped`` is what the queue dropped at its limit (substrate resource loss), and ``admission_taken`` what the stopped admission filter took. */
+export interface LinkEndLoss {
+  readonly node_id: string;
+  readonly interface: string;
+  readonly cause: LinkEndCloseCause;
+  readonly admission_taken: number;
+  readonly queue_dropped: number;
+  readonly discarded_at_close: number;
+  readonly discarded_exact: boolean;
+}
+
 /** One recorded link event: a transition, a latency change, or a link active when the recording started (``LinkActive``, reason ``recording_start``). */
 export interface LinkHistoryEvent {
   readonly id: number;
@@ -552,6 +588,7 @@ export interface LinkState {
   readonly scheduling_state: SchedulingState;
   readonly teardown_remaining_ticks: number | null;
   readonly successor_pair: readonly [string, string] | null;
+  readonly contact_id: string | null;
 }
 
 /**  */
@@ -743,6 +780,8 @@ export interface StateSnapshot {
   readonly nodes: ReadonlyArray<NodeState>;
   readonly links: ReadonlyArray<LinkState>;
   readonly kernel_actual_pairs: ReadonlyArray<readonly [string, string]>;
+  readonly draining_directions: ReadonlyArray<DrainingDirection>;
+  readonly contact_losses: ReadonlyArray<ContactLoss>;
   readonly traced_paths: ReadonlyArray<TracedPath>;
   readonly recent_events: ReadonlyArray<RecentEvent>;
   readonly routing_stack: string | null;

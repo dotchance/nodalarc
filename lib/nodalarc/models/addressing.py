@@ -17,6 +17,9 @@ class NeighborAssignment(NamedTuple):
     peer_node_id: str  # "sat-P03S08"
     link_type: IslPlaneRelation
     priority: int  # 0=intra-fwd, 1=intra-aft, 2=cross-right, 3=cross-left
+    # The resolver's class of this link: True for a long-delay link, whose contacts OME names
+    # and the Scheduler drains at their end.
+    long_delay: bool
 
 
 def neighbors_by_node(

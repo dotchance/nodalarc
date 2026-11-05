@@ -76,8 +76,15 @@ def build_link_down_batch_plan(
     actual_links: Mapping[LinkPair, ActiveLinkInfo],
     locator: LinkLocator,
     gs_capacities: Mapping[str, int],
+    stage: int,
+    ends: Mapping[LinkPair, frozenset[str]] | None = None,
 ) -> LinkDownBatchPlan:
     """Build per-agent BatchLinkDown operations.
+
+    Every entry carries ``stage``. A local link only closes, all at once. A long-delay link
+    first stops admission at both ends (STOP_ADMISSION), then closes each end on its own
+    (CLOSE): ``ends`` names the ends of each pair to close, and its entries name the contact so
+    a close cannot reach a newer contact on the same terminal.
 
     Missing actual links are ignored because there is nothing to remove.
     """
@@ -91,6 +98,18 @@ def build_link_down_batch_plan(
 
         node_a, node_b = pair
         locality = locator.link_locality(node_a, node_b)
+        if info.contact is None and stage != node_agent_pb2.LINK_DOWN_STAGE_CLOSE:
+            raise ValueError(f"local link {pair} closes at once; it has no admission stage")
+        if info.contact is None and ends is not None and pair in ends:
+            raise ValueError(f"local link {pair} closes both ends at once")
+        if (
+            info.contact is not None
+            and stage == node_agent_pb2.LINK_DOWN_STAGE_CLOSE
+            and (ends is None or pair not in ends)
+        ):
+            raise ValueError(
+                f"long-delay link {pair} closes end by end; the close names no end of it"
+            )
 
         if info.link_type == "ground":
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
@@ -115,6 +134,7 @@ def build_link_down_batch_plan(
                     locality=locality,
                     remote_node_ip="",
                     vni=vni,
+                    stage=stage,
                 )
                 agent_ifaces.setdefault(agent, []).append(iface_msg)
                 pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))
@@ -138,6 +158,7 @@ def build_link_down_batch_plan(
                         locality=locality,
                         remote_node_ip=remote_ip,
                         vni=vni,
+                        stage=stage,
                     )
                     agent_ifaces.setdefault(agent_addr, []).append(iface_msg)
                     pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent_addr, iface_msg))
@@ -148,10 +169,13 @@ def build_link_down_batch_plan(
             if locality == node_agent_pb2.LOCALITY_CROSS_NODE
             else 0
         )
+        closing = ends.get(pair) if ends is not None else None
         for nid, ifname, peer_nid, peer_ifname in [
             (node_a, info.interface_a, node_b, info.interface_b),
             (node_b, info.interface_b, node_a, info.interface_a),
         ]:
+            if closing is not None and nid not in closing:
+                continue
             agent = locator.agent_addr(nid)
             remote_ip = ""
             if locality == node_agent_pb2.LOCALITY_CROSS_NODE:
@@ -165,6 +189,8 @@ def build_link_down_batch_plan(
                 remote_node_ip=remote_ip,
                 peer_node_id=peer_nid,
                 peer_interface_name=peer_ifname,
+                stage=stage,
+                contact_id=info.contact.contact_id if info.contact is not None else "",
             )
             agent_ifaces.setdefault(agent, []).append(iface_msg)
             pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))
@@ -312,6 +338,11 @@ def build_link_up_batch_plan(
                 peer_node_id=peer_nid,
                 peer_interface_name=peer_ifname,
             )
+            if info.contact is not None:
+                # A long-delay end holds the delay queue of the direction it receives: the one its
+                # peer transmits.
+                iface_msg.contact_id = info.contact.contact_id
+                iface_msg.receive_latency_ms = egress_ms(pair, peer_nid, netem)
             agent_ifaces.setdefault(agent, []).append(iface_msg)
             pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))
 

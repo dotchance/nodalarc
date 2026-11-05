@@ -24,6 +24,7 @@ from nodalarc.models.events import (
     ServiceSource,
     SessionEphemeris,
 )
+from nodalarc.models.link_events import LinkEndLoss
 from nodalarc.models.link_rules import TopologyMode
 from nodalarc.models.link_state import SchedulingState
 from nodalarc.models.resolved_session import NodeKind, NodeRole
@@ -131,6 +132,41 @@ type SessionStatus = Literal["idle", "switching", "wiring", "ready", "error"]
 type PublicLinkType = Literal["ground", "isl", "inter_constellation", "inter_body_relay"]
 
 
+class DrainingDirection(BaseModel):
+    """One direction of a long-delay link whose contact ended. Its transmitter stopped
+    admitting packets at ``stopped_at``; the packets it emitted before then keep arriving at the
+    receiver until ``last_arrival_at``. Both are Scheduler wall times: the kernel delays packets
+    in wall time at every simulation speed. A direction absent from the list is open (its link
+    is in ``links``) or closed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    contact_id: str
+    transmitter_node_id: str
+    transmitter_interface: str
+    receiver_node_id: str
+    receiver_interface: str
+    stopped_at: datetime
+    last_arrival_at: datetime
+
+
+class ContactLoss(BaseModel):
+    """What a link's ended contact lost, end by end, with each end's cause: a local link's
+    in-flight packets at its close (a sample), a long-delay end's packets still queued at its
+    drain deadline, a seek or a scenario command (counts), and packets each stopped transmitter
+    refused while its contact drained."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node_a: str
+    node_b: str
+    contact_id: str | None
+    reason: str
+    sim_time: datetime
+    wall_time: datetime
+    ends: list[LinkEndLoss]
+
+
 class LinkState(BaseModel):
     """State of a single link between two nodes."""
 
@@ -169,6 +205,8 @@ class LinkState(BaseModel):
     scheduling_state: SchedulingState = "active"
     teardown_remaining_ticks: int | None = None
     successor_pair: tuple[str, str] | None = None
+    # The contact of a long-delay link (its class); None on a local link.
+    contact_id: str | None = None
 
 
 class LinkDecisionTrace(BaseModel):
@@ -449,6 +487,10 @@ class StateSnapshot(BaseModel):
     # decision card says in_flight/faulted. Empty until the first ActualLinkSnapshot lands
     # (honest: nothing proven), never a masked connected.
     kernel_actual_pairs: list[tuple[str, str]] = Field(default_factory=list)
+    # Directions of long-delay links still delivering after their contact ended.
+    draining_directions: list[DrainingDirection] = Field(default_factory=list)
+    # The most recent ended contacts that reported losses, newest last.
+    contact_losses: list[ContactLoss] = Field(default_factory=list)
     traced_paths: list[TracedPath]
     recent_events: list[RecentEvent]
     routing_stack: str | None = None

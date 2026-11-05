@@ -140,6 +140,7 @@ def _assignment(interface: str, peer: str, link_type: str, priority: int) -> Nei
         peer_node_id=peer,
         link_type=link_type,
         priority=priority,
+        long_delay=False,
     )
 
 

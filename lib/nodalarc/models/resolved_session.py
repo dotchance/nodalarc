@@ -522,6 +522,9 @@ class ResolvedLinkCandidate(BaseModel):
     priority: int = Field(ge=0)
     endpoint_segments: tuple[NonEmptyReference, NonEmptyReference]
     delay_class: LinkDelayClass
+    # The longest one-way delay the candidate can have, in seconds, bounded at resolution with
+    # its class: the delay each of its queues is sized for in the per-server memory budget.
+    longest_delay_s: float = Field(gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _candidate_invariants(self) -> ResolvedLinkCandidate:
@@ -1501,6 +1504,16 @@ class ResolvedSession(BaseModel):
             for candidate in self.link_candidates
             if candidate.kind != "access"
         }
+
+    def long_delay_fixed_pairs(self) -> frozenset[tuple[str, str]]:
+        """The fixed links whose class is long-delay, by canonical pair. OME names each contact
+        on them and the Scheduler drains each at its end. A long-delay access candidate is not
+        among them: its terminals are chosen per contact, and its drain is not built."""
+        return frozenset(
+            candidate.pair
+            for candidate in self.link_candidates
+            if candidate.kind != "access" and candidate.delay_class == "long_delay"
+        )
 
     def interface_terminal_rates(self) -> dict[tuple[str, str], InterfaceRates]:
         """Each WAN interface's own terminal rates, keyed by (node_id, interface).

@@ -30,6 +30,8 @@ function snapshotWithActuationNotice(): StateSnapshot {
     stale: false,
     history_recording: null,
     kernel_actual_pairs: [],
+    draining_directions: [],
+    contact_losses: [],
     playback_achieved: null,
     pacing_degraded: false,
     actuation_health: null,

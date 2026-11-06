@@ -2000,9 +2000,9 @@ def _verify_long_delay_inventory_entry(
     entry: node_agent_pb2.KernelInventoryEntry,
     handles: dict[str, NamespaceHandle] | None = None,
 ) -> EntryOutcome:
-    """Read-only proof of a long-delay ISL end in the stage its contact is in: open or draining
-    (the contact on the host-side veth, admission open or stopped, the rate shaper, the received
-    direction's delay queue), or closed (the end carries no contact)."""
+    """Read-only proof of a long-delay end, fixed or ground, in the stage its contact is in: open
+    or draining (the contact on the host-side veth, admission open or stopped, the rate shaper,
+    the received direction's delay queue), or closed (the end carries no contact)."""
     try:
         if handles is None:
             raise ValueError("handles is None — wiring not complete?")
@@ -2225,17 +2225,19 @@ def handle_kernel_inventory(
     if handles is None:
         raise ValueError("handles is None — wiring not complete?")
 
+    # A request naming no station proves long-delay ends, fixed or ground, as the contract reads
+    # it (``validate_kernel_inventory_request``); a station-scoped request proves the station's
+    # local passes. Rejected alternative: choosing the proof by link type, which proved a
+    # long-delay ground end against the local ground layout and found no pod-interface queue.
+    def prover(entry: node_agent_pb2.KernelInventoryEntry):
+        if entry.survey:
+            return _survey_long_delay_end
+        if not request.gs_id:
+            return _verify_long_delay_inventory_entry
+        return _verify_kernel_inventory_entry
+
     futures = {
-        _BATCH_POOL.submit(
-            _survey_long_delay_end
-            if entry.survey
-            else _verify_long_delay_inventory_entry
-            if entry.link_type == node_agent_pb2.LINK_TYPE_ISL
-            else _verify_kernel_inventory_entry,
-            entry,
-            handles,
-        ): entry
-        for entry in request.entries
+        _BATCH_POOL.submit(prover(entry), entry, handles): entry for entry in request.entries
     }
     outcomes: dict[tuple[str, str], EntryOutcome] = {}
     for fut in as_completed(futures):

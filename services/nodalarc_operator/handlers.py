@@ -468,7 +468,7 @@ def _terminated_suffix(view: SessionPodView) -> str:
     """The status message's note of terminated session pod containers, so a container the kernel
     killed (OOMKilled) is named, not only counted as not running."""
     described = view.describe_terminations()
-    return f" Containers terminated: {described}." if described else ""
+    return f". Containers terminated: {described}." if described else ""
 
 
 def _status_identity_fields(spec: dict, meta: dict) -> dict:

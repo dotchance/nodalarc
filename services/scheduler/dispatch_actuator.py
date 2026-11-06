@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -38,6 +39,7 @@ from scheduler.actuation import (
     classify_agent_exception,
     classify_agent_response,
 )
+from scheduler.contact_drain import remaining_ends
 from scheduler.desired_state import ActiveLinkInfo, StageLoss
 from scheduler.dispatch_planner import gs_id_for_pair
 from scheduler.latency_compensator import LatencyCompensation, egress_ms
@@ -450,6 +452,72 @@ async def _send_kernel_inventory_to_agent(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class GroundInventoryRequests:
+    """The KernelInventory requests that prove one station's passes, by agent: station-scoped
+    requests (``gs_id`` set) for local passes, requests naming no station for long-delay ends."""
+
+    requests: tuple[tuple[str, str, tuple[node_agent_pb2.KernelInventoryEntry, ...]], ...]
+    pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]]
+
+
+def ground_inventory_requests(
+    *,
+    gs_id: str,
+    expected_up: Mapping[LinkPair, ActiveLinkInfo],
+    expected_down: Mapping[LinkPair, ActiveLinkInfo],
+    locator: Any,
+    gs_capacities: Mapping[str, int],
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
+) -> GroundInventoryRequests:
+    """The proof of each of a station's passes. A local pass is proven against the local ground
+    layout (a delay queue on each pod interface). A long-delay pass that is up is proven by the
+    long-delay inventory (``long_delay_inventory_entries``): its ends still carrying the contact
+    hold it on their host-side veths, admission open or stopped, the transmit shaper and the
+    received direction's delay queue. Rejected alternative: the local proof for every pass, which
+    finds no pod-interface queue on a long-delay pass and marks its station dirty."""
+    local_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
+    long_delay_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
+    pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
+    for expected_admin_up, pairs in ((True, expected_up), (False, expected_down)):
+        for pair, info in pairs.items():
+            if _gs_id_for_pair(pair, gs_capacities, info.link_type) != gs_id:
+                continue
+            if expected_admin_up and info.contact is not None:
+                agent_entries, ack_keys = long_delay_inventory_entries(
+                    pair=pair,
+                    info=info,
+                    node_ids=remaining_ends(pair, info),
+                    locator=locator,
+                    interface_rates=interface_rates,
+                    gs_capacities=gs_capacities,
+                )
+                by_agent = long_delay_by_agent
+            else:
+                agent_entries, ack_keys = _ground_inventory_entries_for_pair(
+                    pair=pair,
+                    info=info,
+                    expected_admin_up=expected_admin_up,
+                    locator=locator,
+                    gs_capacities=gs_capacities,
+                    interface_rates=interface_rates,
+                )
+                by_agent = local_by_agent
+            pair_agent_ifaces.setdefault(pair, set()).update(ack_keys)
+            for agent, entries in agent_entries.items():
+                by_agent.setdefault(agent, []).extend(entries)
+    # A station-scoped request proves local passes; a request naming no station proves
+    # long-delay ends, as the long-delay audit sends it.
+    requests = [
+        (agent_addr, gs_id, tuple(entries))
+        for agent_addr, entries in sorted(local_by_agent.items())
+    ] + [
+        (agent_addr, "", tuple(entries))
+        for agent_addr, entries in sorted(long_delay_by_agent.items())
+    ]
+    return GroundInventoryRequests(requests=tuple(requests), pair_agent_ifaces=pair_agent_ifaces)
+
+
 async def verify_ground_kernel_inventory(
     *,
     gs_id: str,
@@ -465,47 +533,37 @@ async def verify_ground_kernel_inventory(
     wiring_generation: str,
     writer_epoch: int,
 ) -> ActuationResult:
-    """Read-only GS-facing kernel proof for the Scheduler actuation lifecycle."""
+    """Read-only GS-facing kernel proof for the Scheduler actuation lifecycle: the station's
+    periodic clean-state audit and the re-check of a station that is not clean. Each pass gets
+    the proof of its class (``ground_inventory_requests``)."""
     del sim_time  # carried by the public signature for call-site symmetry and future audit fields
-    entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
-    pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
-    pair_link_type: dict[LinkPair, str] = {}
-    pair_gs_id: dict[LinkPair, str | None] = {}
-
-    for expected_admin_up, pairs in ((True, expected_up), (False, expected_down)):
-        for pair, info in pairs.items():
-            if _gs_id_for_pair(pair, gs_capacities, info.link_type) != gs_id:
-                continue
-            pair_link_type[pair] = "ground"
-            pair_gs_id[pair] = gs_id
-            agent_entries, ack_keys = _ground_inventory_entries_for_pair(
-                pair=pair,
-                info=info,
-                expected_admin_up=expected_admin_up,
-                locator=locator,
-                gs_capacities=gs_capacities,
-                interface_rates=interface_rates,
-            )
-            pair_agent_ifaces.setdefault(pair, set()).update(ack_keys)
-            for agent, entries in agent_entries.items():
-                entries_by_agent.setdefault(agent, []).extend(entries)
-
+    planned = ground_inventory_requests(
+        gs_id=gs_id,
+        expected_up=expected_up,
+        expected_down=expected_down,
+        locator=locator,
+        gs_capacities=gs_capacities,
+        interface_rates=interface_rates,
+    )
+    pair_agent_ifaces = planned.pair_agent_ifaces
+    pair_link_type = dict.fromkeys(pair_agent_ifaces, "ground")
+    pair_gs_id: dict[LinkPair, str | None] = dict.fromkeys(pair_agent_ifaces, gs_id)
     agent_results: list[AgentCommandResult] = []
-    if entries_by_agent:
+    if planned.requests:
         agent_results = list(
             await asyncio.gather(
                 *[
                     _send_kernel_inventory_to_agent(
                         addr=agent_addr,
-                        entries=entries_by_agent[agent_addr],
+                        entries=list(entries),
                         pool=pool,
                         sim_iso=sim_iso,
                         session_id=session_id,
                         wiring_generation=wiring_generation,
                         writer_epoch=writer_epoch,
-                        gs_id=gs_id,
+                        gs_id=request_gs_id,
                     )
-                    for agent_addr in entries_by_agent
+                    for agent_addr, request_gs_id, entries in planned.requests
                 ]
             )
         )

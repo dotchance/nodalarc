@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 from typing import NamedTuple
 
+from nodalarc.substrate.queue_sizing import mbps_to_bytes_per_second, shaper_burst_bytes
 from pyroute2.netlink.rtnl.tcmsg import common as tc_common
 
 
@@ -21,17 +22,6 @@ def delay_ms_to_netem_ns(delay_ms: float) -> int:
     if not delay_ms >= 0:
         raise ValueError(f"netem delay must be non-negative, got {delay_ms}")
     return int(math.floor(delay_ms * 1_000_000.0 + 0.5))
-
-
-def mbps_to_bytes_per_second(rate_mbps: float) -> int:
-    """Convert a terminal rate in megabits per second to tc's bytes per second.
-
-    tc rate fields count bytes per second; a rate in bits per second would
-    shape the link eight times faster than the terminal it emulates.
-    """
-    if not rate_mbps > 0:
-        raise ValueError(f"shaping rate must be positive, got {rate_mbps}")
-    return int(math.floor(rate_mbps * 1_000_000 / 8 + 0.5))
 
 
 # The shaper has one class, so its quantum only has to cover one jumbo frame.
@@ -49,10 +39,10 @@ class HtbClass(NamedTuple):
 
 
 def htb_class(rate_mbps: float, mtu_bytes: int) -> HtbClass:
-    """The shaper class for a link at ``rate_mbps``: ceiling at the rate, and a
-    burst of 4 ms at line rate that always holds one full frame of ``mtu_bytes``."""
+    """The shaper class for a link at ``rate_mbps``: ceiling at the rate, and the shared burst
+    (``queue_sizing.shaper_burst_bytes``), which the memory estimate counts too."""
     rate = mbps_to_bytes_per_second(rate_mbps)
-    burst = max(mtu_bytes, rate // 250)
+    burst = shaper_burst_bytes(rate_mbps, mtu_bytes)
     return HtbClass(rate=rate, ceil=rate, burst=burst, cburst=burst, quantum=SHAPER_QUANTUM_BYTES)
 
 

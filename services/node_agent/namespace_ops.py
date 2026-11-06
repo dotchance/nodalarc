@@ -251,9 +251,7 @@ def apply_transmit_shaping(pid: int, ifname: str, delay_ms: float, transmit_mbps
     delay-only changes use update_delay().
     """
     delay_ns = delay_ms_to_netem_ns(delay_ms)
-    limit = queue_limit_packets(
-        long_delay=False, transmit_mbps=transmit_mbps, delay_ms=delay_ms, envelope=None
-    )
+    limit = queue_limit_packets(transmit_mbps=transmit_mbps, delay_ms=delay_ms)
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=ifname)
@@ -309,9 +307,7 @@ def update_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -
     omits it to the kernel default of 1000 packets.
     """
     delay_ns = delay_ms_to_netem_ns(delay_ms)
-    limit = queue_limit_packets(
-        long_delay=False, transmit_mbps=transmit_mbps, delay_ms=delay_ms, envelope=None
-    )
+    limit = queue_limit_packets(transmit_mbps=transmit_mbps, delay_ms=delay_ms)
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=ifname)

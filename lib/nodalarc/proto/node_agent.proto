@@ -205,8 +205,9 @@ message InterfaceUp {
   string peer_interface_name = 16;
   // Rates of the terminal behind (node_id, interface_name).
   TerminalRates rates = 17;
-  // Rates of the terminal behind (peer_node_id, peer_interface_name); set
-  // only on LOCAL ground entries, where one entry wires both ends.
+  // Rates of the terminal behind (peer_node_id, peer_interface_name): on LOCAL
+  // ground entries, where one entry wires both ends, and on long-delay ends,
+  // whose receive-side queue is sized from the peer's transmit rate.
   TerminalRates peer_rates = 18;
   // LOCAL ground entries describe both ends: the peer end's egress delay (the direction the
   // peer transmits). Unused on entries that name one end.
@@ -255,6 +256,9 @@ message LatencyEntry {
   // the direction this end receives.
   string contact_id = 12;
   double receive_latency_ms = 13;
+  // Long-delay ends: the rates of the peer terminal, whose transmit rate sizes this end's
+  // receive-side queue together with receive_latency_ms. Unset on every other entry.
+  TerminalRates peer_rates = 14;
 }
 
 message SetLatencyRequest {

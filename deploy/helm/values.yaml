@@ -81,16 +81,11 @@ network:
   # Seconds of one-way delay that separate local links from long-delay links.
   # A link whose delay can exceed it is a long-delay link.
   longDelayBoundSeconds: 10.0
-  # The traffic NodalArc carries on each direction of a long-delay link; it
-  # sets the packet limit of the long-delay delay queues and changes no
-  # terminal rate. The defaults are sized for small installations.
-  longDelayEnvelope:
-    sustainedMbps: 0.1
-    packetBytes: 1472
-    burstPackets: 250
-  # The long-delay queue capacity estimate: the memory counted per queued
-  # buffer (buffers up to 64 KiB on servers with 4 KiB pages; node
-  # qualification refuses a server that needs more), and the share of each
+  # The long-delay queue capacity estimate. Each long-delay receive queue is
+  # counted from its peer terminal's configured transmit rate and the link's
+  # longest delay. bytesPerBuffer is the memory counted per buffer of each
+  # transmit leaf (buffers up to 64 KiB on servers with 4 KiB pages; node
+  # qualification refuses a server that needs more). serverShare is the share of each
   # server's allocatable memory a session's long-delay queues may hold there by
   # that estimate. Local link queues are not counted. A session over it is
   # refused, naming the server and its long-delay link ends. Allocatable memory is what

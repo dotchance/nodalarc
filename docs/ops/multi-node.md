@@ -131,31 +131,33 @@ Platform services (OME, Scheduler, NATS, etc.) only run once regardless of clust
 
 ### Long-delay queue capacity estimate
 
-A long-delay link is one whose one-way delay can exceed `network.longDelayBoundSeconds` (10 s by default), such as an Earth-Mars trunk. Its packets in flight wait in kernel queues on the servers of its two ends: each end has a receive queue that delays what the end receives, and a transmit queue behind its rate shaper. NodalArc sizes these queues from a traffic envelope. It refuses a session whose long-delay queues would need more than a share of a server's memory, once before it creates the session's pods and again before it wires them, where the pods actually run.
+A long-delay link is one whose one-way delay can exceed `network.longDelayBoundSeconds` (10 s by default), such as an Earth-Mars trunk. Its packets in flight wait in kernel queues on the servers of its two ends: each end has a receive queue that delays what its peer sends, and a transmit queue before its rate shaper. NodalArc sizes every delay queue, local or long-delay, from the session's terminals: the transmitting terminal's configured transmit rate times the delay, at 1,500-byte frames, plus 1,000 packets. A terminal changed to a different rate in its catalog file changes its queues. Traffic above a queue's limit is dropped and reported as substrate loss.
 
-The check is an estimate and it counts long-delay queues only. It does not count local link queues (every link whose delay stays under the bound), the memory of session pods and platform services, or anything else the server runs. It cannot guarantee that a server never runs out of memory.
+NodalArc refuses a session whose long-delay queues would need more than a share of a server's memory, once before it creates the session's pods and again before it wires them, where the pods actually run. The refusal names the server, its budget, and each long-delay end with its peer, the peer's terminal and configured rate, the longest delay, and the bytes in flight and counted.
+
+The check is an estimate and it counts long-delay queues only. It does not count local link queues (every link whose delay stays under the bound), the memory of session pods and platform services, or anything else the server runs. It cannot guarantee that a server never runs out of memory. Queued packets belong to no pod's memory limit, so raising a workload's memory limit does not make room for them.
 
 | Chart value | Default | Meaning |
 |-------------|---------|---------|
-| `network.longDelayEnvelope.sustainedMbps` | 0.1 | Sustained load per direction the receive queues hold |
-| `network.longDelayEnvelope.packetBytes` | 1472 | Packet size the sustained load is counted in |
-| `network.longDelayEnvelope.burstPackets` | 250 | Packets above the sustained load each receive queue holds |
-| `network.queueMemory.bytesPerBuffer` | 73728 | Memory counted per queued buffer |
+| `network.queueMemory.bytesPerBuffer` | 73728 | Memory counted per buffer of each transmit queue |
 | `network.queueMemory.serverShare` | 0.1 | Share of each server's allocatable memory the long-delay queues may hold |
 
-The envelope sets queue limits only. Terminal rates in the session do not change. Traffic above the envelope is dropped at the queue limit and reported as substrate loss.
+Each long-delay end counts:
 
-Each long-delay end counts `sustainedMbps` x 1,000,000 / 8 / `packetBytes` x its longest delay in seconds, plus `burstPackets`, plus 1,000 buffers for its transmit queue. Each buffer counts `bytesPerBuffer`. The default of 73,728 bytes covers buffers up to 64 KiB (the kernel's default GSO and GRO limit) on servers with 4 KiB pages. Node qualification marks a server's Node Agent not ready when its page size or its node interface's GSO or GRO limit needs more, and names the value it needs: 82,944 bytes for 16 KiB pages, 132,096 bytes for 64 KiB pages. The IPv4 BIG TCP limits (`gso_ipv4_max_size`, `gro_ipv4_max_size`) are not checked; the estimate assumes them at their default of 65,536. When the Node Agent starts, it also checks that the kernel counts the packets a long-delay stop discards. A Node Agent that fails this check does not start and logs `STARTUP_PURGE_COUNT_INEXACT`.
+- its receive queue: the peer terminal's transmit rate times the link's longest delay (the largest one-way delay the link can have over the session's ephemeris data), plus the rate shaper's burst (4 ms at the rate, at least one 8,800-byte frame), plus 1,000 frames of 8,800 bytes, all times 2.5. The factor covers the kernel's accounting for a queued frame, measured at 1.52 times a 1,514-byte frame and 1.89 times an 8,814-byte frame, with headroom.
+- its transmit queue: 1,000 buffers of `bytesPerBuffer`. The rate does not bound this queue, and buffers up to 64 KiB (the kernel's default GSO and GRO limit) can enter it. The default of 73,728 bytes covers them on servers with 4 KiB pages. Node qualification marks a server's Node Agent not ready when its page size or its node interface's GSO or GRO limit needs more, and names the value it needs: 82,944 bytes for 16 KiB pages, 132,096 bytes for 64 KiB pages. The IPv4 BIG TCP limits (`gso_ipv4_max_size`, `gro_ipv4_max_size`) are not checked; the estimate assumes them at their default of 65,536.
+
+When the Node Agent starts, it also checks that the kernel counts the packets a long-delay stop discards. A Node Agent that fails this check does not start and logs `STARTUP_PURGE_COUNT_INEXACT`.
 
 The shipped Mars sessions at the defaults:
 
 | Session | Estimate | Allocatable memory needed at the default share |
 |---------|----------|-----------------------------------------------|
-| `earth-mars-hdtn-relay` | 1.73 GiB | about 17.3 GiB on the server that holds both trunk ends |
-| `earth-luna-mars-dtn` | 1.73 GiB | about 17.3 GiB on the server that holds both trunk ends |
+| `earth-mars-hdtn-relay` | 0.96 GiB | about 9.6 GiB on the server that holds both trunk ends |
+| `earth-luna-mars-dtn` | 0.96 GiB | about 9.6 GiB on the server that holds both trunk ends |
 | `mars-ion-relay-network` | none (no long-delay links) | none |
 
-Each trunk end counts 12,589 buffers. With the default `planePerNode` placement both trunk ends run on one server. A server with 16 GB of memory offers less than 17.3 GiB, and the session is refused there with a message that names the server, the estimate, the budget and the long-delay ends. To run the session on such a server, lower `network.longDelayEnvelope.sustainedMbps` or `burstPackets` at install, or raise `network.queueMemory.serverShare` when the server has memory to spare.
+The shipped trunk terminal (`optical-mars-trunk`) transmits 1 Mbit/s, NASA's Mars Telecommunications Network requirement for the return link at the largest Earth-Mars range. Each trunk end counts 159 MiB in flight at the longest delay (1,335 s) and 489 MiB in all. With the default `planePerNode` placement both trunk ends run on one server. A session refused on a server can run there with terminals of lower rates in its catalog files, or with a higher `network.queueMemory.serverShare` when the server has memory to spare.
 
 A TCP sender over a long-delay link keeps its unacknowledged data for two light times (about 45 minutes between Earth and Mars at their farthest). That data counts against the sending pod's memory limit, which its workload profile sets, not against this estimate. When the kernel kills a container for exceeding its limit, the container stays stopped (session pods do not restart containers), and the session's status message names it, for example `earth-relay-geo/hdtn OOMKilled (exit 137)`.
 

@@ -342,6 +342,8 @@ def build_link_up_batch_plan(
                         stage=stage,
                         contact_id=info.contact.contact_id,
                         receive_latency_ms=egress_ms(pair, peer_nid, netem),
+                        # The peer's transmit rate sizes this end's receive queue.
+                        peer_rates=terminal_rates_message(interface_rates, peer_nid, peer_iface),
                     )
                     agent_ifaces.setdefault(agent, []).append(iface_msg)
                     pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))
@@ -422,6 +424,10 @@ def build_link_up_batch_plan(
                 # peer transmits.
                 iface_msg.contact_id = info.contact.contact_id
                 iface_msg.receive_latency_ms = egress_ms(pair, peer_nid, netem)
+                # The peer's transmit rate sizes that queue.
+                iface_msg.peer_rates.CopyFrom(
+                    terminal_rates_message(interface_rates, peer_nid, peer_ifname)
+                )
             agent_ifaces.setdefault(agent, []).append(iface_msg)
             pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))
 

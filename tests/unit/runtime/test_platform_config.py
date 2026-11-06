@@ -28,9 +28,6 @@ def _valid_config_dict() -> dict:
         "veth_interface_mtu_bytes": 9000,
         "vxlan_udp_port": 14789,
         "long_delay_bound_s": 10.0,
-        "long_delay_envelope_sustained_mbps": 0.1,
-        "long_delay_envelope_packet_bytes": 1472,
-        "long_delay_envelope_burst_packets": 250,
         "queue_memory_bytes_per_buffer": 73728,
         "queue_memory_server_share": 0.1,
         "node_agent_loads_kernel_modules": False,
@@ -96,10 +93,6 @@ class TestPlatformConfig:
         assert platform["veth_interface_mtu_bytes"] == values["network"]["linkMtu"]
         assert platform["vxlan_udp_port"] == values["network"]["vxlanPort"]
         assert platform["long_delay_bound_s"] == values["network"]["longDelayBoundSeconds"]
-        envelope = values["network"]["longDelayEnvelope"]
-        assert platform["long_delay_envelope_sustained_mbps"] == envelope["sustainedMbps"]
-        assert platform["long_delay_envelope_packet_bytes"] == envelope["packetBytes"]
-        assert platform["long_delay_envelope_burst_packets"] == envelope["burstPackets"]
         memory = values["network"]["queueMemory"]
         assert platform["queue_memory_bytes_per_buffer"] == memory["bytesPerBuffer"]
         assert platform["queue_memory_server_share"] == memory["serverShare"]

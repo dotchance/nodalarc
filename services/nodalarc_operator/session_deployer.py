@@ -253,7 +253,7 @@ def check_long_delay_queue_capacity(
     demand = long_delay_queue_demand(
         resolved_session,
         placement,
-        envelope=config.long_delay_envelope,
+        mtu_bytes=config.veth_interface_mtu_bytes,
         bytes_per_buffer=config.queue_memory_bytes_per_buffer,
     )
     if not demand:
@@ -262,7 +262,6 @@ def check_long_delay_queue_capacity(
         demand,
         allocatable_bytes=_server_allocatable_memory(v1, set(demand)),
         share=config.queue_memory_server_share,
-        bytes_per_buffer=config.queue_memory_bytes_per_buffer,
     )
     for server, server_demand in demand.items():
         log.info(

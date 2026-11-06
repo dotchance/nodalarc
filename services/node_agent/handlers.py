@@ -25,7 +25,6 @@ import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 
-from nodalarc.platform_config import get_platform_config
 from nodalarc.proto import node_agent_pb2
 from nodalarc.runtime_naming import link_interface_mac, vxlan_host_ifnames
 from nodalarc.substrate.queue_sizing import queue_limit_packets
@@ -997,7 +996,7 @@ def _update_long_delay_receive(entry: node_agent_pb2.LatencyEntry, pid: int) -> 
                 f"host_ifname={host_ifname}",
             )
         )
-    limit = _long_delay_limit(entry.receive_latency_ms, entry.rates.receive_mbps)
+    limit = _receive_limit(entry)
     plan = OperationPlan(
         operation_id=f"SetLatency:{entry.node_id}:{entry.interface_name}",
         operation_kind="SetLatency",
@@ -1331,12 +1330,13 @@ def _local_queue_sample(
     )
 
 
-def _long_delay_limit(delay_ms: float, transmit_mbps: float) -> int:
+def _receive_limit(entry) -> int:
+    """The packet limit of a long-delay end's receive queue. The queue delays what the peer
+    sends, so it is sized from the peer terminal's configured transmit rate (``peer_rates``) and
+    the delay of the direction this end receives. Rejected alternative: this end's own receive
+    rate, which sizes the queue for the wrong terminal when the two ends' rates differ."""
     return queue_limit_packets(
-        long_delay=True,
-        transmit_mbps=transmit_mbps,
-        delay_ms=delay_ms,
-        envelope=get_platform_config().long_delay_envelope,
+        transmit_mbps=entry.peer_rates.transmit_mbps, delay_ms=entry.receive_latency_ms
     )
 
 
@@ -1345,7 +1345,8 @@ def _prepare_long_delay_contact(
 ) -> tuple[list[kernel_verifier.Proof], node_agent_pb2.LinkEndLoss | None]:
     """PREPARE a contact on a long-delay end, with its admission stopped first: the transmitting
     pod interface's rate shaper and explicit leaf, the received direction's delay queue on the
-    host-side veth (sized from the traffic envelope), and the contact recorded on that veth.
+    host-side veth (sized from the peer terminal's transmit rate, ``_receive_limit``), and the
+    contact recorded on that veth.
     Nothing crosses the link until OPEN. Returns the proofs, and on a reopen what the contact
     that ended lost at this end.
 
@@ -1363,7 +1364,7 @@ def _prepare_long_delay_contact(
         raise ValueError(
             f"long-delay LinkUp of {iface.node_id}/{iface.interface_name} has no received delay"
         )
-    limit = _long_delay_limit(iface.receive_latency_ms, iface.rates.receive_mbps)
+    limit = _receive_limit(iface)
     admission.stop_admission(pid, iface.interface_name)
     taken = admission.read_admission(pid, iface.interface_name).taken
     if taken is None:
@@ -1430,7 +1431,7 @@ def _open_prepared_contact(
             f"{tag.contact_id if tag else 'no contact'}, not prepared contact {iface.contact_id}",
             dirty_kernel=True,
         )
-    limit = _long_delay_limit(iface.receive_latency_ms, iface.rates.receive_mbps)
+    limit = _receive_limit(iface)
     prepared = [
         kernel_verifier.verify_long_delay_transmit(
             pid, iface.interface_name, transmit_mbps=iface.rates.transmit_mbps
@@ -2028,7 +2029,7 @@ def _verify_long_delay_inventory_entry(
                     f"contact={carried}",
                 )
             )
-        limit = _long_delay_limit(entry.receive_latency_ms, entry.rates.receive_mbps)
+        limit = _receive_limit(entry)
         return _combine_proofs(
             "long-delay end verified",
             [

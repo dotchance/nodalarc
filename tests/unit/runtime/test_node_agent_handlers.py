@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import pytest
 from nodalarc.proto import node_agent_pb2
+from nodalarc.substrate.queue_sizing import queue_limit_packets
 from node_agent.command_contract import RuntimeFence, WriterEpochFloor
 from node_agent.handlers import (
     _local_ground_delays,
+    _receive_limit,
     handle_batch_link_down,
     handle_batch_link_up,
     handle_set_latency,
@@ -302,3 +304,23 @@ class TestLinkDownStages:
         assert result.error_code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
         assert "names no contact" in result.error_message
         assert resp.interfaces_downed == 0 and resp.admissions_stopped == 0
+
+
+@pytest.mark.parametrize(
+    "entry_type",
+    [node_agent_pb2.InterfaceUp, node_agent_pb2.LatencyEntry, node_agent_pb2.KernelInventoryEntry],
+)
+def test_a_long_delay_receive_queue_is_sized_from_the_peers_transmit_rate(entry_type) -> None:
+    """The receive queue of a long-delay end delays what the peer sends: a LinkUp, a delay update
+    and an inventory proof all size it from the peer terminal's transmit rate (2 Mbit/s here),
+    never from this end's own receive rate (15 Mbit/s)."""
+    entry = entry_type(
+        node_id="earth-relay-geo",
+        interface_name="isl0",
+        contact_id="1@2027-07-19T10:50:00.000000Z",
+        receive_latency_ms=846_212.0,
+        rates=node_agent_pb2.TerminalRates(transmit_mbps=15.0, receive_mbps=15.0),
+        peer_rates=node_agent_pb2.TerminalRates(transmit_mbps=2.0, receive_mbps=15.0),
+    )
+    assert _receive_limit(entry) == queue_limit_packets(transmit_mbps=2.0, delay_ms=846_212.0)
+    assert _receive_limit(entry) != queue_limit_packets(transmit_mbps=15.0, delay_ms=846_212.0)

@@ -465,13 +465,19 @@ def test_a_long_delay_ground_pass_stages_each_end_with_its_own_contact():
         range_km=1.0e8,
         contact=Contact(epoch_id=1, opened_at=datetime(2027, 2, 19, tzinfo=UTC)),
     )
+    # A deep-space station transmits 0.1 Mbit/s up and receives 6 Mbit/s; the orbiter transmits
+    # 2 Mbit/s down and receives 0.256 Mbit/s. Each end's receive queue holds what its peer sends.
+    rates = {
+        ("dss-43", "term0"): InterfaceRates(transmit_mbps=0.1, receive_mbps=6.0),
+        ("mars-orbiter", "gnd2"): InterfaceRates(transmit_mbps=2.0, receive_mbps=0.256),
+    }
     plan = build_link_up_batch_plan(
         pairs={pair},
         desired={pair: info},
         locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
         gs_capacities={"dss-43": 1},
         compensation_for_pair=_compensation,
-        interface_rates=ANY_INTERFACE_RATES,
+        interface_rates=rates,
         stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
     )
     entries = {e.node_id: e for batch in plan.agent_ifaces.values() for e in batch}
@@ -479,7 +485,10 @@ def test_a_long_delay_ground_pass_stages_each_end_with_its_own_contact():
     station, orbiter = entries["dss-43"], entries["mars-orbiter"]
     assert (station.interface_name, station.peer_interface_name) == ("term0", "gnd2")
     assert station.contact_id == orbiter.contact_id == info.contact.contact_id
-    assert not station.HasField("peer_rates") and not orbiter.HasField("peer_rates")
+    assert (station.rates.transmit_mbps, station.rates.receive_mbps) == (0.1, 6.0)
+    assert (station.peer_rates.transmit_mbps, station.peer_rates.receive_mbps) == (2.0, 0.256)
+    assert (orbiter.rates.transmit_mbps, orbiter.rates.receive_mbps) == (2.0, 0.256)
+    assert (orbiter.peer_rates.transmit_mbps, orbiter.peer_rates.receive_mbps) == (0.1, 6.0)
     # The station receives what the orbiter transmits, less the 1 ms substrate share.
     assert station.receive_latency_ms == pytest.approx(338_350.0 - 1.0)
     assert orbiter.receive_latency_ms == pytest.approx(338_346.0 - 1.0)

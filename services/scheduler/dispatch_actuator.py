@@ -844,6 +844,8 @@ def long_delay_inventory_entries(
             expected_admission_stopped=info.drain is not None,
         )
         entry.rates.CopyFrom(terminal_rates_message(interface_rates, nid, ifname))
+        # The peer's transmit rate sizes the receive queue the proof checks.
+        entry.peer_rates.CopyFrom(terminal_rates_message(interface_rates, peer_nid, peer_ifname))
         entries_by_agent.setdefault(agent, []).append(entry)
         ack_keys.add((agent, nid, ifname))
     return entries_by_agent, ack_keys
@@ -1340,13 +1342,18 @@ async def send_authoritative_latency_updates(
                     # A long-delay ground end's delay queue holds the direction its peer
                     # transmits, as on a long-delay fixed link.
                     peer_id = sat_id if endpoint_id == gs_id else gs_id
+                    peer_iface = sat_iface if endpoint_id == gs_id else gs_iface
                     entry.contact_id = info.contact.contact_id
                     entry.receive_latency_ms = egress_ms(pair, peer_id, netem)
+                    # The peer's transmit rate sizes that queue.
+                    entry.peer_rates.CopyFrom(
+                        terminal_rates_message(interface_rates, peer_id, peer_iface)
+                    )
                 _add_entry(pair, agent, entry)
         else:
-            for nid, ifname, peer_nid in [
-                (node_a, info.interface_a, node_b),
-                (node_b, info.interface_b, node_a),
+            for nid, ifname, peer_nid, peer_ifname in [
+                (node_a, info.interface_a, node_b, info.interface_b),
+                (node_b, info.interface_b, node_a, info.interface_a),
             ]:
                 entry = node_agent_pb2.LatencyEntry(
                     node_id=nid,
@@ -1356,9 +1363,13 @@ async def send_authoritative_latency_updates(
                     link_type=node_agent_pb2.LINK_TYPE_ISL,
                 )
                 if info.contact is not None:
-                    # A long-delay end's delay queue holds the direction its peer transmits.
+                    # A long-delay end's delay queue holds the direction its peer transmits,
+                    # and the peer's transmit rate sizes it.
                     entry.contact_id = info.contact.contact_id
                     entry.receive_latency_ms = egress_ms(pair, peer_nid, netem)
+                    entry.peer_rates.CopyFrom(
+                        terminal_rates_message(interface_rates, peer_nid, peer_ifname)
+                    )
                 _add_entry(pair, locator.agent_addr(nid), entry)
 
     agent_results: list[AgentCommandResult] = []

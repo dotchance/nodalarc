@@ -12544,13 +12544,13 @@
               "medium": "optical",
               "min_elevation_deg": -90.0,
               "owner_node_id": "mars-relays-mto",
-              "receive_mbps": 15.0,
+              "receive_mbps": 1.0,
               "source_ref": "nodalarc:terminals/optical/optical-mars-trunk.yaml",
               "source_terminal_id": "optical-mars-trunk",
               "terminal_id": "trunk",
               "tracking_capacity": 1,
               "tracking_rate_deg_s": 0.25,
-              "transmit_mbps": 15.0
+              "transmit_mbps": 1.0
             }
           ]
         },
@@ -13004,13 +13004,13 @@
               "medium": "optical",
               "min_elevation_deg": -90.0,
               "owner_node_id": "deep-space-relay-geo",
-              "receive_mbps": 15.0,
+              "receive_mbps": 1.0,
               "source_ref": "nodalarc:terminals/optical/optical-mars-trunk.yaml",
               "source_terminal_id": "optical-mars-trunk",
               "terminal_id": "trunk",
               "tracking_capacity": 1,
               "tracking_rate_deg_s": 0.25,
-              "transmit_mbps": 15.0
+              "transmit_mbps": 1.0
             }
           ]
         },

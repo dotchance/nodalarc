@@ -126,26 +126,62 @@ def test_local_ground_link_up_requires_the_peer_terminal_rates() -> None:
         validate_batch_link_up_request(_link_up(entry), fence=_FENCE)
 
 
-def test_one_end_of_a_long_delay_ground_pass_stages_on_its_own_on_one_server() -> None:
-    """An entry that names a contact is one end of a long-delay pass: it carries its own rates
-    and no peer's, even when both ends are on one server; a local pass's entry still wires both
-    ends and needs the peer's."""
+def test_one_end_of_a_long_delay_ground_pass_carries_its_peers_rates() -> None:
+    """An entry that names a contact is one end of a long-delay pass, even when both ends are on
+    one server: the peer's transmit rate sizes its receive queue, so it carries the peer's rates,
+    and an entry without them is refused."""
     end = _local_ground_up(
         contact_id="0@2027-02-19T00:00:00.000000Z",
         receive_latency_ms=338_346.0,
         latency_ms=0.0,
         stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
     )
-    end.ClearField("peer_rates")
+    end.peer_rates.CopyFrom(_rates(2.0, 0.256))
     validate_batch_link_up_request(_link_up(end), fence=_FENCE)
 
-    end.peer_rates.CopyFrom(_rates(50.0, 600.0))
-    with pytest.raises(CommandContractError, match="only to LOCAL ground"):
+    end.ClearField("peer_rates")
+    with pytest.raises(CommandContractError, match="requires peer_rates"):
         validate_batch_link_up_request(_link_up(end), fence=_FENCE)
 
 
+def test_a_long_delay_delay_update_carries_its_peers_rates() -> None:
+    entry = node_agent_pb2.LatencyEntry(
+        node_id="earth-relay-geo",
+        interface_name="isl0",
+        latency_ms=846_096.0,
+        link_type=node_agent_pb2.LINK_TYPE_ISL,
+        rates=_rates(15.0, 15.0),
+        contact_id="1@2027-07-19T10:50:00.000000Z",
+        receive_latency_ms=846_212.0,
+    )
+    request = node_agent_pb2.SetLatencyRequest(envelope=_envelope("SetLatency"), entries=[entry])
+    with pytest.raises(CommandContractError, match="requires peer_rates"):
+        validate_set_latency_request(request, fence=_FENCE)
+    entry.peer_rates.CopyFrom(_rates(2.0, 15.0))
+    request = node_agent_pb2.SetLatencyRequest(envelope=_envelope("SetLatency"), entries=[entry])
+    validate_set_latency_request(request, fence=_FENCE)
+
+    local = node_agent_pb2.SetLatencyRequest(
+        envelope=_envelope("SetLatency"),
+        entries=[
+            node_agent_pb2.LatencyEntry(
+                node_id="leo-sat-p00s01",
+                interface_name="isl0",
+                latency_ms=4.0,
+                link_type=node_agent_pb2.LINK_TYPE_ISL,
+                rates=_rates(15.0, 15.0),
+                peer_rates=_rates(15.0, 15.0),
+            )
+        ],
+    )
+    with pytest.raises(CommandContractError, match="LOCAL ground entries and long-delay ends"):
+        validate_set_latency_request(local, fence=_FENCE)
+
+
 def test_peer_rates_are_refused_outside_local_ground() -> None:
-    with pytest.raises(CommandContractError, match="only to LOCAL ground"):
+    with pytest.raises(
+        CommandContractError, match="only to LOCAL ground entries and long-delay ends"
+    ):
         validate_batch_link_up_request(
             _link_up(_isl_up(peer_rates=_rates(2000.0, 2000.0))), fence=_FENCE
         )

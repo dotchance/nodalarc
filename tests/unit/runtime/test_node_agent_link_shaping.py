@@ -7,8 +7,11 @@ from __future__ import annotations
 import math
 
 import pytest
-from nodalarc.substrate.queue_sizing import TrafficEnvelope, queue_limit_packets
-from node_agent.tc_units import mbps_to_bytes_per_second
+from nodalarc.substrate.queue_sizing import (
+    mbps_to_bytes_per_second,
+    queue_limit_packets,
+    shaper_burst_bytes,
+)
 
 
 @pytest.mark.parametrize(
@@ -46,31 +49,43 @@ def test_unusable_rate_is_refused(bad: float) -> None:
 def test_netem_limit_holds_the_packets_in_flight_plus_the_buffer(
     transmit_mbps: float, delay_ms: float, packets: int
 ) -> None:
-    limit = queue_limit_packets(
-        long_delay=False, transmit_mbps=transmit_mbps, delay_ms=delay_ms, envelope=None
-    )
+    limit = queue_limit_packets(transmit_mbps=transmit_mbps, delay_ms=delay_ms)
     assert limit == packets
 
 
 @pytest.mark.parametrize(
-    ("delay_ms", "packets"),
+    ("transmit_mbps", "delay_ms", "packets"),
     [
-        # 1 Mbit/s at 1,250-byte packets is 100 packets a second: 38,200 in flight over 382 s,
-        # plus the 500-packet burst. The terminal's 15 Mbit/s rate plays no part.
-        (382_000.0, 38_200 + 500),
-        (1_200_000.0, 120_000 + 500),
+        # A long-delay queue follows its terminal's configured rate by the same rule: 256 kbit/s
+        # over 338 s is 10.8 MB in flight (7,211 frames of 1,500 bytes), 100 Mbit/s over the same
+        # delay is 4.2 GB (2,816,667 frames), 2.048 Mbit/s over 1,335.2 s is 341.8 MB.
+        (0.256, 338_000.0, 7_211 + 1000),
+        (100.0, 338_000.0, 2_816_667 + 1000),
+        (2.048, 1_335_200.0, 227_875 + 1000),
     ],
 )
-def test_a_long_delay_queue_holds_the_envelope_for_the_delay_not_the_line_rate(
-    delay_ms: float, packets: int
+def test_a_long_delay_queue_follows_the_terminal_rate_by_the_same_rule(
+    transmit_mbps: float, delay_ms: float, packets: int
 ) -> None:
-    envelope = TrafficEnvelope(sustained_mbps=1.0, packet_bytes=1250, burst_packets=500)
-    limit = queue_limit_packets(
-        long_delay=True, transmit_mbps=15.0, delay_ms=delay_ms, envelope=envelope
-    )
-    assert limit == packets
+    assert queue_limit_packets(transmit_mbps=transmit_mbps, delay_ms=delay_ms) == packets
 
 
-def test_a_long_delay_queue_without_an_envelope_is_refused() -> None:
-    with pytest.raises(ValueError, match="envelope"):
-        queue_limit_packets(long_delay=True, transmit_mbps=15.0, delay_ms=1.0, envelope=None)
+@pytest.mark.parametrize("bad", [0.0, -1.0, math.nan])
+def test_a_queue_without_a_usable_rate_is_refused(bad: float) -> None:
+    with pytest.raises(ValueError, match="transmit rate must be positive"):
+        queue_limit_packets(transmit_mbps=bad, delay_ms=1.0)
+
+
+@pytest.mark.parametrize(
+    ("rate_mbps", "burst"),
+    [
+        # 4 ms at the rate, never less than one 8,800-byte frame.
+        (0.256, 8_800),
+        (15.0, 8_800),
+        (1200.0, 600_000),
+    ],
+)
+def test_the_shaper_burst_is_four_milliseconds_and_at_least_one_frame(
+    rate_mbps: float, burst: int
+) -> None:
+    assert shaper_burst_bytes(rate_mbps, 8_800) == burst

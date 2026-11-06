@@ -362,9 +362,7 @@ def verify_qdisc(pid: int, ifname: str, *, delay_ms: float, transmit_mbps: float
     evidence = [f"pid={pid}", f"ifname={ifname}", *(row["raw"] for row in rows)]
     if not any(row["kind"] == "htb" and row["handle"] == SHAPER_ROOT_HANDLE for row in rows):
         return Proof.fail(f"missing htb shaper on {ifname}", *evidence)
-    limit = queue_limit_packets(
-        long_delay=False, transmit_mbps=transmit_mbps, delay_ms=delay_ms, envelope=None
-    )
+    limit = queue_limit_packets(transmit_mbps=transmit_mbps, delay_ms=delay_ms)
     failed = _prove_delay_queue(
         rows, where=ifname, delay_ms=delay_ms, limit=limit, evidence=evidence
     )

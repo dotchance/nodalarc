@@ -200,22 +200,25 @@ def _wires_both_ground_ends(entry) -> bool:
     )
 
 
-def _validate_terminal_rates(entry, *, operation: str) -> None:
-    """Each wired terminal carries its own positive transmit and receive rates.
-
-    ``rates`` belongs to (node_id, interface_name). A LOCAL ground entry wires
-    both ends in one operation and so also carries the peer terminal's
-    ``peer_rates``; every other entry wires one end and carries none.
-    """
-    local_ground = _wires_both_ground_ends(entry)
-    fields = ("rates", "peer_rates") if local_ground else ("rates",)
-    for field in fields:
-        _validate_rates_field(entry, field, operation=operation)
-    if not local_ground and entry.HasField("peer_rates"):
+def _validate_peer_rates(entry, *, operation: str, wires_both_ends: bool) -> None:
+    """A LOCAL ground entry wires both ends in one operation (``wires_both_ends``). A long-delay
+    end (an entry naming a contact) sizes its receive-side queue from the peer terminal's transmit
+    rate. Both carry the peer terminal's ``peer_rates``; every other entry carries none."""
+    if wires_both_ends or entry.contact_id:
+        _validate_rates_field(entry, "peer_rates", operation=operation)
+    elif entry.HasField("peer_rates"):
         raise CommandContractError(
             node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-            f"{operation} peer_rates apply only to LOCAL ground entries",
+            f"{operation} peer_rates apply only to LOCAL ground entries and long-delay ends",
         )
+
+
+def _validate_terminal_rates(entry, *, operation: str) -> None:
+    """Each wired terminal carries its own positive transmit and receive rates (``rates``, the
+    terminal behind (node_id, interface_name)), and the peer terminal's where the entry needs
+    them (``_validate_peer_rates``)."""
+    _validate_rates_field(entry, "rates", operation=operation)
+    _validate_peer_rates(entry, operation=operation, wires_both_ends=_wires_both_ground_ends(entry))
 
 
 def _validate_peer_latency(entry, *, operation: str) -> None:
@@ -285,6 +288,7 @@ def validate_set_latency_request(request, *, fence: RuntimeFence) -> None:
                 "latency_ms must be >= 0",
             )
         _validate_rates_field(entry, "rates", operation=KIND_SET_LATENCY)
+        _validate_peer_rates(entry, operation=KIND_SET_LATENCY, wires_both_ends=False)
         if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
             _require_nonempty(entry.gs_id, "gs_id")
             _require_nonempty(entry.sat_id, "sat_id")

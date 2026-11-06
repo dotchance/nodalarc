@@ -77,19 +77,10 @@ platform:
   # across it. Chart value network.longDelayBoundSeconds replaces it at install.
   long_delay_bound_s: 10.0
 
-  # The traffic NodalArc carries on each direction of a long-delay link: a
-  # sustained load at a packet size, plus a burst. It sets the packet limit of
-  # every long-delay delay queue (a terminal's line rate over a light-minute
-  # delay would ask for gigabytes of kernel memory per queue); traffic above it
-  # is dropped at the queue's limit and shown as substrate loss. Terminal rates
-  # are not changed by it. The defaults are sized for small installations; an
-  # installation with more memory raises them. Chart values
-  # network.longDelayEnvelope.* replace them at install.
-  long_delay_envelope_sustained_mbps: 0.1
-  long_delay_envelope_packet_bytes: 1472
-  long_delay_envelope_burst_packets: 250
-  # The memory the long-delay queue capacity estimate counts for each queued
-  # buffer. A buffer is at most 64 KiB (the GSO and GRO limit); one of 65,000
+  # The memory the long-delay queue capacity estimate counts for each buffer of
+  # a long-delay end's transmit leaf, the queue before its rate shaper (the
+  # receive queues are counted from the terminals' configured rates and the
+  # link delay). A buffer is at most 64 KiB (the GSO and GRO limit); one of 65,000
   # bytes held 67,299 bytes on kernel 6.8 with 4 KiB pages. 73,728 bytes is
   # 64 KiB, a page of rounding, about 1 KiB of buffer overhead and headroom.
   # Node qualification refuses a server whose page size or GSO/GRO limits need

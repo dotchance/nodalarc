@@ -87,8 +87,11 @@ Each end of a link is shaped from its own terminal. A terminal that transmits
 at 2 Mbit/s and receives at 100 Mbit/s keeps those two rates regardless of the
 terminal at the other end. The `rates` field of each `InterfaceUp` entry
 carries them; a LOCAL ground entry wires both ends and also carries
-`peer_rates`. HTB carries 64-bit byte rates, so terminals above 34 Gbit/s are
-shaped at their declared rate.
+`peer_rates`. A long-delay end's receive queue delays what its peer sends, so
+every long-delay `InterfaceUp`, `LatencyEntry` and `KernelInventoryEntry` also
+carries the peer terminal's `peer_rates`, and the queue's packet limit follows
+the peer's transmit rate times the received delay. HTB carries 64-bit byte
+rates, so terminals above 34 Gbit/s are shaped at their declared rate.
 
 ### BatchLinkUp (CROSS_NODE)
 

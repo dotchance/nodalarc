@@ -20,6 +20,7 @@ import socket
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TypeVar
 
 from nodalarc.platform_config import get_platform_config
@@ -553,6 +554,35 @@ def contact_of(host_ifname: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Wiring-time operations (moved from link_ops.py, rewritten to use setns)
 # ---------------------------------------------------------------------------
+
+
+def host_ipv6_sysctl(ifname: str) -> Path:
+    """The ``disable_ipv6`` sysctl of a device in the namespace of the calling thread."""
+    return Path("/proc/sys/net/ipv6/conf") / ifname / "disable_ipv6"
+
+
+def switch_off_host_ipv6(ifname: str) -> None:
+    """Switch IPv6 off on a link device the Node Agent has just created in the server namespace (a
+    host-side veth end or a link's VXLAN device), before it comes up. The caller's thread is in
+    the server namespace, where it created the device; a write anywhere else finds no such device
+    and fails.
+
+    These devices carry emulated frames only: tc redirects move frames between them below the
+    server's IP stack, so nothing the experiment sends needs IPv6 on them. Left at Linux's
+    default, the server's own IPv6 stack gives each of them a link-local address and multicast
+    groups and sends its own MLD reports and neighbour solicitations out of them into the
+    emulated link, frames no emulated node sent; each write of a long-delay end's contact tag
+    made the server send two MLD reports into that end's receive delay queue. The emulated LAN
+    namespace keeps IPv6 off on every device for the same reason (``emulated_lan``). The pod-side
+    ends keep IPv6. Rejected alternative: switching off only the reports a tag write triggers,
+    which leaves the server's frames at every link's start. A cross-server link over an IPv6
+    underlay still carries IPv4 and IPv6 with IPv6 off on its VXLAN device and host-side end
+    (node02 to node03, 2026-11-07): the tunnel's outer packets leave from the server's own
+    address, not from the device."""
+    path = host_ipv6_sysctl(ifname)
+    path.write_text("1")
+    if path.read_text().strip() != "1":
+        raise RuntimeError(f"IPv6 stayed on for {ifname}")
 
 
 def _write_sysctl_in_netns(

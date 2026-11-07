@@ -52,6 +52,7 @@ from node_agent.namespace_ops import (
     _libc,
     _ns_lock,
     assign_link_mac,
+    switch_off_host_ipv6,
 )
 
 log = logging.getLogger(__name__)
@@ -202,6 +203,8 @@ def create_vxlan_link(
                         kernel_verifier.prove_link_mtu(ipr, names.host_veth, mtu=mtu),
                         kernel_verifier.prove_link_admin_up(ipr, names.tunnel),
                         kernel_verifier.prove_link_admin_up(ipr, names.host_veth),
+                        kernel_verifier.prove_host_ipv6_off(names.tunnel),
+                        kernel_verifier.prove_host_ipv6_off(names.host_veth),
                     )
                     if pod_end.kind != "veth":
                         proofs += (kernel_verifier.Proof.fail(f"pod {ifname} is not veth"),)
@@ -264,6 +267,9 @@ def create_vxlan_link(
                     group=MANAGED_HOST_DEVICE_GROUP,
                     peer={"ifname": ifname, "net_ns_fd": pod_ns_fd, "mtu": mtu},
                 )
+                # The server's own IPv6 stack stays off both devices before they come up.
+                switch_off_host_ipv6(names.tunnel)
+                switch_off_host_ipv6(names.host_veth)
 
                 # 3. Bring VXLAN and veth host-end UP (required for tc mirred)
                 for name in (names.tunnel, names.host_veth):
@@ -396,6 +402,8 @@ def attach_cross_node_ground(
                     # existing ground-LinkUp step and runs on both paths.
                     kernel_verifier.prove_link_admin_up(ipr, names.tunnel),
                     kernel_verifier.prove_link_admin_up(ipr, local_host_ifname),
+                    kernel_verifier.prove_host_ipv6_off(names.tunnel),
+                    kernel_verifier.prove_host_ipv6_off(local_host_ifname),
                 )
             reuse = kernel_verifier.reuse_or_refuse(
                 subject=f"VNI {vni}",
@@ -424,6 +432,7 @@ def attach_cross_node_ground(
                     mtu=mtu,
                     group=MANAGED_HOST_DEVICE_GROUP,
                 )
+                switch_off_host_ipv6(names.tunnel)
 
                 # Bring VXLAN and local host interface UP
                 for name in (names.tunnel, local_host_ifname):

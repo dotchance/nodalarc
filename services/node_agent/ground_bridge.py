@@ -29,7 +29,7 @@ from pyroute2 import IPRoute
 from pyroute2.netlink.rtnl import TC_H_INGRESS
 
 from node_agent import kernel_verifier
-from node_agent.namespace_ops import _in_namespace
+from node_agent.namespace_ops import _in_namespace, switch_off_host_ipv6
 
 log = logging.getLogger(__name__)
 
@@ -538,9 +538,9 @@ def _create_veth_into_pod(
 
     One RTM_NEWLINK: the host end gets ``host_name``, the peer gets
     ``pod_ifname`` inside the network namespace of ``pid``, and both ends get
-    ``mtu``. The host end joins the managed device group. Both ends start
-    admin DOWN. A name already taken on either side
-    fails the request (EEXIST) and creates nothing.
+    ``mtu``. The host end joins the managed device group and has IPv6 switched
+    off (``switch_off_host_ipv6``). Both ends start admin DOWN. A name already
+    taken on either side fails the request (EEXIST) and creates nothing.
     """
     ipr.link(
         "add",
@@ -550,6 +550,7 @@ def _create_veth_into_pod(
         group=MANAGED_HOST_DEVICE_GROUP,
         peer={"ifname": pod_ifname, "net_ns_pid": pid, "mtu": mtu},
     )
+    switch_off_host_ipv6(host_name)
 
 
 def create_mediated_isl(
@@ -616,6 +617,7 @@ def create_mediated_isl(
                             ipr, host_name, peer_ns_fd=pod_ns_fd, peer_ifindex=pod_end.ifindex
                         ),
                         kernel_verifier.prove_link_mtu(ipr, host_name, mtu=mtu),
+                        kernel_verifier.prove_host_ipv6_off(host_name),
                     )
                 if pod_end.kind != "veth":
                     proofs += (kernel_verifier.Proof.fail(f"pod {ifname} is not veth"),)

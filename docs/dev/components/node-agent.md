@@ -93,6 +93,18 @@ carries the peer terminal's `peer_rates`, and the queue's packet limit follows
 the peer's transmit rate times the received delay. HTB carries 64-bit byte
 rates, so terminals above 34 Gbit/s are shaped at their declared rate.
 
+Every link device the Node Agent creates in the server namespace (each
+host-side veth end and each link's VXLAN device) has IPv6 switched off
+(`net.ipv6.conf.<device>.disable_ipv6 = 1`) before it comes up, and the
+host-side proofs check it. These devices carry emulated frames only, moved
+between them by tc redirects below the server's IP stack. With IPv6 on, the
+server's own IPv6 stack sends MLD reports and neighbor solicitations out of
+them into the emulated link, frames no emulated node sent. The pod-side
+interfaces keep IPv6, and a VXLAN tunnel's outer packets leave from the
+server's own address, so a cross-server link works over an IPv4 or an IPv6
+server network. The emulated LAN namespace keeps IPv6 off on its bridges and
+ports for the same reason.
+
 ### BatchLinkUp (CROSS_NODE)
 
 ISL and ground links use different CROSS_NODE paths:

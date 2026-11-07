@@ -24,7 +24,12 @@ from node_agent.kernel_constants import (
     SHAPER_ROOT_HANDLE,
     mpls_input_sysctl,
 )
-from node_agent.namespace_ops import _in_namespace, contact_of, in_host_namespace
+from node_agent.namespace_ops import (
+    _in_namespace,
+    contact_of,
+    host_ipv6_sysctl,
+    in_host_namespace,
+)
 from node_agent.netem_plugin import latency_ns
 from node_agent.tc_dump import interface_qdiscs
 from node_agent.tc_units import (
@@ -191,13 +196,29 @@ def verify_mpls_input(pid: int, ifname: str) -> Proof:
     )
 
 
+def prove_host_ipv6_off(ifname: str) -> Proof:
+    """A link device in the server namespace has IPv6 switched off
+    (``namespace_ops.switch_off_host_ipv6``). The caller's thread is in the server namespace."""
+    try:
+        value = host_ipv6_sysctl(ifname).read_text().strip()
+    except FileNotFoundError:
+        return Proof.fail(f"host interface {ifname} has no IPv6 setting here")
+    if value != "1":
+        return Proof.fail(
+            f"host interface {ifname} has IPv6 on", f"device={ifname}", f"disable_ipv6={value}"
+        )
+    return Proof.ok(f"host interface {ifname} has IPv6 off")
+
+
 def verify_host_interface_state(ifname: str, *, admin_up: bool | None = None) -> Proof:
     def _op(ipr):
-        return _link_rows(ipr, ifname)
+        return _link_rows(ipr, ifname), prove_host_ipv6_off(ifname)
 
-    rows = in_host_namespace(_op)
+    rows, ipv6 = in_host_namespace(_op)
     if not rows:
         return Proof.fail(f"host interface {ifname} missing")
+    if not ipv6.verified:
+        return ipv6
     flags = rows[0]["flags"]
     is_up = bool(flags & IFF_UP)
     if admin_up is not None and is_up != admin_up:

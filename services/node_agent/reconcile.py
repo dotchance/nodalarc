@@ -34,6 +34,7 @@ from node_agent.emulated_lan import (
     emulated_lan_namespace_present,
     remove_emulated_lan_namespace,
 )
+from node_agent.namespace_ops import host_ipv6_sysctl, switch_off_host_ipv6
 from node_agent.proof_delivery import delivered_proof, kubelet_pods_dir
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,23 @@ def _managed_devices(ipr: IPRoute) -> dict[str, int]:
         for link in ipr.get_links()
         if link.get_attr("IFLA_GROUP") == MANAGED_HOST_DEVICE_GROUP
     }
+
+
+def switch_off_ipv6_on_managed_devices() -> list[str]:
+    """Apply the link-device IPv6 rule (``namespace_ops.switch_off_host_ipv6``) to every host
+    device NodalArc owns in the server namespace, at Node Agent start, and return the devices it
+    switched. Links keep running across a Node Agent upgrade on the devices an earlier Node Agent
+    made, and the host-side proofs refuse a device with IPv6 on, so a device made before the rule
+    gets it here before the Node Agent serves a command. Runs with the calling thread in the server
+    namespace, where the devices are listed."""
+    with IPRoute() as ipr:
+        names = sorted(_managed_devices(ipr))
+    switched = []
+    for name in names:
+        if host_ipv6_sysctl(name).read_text().strip() != "1":
+            switch_off_host_ipv6(name)
+            switched.append(name)
+    return switched
 
 
 def get_actual_nodalarc_interfaces() -> set[str]:

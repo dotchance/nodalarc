@@ -116,6 +116,21 @@ def _require_kubelet_pods_dir() -> None:
         raise
 
 
+async def _switch_off_ipv6_on_link_devices() -> None:
+    """Give every link device an earlier Node Agent made the current IPv6 rule before serving
+    (``reconcile.switch_off_ipv6_on_managed_devices``). Netlink runs in a worker thread, like
+    every other netlink job in this process."""
+    from node_agent.reconcile import switch_off_ipv6_on_managed_devices
+
+    switched = await asyncio.to_thread(switch_off_ipv6_on_managed_devices)
+    if switched:
+        log.info(
+            "IPv6 switched off on %d link devices made before this Node Agent: %s",
+            len(switched),
+            " ".join(switched),
+        )
+
+
 async def _require_exact_purge_counts() -> None:
     """Refuse to start on a kernel that does not count a transmit purge exactly: a long-delay
     stop would report a wrong untransmitted count (``qualification.check_purge_counts``).
@@ -207,6 +222,7 @@ async def main() -> None:
     _require_host_ip_for_vxlan_capable_startup()
     _require_kubelet_pods_dir()
     await _require_exact_purge_counts()
+    await _switch_off_ipv6_on_link_devices()
 
     log.info(
         "Node Agent starting [build=%s, node=%s]",

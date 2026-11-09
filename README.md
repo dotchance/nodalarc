@@ -1,64 +1,175 @@
-# NodalArc - Satellite Network Emulation for Orbital Networking
+# NodalArc
 
-NodalArc is an orbital network emulator for testing real communications and routing systems against moving satellite topology.
+NodalArc is an emulator for space networks. It runs real routers and real protocol software inside a moving model of Earth orbit, the Moon and Mars, and you drive all of it from a web browser.
 
-It gives network engineers a lab where satellites move, links appear and disappear, ground exits change, and the software under test has to live inside that motion.
+![Flying from a LEO constellation over Earth to the Moon and on to Mars in one running session](docs/images/readme-earth-luna-mars.gif)
 
-![NodalArc globe view](docs/images/readme-globe.png)
+## What NodalArc Does
 
-## What NodalArc Is
+Every satellite, relay, ground station and surface base is a Linux container on a Kubernetes cluster. Every link between two of them is a real network link.
 
-NodalArc is an emulator, not a packet-level simulator.
+NodalArc moves each spacecraft along its orbit in real time, and the links follow the geometry. A link comes up when two terminals can see each other and are within range. It goes down when a planet blocks the view, when the range grows too long, or when a terminal reaches its tracking limit. Each link carries the light time of its current length: a few milliseconds to a satellite in low Earth orbit, 1.3 seconds to the Moon, and between 3 and 22 minutes to Mars. Each link also runs at the data rate of the terminal hardware you chose.
 
-Each satellite, relay, and ground node becomes a real Linux network namespace
-running whatever its workload profile declares: a routing stack, a DTN bundle
-daemon, an application endpoint. IS-IS hellos, OSPF LSAs, supported MPLS
-labels, kernel interfaces, carrier transitions, VXLAN links, and `tc` shaping
-all happen in the system that Linux actually runs.
+The software in the containers is the software you would fly. Routers run FRR and form real IS-IS and OSPF adjacencies. DTN nodes run NASA JPL's ION, NASA Glenn's HDTN and uD3TN. QUIC endpoints run picoquic. Every route and every delivered bundle comes from that software reacting to the moving network.
 
-The orbital mechanics are not decoration around a static lab. They drive the lab. When two satellites move out of range, the interface drops. When a ground station hands off to a new satellite, the router sees the carrier event. When the distance between two endpoints changes, the link latency changes with it.
+You describe each experiment as a session: the bodies, orbits, spacecraft, ground stations and links to emulate, and the software each node runs. A session is assembled from a catalog of reusable parts, in the browser or in YAML.
 
-NodalArc is for testing questions like:
+## Open a Terminal on Mars (or Anywhere)
 
-- What does IS-IS do when cross-plane links disappear at the polar seam?
-- How much route churn does a ground-station handoff create?
-- What happens when the same constellation runs under OSPF, IS-IS, SR-MPLS, or centralized path computation?
-- How much of a measurement came from the protocol, and how much came from the lab substrate?
-- When does distributed routing stop being the right model?
-- When a relay loses sight of the surface, where does the bundle wait?
+![Selecting a Mars base and its relay, then opening a router terminal on the relay](docs/images/readme-mars-terminal.gif)
 
-That is the point: give real routers a moving world and watch what they do.
+Every node in a running session can be inspected and entered. Select a node and NodalArc shows its links, their light times and the candidates for its next link. Select a base on Mars and you see its coverage area and why it is linked to the areostationary relay. Select the relay and you see its crosslinks, the bases it serves and its optical trunk to the deep space relay at Earth, with 5.64 minutes of light time each way at the 2027 opposition.
 
-## Why This Exists
+Open a terminal on any router and you are in its CLI. On the Mars relay, `show isis neighbor` lists the Mars bases and the other orbiter, and a ping to the base at Gale crater comes back in 118 ms. A host gives you its own shell. You can also trace the path a packet takes between any two nodes, or switch to the topology view to see the same live network as a graph.
 
-Networks are leaving the ground.
+## Terminals and Handovers Work Like the Hardware
 
-That sounds like a slogan until you have to route through it. A terrestrial network lets you pretend the topology is mostly fixed. Links fail, routers reboot, fiber gets cut, but the bones of the thing stay where you put them.
+![A polar seam crosslink breaking when the satellites pass faster than their terminals can track](docs/images/readme-polar-seam.gif)
 
-On-orbit and space-based networks do not work that way.
+Every terminal model in the catalog carries the limits of the hardware it models:
 
-A satellite in low Earth orbit is moving about seven and a half kilometers a second. A cross-plane link can exist now and be gone a few minutes later. A ground station can be the best exit from the network this pass, and useless on the next. On the ground, topology change is an event. In orbit, topology change is the medium you are swimming in.
+- the directions it can point
+- the angular rate it can track
+- its maximum range
+- its data rate in each direction
 
-NodalArc was built to make that difference measurable.
+NodalArc checks both ends of every link against those limits as the spacecraft move. At the polar seam, satellites in counter-rotating planes pass each other faster than their terminals can track, and those links break. In the shipped polar seam tracking session, a seam crosslink goes down for 30 seconds while its two satellites pass within a few hundred kilometres of each other, then comes back as they separate.
 
-## Quick Start
+A ground station hands over between satellites according to the scheduling its session declares:
 
-The command line is for installation and operations. Once NodalArc is running, users work from the browser.
+- how it picks its next satellite: highest elevation, lowest elevation or longest remaining pass
+- hysteresis, which keeps the current satellite until a candidate scores better by a set factor, with that preference fading as the current satellite sinks toward the elevation mask
+- make-before-break or break-before-make handovers, with the overlap time and the terminals held in reserve
+- the order in which competing stations claim a satellite's terminals
+
+Select a ground station and NodalArc shows the decision behind each of its links: line of sight, range, elevation mask, tracking rate, selection policy, capacity, handover policy, and the proof from the Linux kernel that the link exists.
+
+## What You Can Do With It
+
+- Run IS-IS or OSPF over a LEO constellation and watch it reconverge each time a seam crosslink breaks.
+- Measure what a ground station handoff costs your routing, in route changes and lost packets.
+- Speed time up and watch hours of orbits go by in minutes, or pause it and read the routing tables.
+- Send DTN bundles from a Mars base to a ground station on Earth through the Mars relays and an Earth relay, with the real light time on every hop.
+- Put a QUIC client on Earth and a QUIC server on the Moon, and see how QUIC handles the 1.3 second light time.
+- Change one thing, such as a terminal's data rate, an orbit's altitude, the number of planes or the location of a ground station, and compare the two runs.
+- Script your experiments through the REST and WebSocket APIs.
+
+## Why We Built It
+
+Networks are leaving the ground. Thousands of satellites already carry traffic in low Earth orbit, and space agencies are planning networks around the Moon and Mars. The engineers who design routing for those networks need to see what their actual routers and protocol stacks do while the topology moves.
+
+A satellite in low Earth orbit moves at about 7.5 km per second. It crosses a ground station's sky in a few minutes, and its links to neighbouring planes break and return as the planes cross. A ground station is the best exit on one pass and out of reach on the next. Farther out, a message to Mars spends minutes in flight, and Mars blocks a base's view of a low orbiter for most of each orbit.
+
+We built NodalArc so that those conditions are real, repeatable and measurable, and so that every result can be traced to the protocol, the orbits or the hardware.
+
+## Who It's For
+
+- network engineers who design and run routing for satellite constellations
+- researchers comparing routing, DTN and transport approaches on the same orbits, hardware and traffic
+- people designing IP, transport and DTN protocols for the Moon, Mars and deep space
+- anyone who wants to learn how networking behaves when the links underneath it keep changing
+
+## Build Your Own Network
+
+![Building a 66-satellite polar network with ground stations in the Session Builder](docs/images/readme-build-session.gif)
+
+You build a session in the Session Builder in the browser:
+
+1. Start a new session.
+2. Open the Library and place a constellation, such as the 66-satellite polar shell, and a set of ground sites. The satellites and stations appear on the globe as you place them.
+3. Connect them. Pick the satellites as both ends of one link rule for crosslinks between nearest neighbours, and pick the ground sites and the satellites for access links. The globe shows every candidate link, and the Builder resolves the session after every change: 75 nodes, 66 satellites, 9 ground stations, 144 candidate links.
+4. Give the session a name and a candidate link budget, and save it.
+5. Deploy it.
+
+![Deploying the new session and opening a terminal on one of its satellites](docs/images/readme-deploy-session.gif)
+
+About thirty seconds after you deploy, the new network is running with a real router on every satellite and every ground station. Open a terminal on any satellite and its IS-IS neighbours are already up.
+
+The Session Builder writes the same YAML file you could write by hand, and it shows that file beside the globe as you work. Each block you place is its own YAML file in the catalog, and the session refers to it. To change a block, fork it into your own catalog and edit your copy. Fork a terminal and double its data rate, and every link in your session that uses it runs at the new rate.
+
+The shipped catalog holds these blocks:
+
+- [bodies](catalog/nodalarc/bodies/): Earth, the Moon and Mars
+- [orbits](catalog/nodalarc/orbits/): orbits around each body
+- [constellations](catalog/nodalarc/constellations/): Walker, polar, ring, MEO and GEO layouts
+- [space node sets](catalog/nodalarc/space-node-sets/): individually placed spacecraft, such as the Mars relays
+- [nodes](catalog/nodalarc/nodes/): spacecraft and ground station models with their terminals and payloads
+- [terminals](catalog/nodalarc/terminals/): RF and optical terminals with their range, data rate and tracking limits
+- [sites](catalog/nodalarc/sites/) and [site sets](catalog/nodalarc/site-sets/): ground stations and surface bases at real locations
+- [profiles](catalog/nodalarc/profiles/): the software each node runs
+- [payloads](catalog/nodalarc/payloads/): hosts carried on a spacecraft or installed at a site
+- [sessions](catalog/nodalarc/sessions/): complete experiments
+
+## Example Sessions
+
+NodalArc ships the sessions below as examples. Each one is a session file built from catalog blocks. Each one shows a different part of what you can model. Deploy any of them from the Sessions window to watch it run, or open one in the Session Builder to see how it is put together.
+
+These sessions are a starting point. NodalArc is made for building your own sessions and modelling the networks you care about: a constellation flying today, a design still on paper, or a network at the Moon or Mars that nobody has built yet. Start from an example or from a blank session, change what you want to test, then deploy it and see what happens.
+
+| Session | What it runs |
+| --- | --- |
+| [`earth-leo-simple`](catalog/nodalarc/sessions/earth-leo-simple.yaml) | A 36-satellite ring with gateway ground stations |
+| [`earth-leo-walker`](catalog/nodalarc/sessions/earth-leo-walker.yaml) | A 176-satellite Walker-delta shell with gateway access |
+| [`earth-leo-polar`](catalog/nodalarc/sessions/earth-leo-polar.yaml), [`earth-leo-polar-seam`](catalog/nodalarc/sessions/earth-leo-polar-seam.yaml), [`earth-leo-polar-seam-tracking`](catalog/nodalarc/sessions/earth-leo-polar-seam-tracking.yaml) | Polar shells, the seam where counter-rotating planes pass each other, and links that break at a terminal's tracking limit |
+| [`earth-meo-gps`](catalog/nodalarc/sessions/earth-meo-gps.yaml), [`earth-geo-tdrs`](catalog/nodalarc/sessions/earth-geo-tdrs.yaml), [`earth-geo-inmarsat`](catalog/nodalarc/sessions/earth-geo-inmarsat.yaml) | MEO and GEO constellations with their gateway sites |
+| [`earth-leo-heo-geo-luna-reachability`](catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml) | Two LEO constellations, HEO and GEO relays, lunar relays and lunar surface nodes in one routed network |
+| [`earth-luna-quic`](catalog/nodalarc/sessions/earth-luna-quic.yaml) | A QUIC client on Earth and a QUIC server on the Moon |
+| [`earth-luna-dtn`](catalog/nodalarc/sessions/earth-luna-dtn.yaml), [`earth-luna-dtn-custody`](catalog/nodalarc/sessions/earth-luna-dtn-custody.yaml) | A DTN relay at the Moon that stores bundles while its next hop is out of sight |
+| [`earth-mars-hdtn-relay`](catalog/nodalarc/sessions/earth-mars-hdtn-relay.yaml) | Three Mars bases reaching Earth through Mars relays and an optical trunk, running HDTN |
+| [`mars-ion-relay-network`](catalog/nodalarc/sessions/mars-ion-relay-network.yaml) | The Mars relay network on its own, running ION with contact graph routing |
+| [`earth-luna-mars-dtn`](catalog/nodalarc/sessions/earth-luna-mars-dtn.yaml) | Earth, the Moon and Mars in one session |
+
+## Run Any Software On Any Node
+
+FRR is the router NodalArc ships with, running IS-IS, OSPF and static routing over IPv4 and IPv6, with SR-MPLS, LDP and traffic engineering. NodalArc is designed to run router containers from Cisco, Arista, Juniper and other vendors, a container you build yourself, or a plain Linux host, on any node and in any mix. A workload profile names the container image and how to start it, and NodalArc connects that container's interfaces to the moving network. The DTN and QUIC example sessions already run their software this way.
+
+## Where NodalArc Is Going
+
+The session grammar already describes more than the runtime runs today, and the runtime adds those parts one at a time. Next on the list:
+
+- Lagrange points, with relays held in orbit around them by three-body motion
+- BGP routing domains, which the grammar already defines
+- more bodies, starting with Venus
+- rovers and other nodes that move across a body's surface
+
+## How It Works
+
+```text
+OME          Computes orbits, visibility, range and ground station handoffs
+Scheduler    Decides which links should exist and keeps the kernel in line with that
+Node Agent   Builds the links in the Linux kernel and proves they exist
+Operator     Runs the session's pods and delivers their configuration
+VS-API       Serves the browser, the REST API and the WebSocket API
+VF           The browser interface: globe, topology view, terminals, Session Builder
+NATS         Carries events between the services
+```
+
+Links between nodes are veth pairs on one server and VXLAN tunnels between servers. `tc` applies each link's delay and data rate. NodalArc measures the delay that the lab network itself adds and subtracts it, so a session spread across several servers keeps the delay that the orbits call for.
+
+A session spreads its nodes across every server in the cluster. [Scaling and Performance](docs/ops/scaling.md) has measured numbers and a sizing formula.
+
+## Get Started
+
+NodalArc runs entirely in containers on Kubernetes: the platform services, a Node Agent on every server, and one container for every node in a session. The command line is for installing and operating the platform. Once it is running, you work in the browser or through the API.
+
+### Install the Runtime Containers
+
+NodalArc will soon be published as ready-to-run runtime containers and a Helm chart, so you can install it on your cluster without building anything. The install steps will appear here with the first release.
 
 ### Requirements
 
-- A Kubernetes cluster whose nodes admit privileged pods, or machines to build one on
+- A Kubernetes cluster whose nodes admit privileged pods, or Ubuntu or Debian machines to build one on
 - Host kernel support for network namespaces, veth, VXLAN, `tc` and, for MPLS sessions, the MPLS modules; the Node Agent reports what a node lacks
-- 8 GB RAM minimum for the demo constellation
-- 32 GB RAM recommended for larger constellations
+- 8 GB RAM for the 36-satellite default session and 32 GB for larger sessions; a session with an Earth-Mars link needs about 9.6 GiB of allocatable memory on the server that holds both ends of that link
+- On a cluster of several servers, a network between them that carries the emulated link MTU plus the VXLAN overhead: 8,850-byte packets at the default 8,800-byte link MTU
 
 ### Machines Without Kubernetes
 
-`scripts/build-k3s-node.sh`, run as root on each machine, builds a K3s server for NodalArc and prints the command that joins the next machine. It lists the changes it will make and asks once. Skip it if you already have a cluster. Tested on Ubuntu/Debian-family systems.
+`scripts/build-k3s-node.sh`, run as root on each machine, builds a K3s server for NodalArc and prints the command that joins the next machine. It lists the changes it will make and asks once. Skip it if you already have a cluster.
 
-### Install And Run
+### Build From Source (Developers)
 
-NodalArc is installed with its Helm chart and images; users never build or change code. Until the first release publishes the chart and the images, the install runs from a source checkout on a developer's machine, where `scripts/bootstrap-dev-machine.sh` installs the build toolchain (Docker, kubectl, Helm, Node.js, uv):
+Until the runtime containers are published, NodalArc is built and installed from a source checkout. This path is for developers, and the [Developer Guide](docs/dev/getting-started.md) has the full setup. `scripts/bootstrap-dev-machine.sh` installs the build tools (Docker, kubectl, Helm, Node.js and uv) on the build machine:
 
 ```bash
 git clone https://github.com/dotchance/nodalarc.git
@@ -67,7 +178,7 @@ sudo scripts/bootstrap-dev-machine.sh
 make all
 ```
 
-`make all` builds the frontend, builds the service images, loads them into the cluster, installs the Helm chart, deploys the default session, and prints status. The [Operations Guide](docs/ops/) has the cluster and chart details; the [Developer Guide](docs/dev/) has the build and test workflow.
+`make all` installs the Python and Node.js dependencies, builds the images, imports them into K3s or pushes them to a registry, installs the Helm chart, deploys the default session and prints the status.
 
 When the platform is ready, open:
 
@@ -75,191 +186,24 @@ When the platform is ready, open:
 http://localhost:3000
 ```
 
-For a remote host, expose or forward port `3000` for the visualization frontend and port `8080` for VS-API.
-
-## The Browser Is The Lab
-
-NodalArc is built so a platform operator can install it, and a network engineer can run experiments from the GUI without touching `make`, `kubectl`, or shell scripts.
-
-From the browser you can:
-
-- author sessions in the Session Builder from constellations, node models, ground-site sets, relay segments, and routing stacks
-- deploy and switch sessions
-- watch satellites, ISLs, ground links, handoffs, and convergence events
-- inspect individual satellites and ground stations
-- trace paths between nodes
-- open a terminal on any node: a router CLI on the routers, a shell on the hosts
-
-The browser is not a mock-up. It is connected to the running emulation.
-
-## Visual Workflow
-
-### 1. Watch The Moving Network
-
-The globe shows satellites, ground stations, orbital paths, inter-satellite links, and ground links in motion. Link state follows the geometry.
-
-![Live NodalArc globe with satellite links](docs/images/readme-globe.png)
-
-### 2. Build Or Select A Session
-
-The Sessions window lists the shipped sessions and the sessions in your user catalog. You can deploy one as written, or import a session YAML file and deploy it.
-
-The Session Builder authors new sessions. It edits the same session YAML the runtime reads and composes the session from catalog references: constellations, site sets, nodes, terminals and orbits. Every change compiles through the shared resolver, and a session that does not resolve shows the resolver's refusal.
-
-### 3. Inspect The Running Network
-
-Select a satellite or ground station to see active links, link latency, position, route-adjacency context, and trace controls.
-
-![Selected satellite detail panel](docs/images/readme-node-detail.png)
-
-Switch to the topology view when the orbital picture is too physical and you want the graph.
-
-![Topology view of a running constellation](docs/images/readme-topology.png)
-
-### 4. Open A Router Terminal
-
-Every satellite and ground station is a real running node. On a router, open the terminal and run the commands you already know. On a host, you get that host's own shell.
-
-![Router terminal in the browser](docs/images/readme-router-terminal.png)
-
-The terminal is not decorative. This is one shell into one real node among hundreds. Each satellite and ground station has its own namespace, interfaces, routing daemon, neighbors, and forwarding table. The globe is the view. The routers are real.
-
-![FRR terminal showing show isis neighbor output](docs/images/readme-router-cli.png)
-
-### 5. Experiment Across Orbital And Lunar Segments
-
-Sessions can assemble independent building blocks into one emulated network: LEO, MEO, GEO, cislunar relay, lunar relay, and surface ground nodes all keep their own segment identity while sharing one live routing experiment.
-
-![Cislunar routing session with lunar relay mesh and router terminal](docs/images/readme-cislunar-routing.png)
-
-The screenshot above shows a cislunar routing session. The globe is focused on Luna, the lunar relay mesh is active, the cislunar relay spans back toward Earth, the side panel explains why the selected Earth ground terminal is not currently linked, and the terminal is a live shell inside the Artemis surface router.
-
-## What You Can Test
-
-Once the system is running, you can:
-
-- watch IS-IS or OSPF reconverge as orbital links appear and disappear
-- measure ground-station handoff impact instead of arguing about timers
-- run the same constellation under IS-IS, OSPF, SR-MPLS, or external path engines
-- change altitude, inclination, plane count, phase offset, and satellite terminal models
-- move ground stations and see what reachability you bought or lost
-- run `ping`, `traceroute`, and `iperf` through the emulated constellation
-- inspect routing attempts across multi-segment sessions such as Earth LEO/MEO/GEO,
-  cislunar relay, lunar relay, and lunar surface nodes
-- open a browser terminal to any satellite or ground station: `vtysh` on a router, a shell on a host
-- run mixed workloads under one sky: FRR routing, QUIC endpoints, and a DTN store-and-forward relay in the same session
-- watch a DTN relay hold bundles through a lunar occlusion and deliver them when the geometry comes back
-- script experiments through the REST and WebSocket APIs
-- connect external systems to the emulation and watch how they behave
-
-Start small. `earth-leo-simple.yaml` is enough to see the machinery. The Walker
-and polar LEO sessions show why geometry matters. MEO/GEO sessions show the
-longer-range gateway regime. The Earth-Luna sessions extend the same building
-blocks into cislunar experiments, up to a relay that holds DTN bundle custody
-through an occlusion and proves it in its own logs.
-
-That is where the interesting questions start.
-
-## What The System Gives You
-
-### Real Routing Stacks
-
-NodalArc starts with FRR because FRR is practical, scriptable, open, and already
-gives us IS-IS, OSPF, SR-MPLS, LDP, and traffic engineering. BGP and deeper-space
-protocol adapters belong on the roadmap as explicit routing families, not as
-silent approximations.
-
-But NodalArc is not an FRR simulator.
-
-The router is a container boundary. If a routing stack can run in a container and attach to Linux interfaces, NodalArc can put it inside the moving topology. That means FRR on the satellites, Arista cEOS at the ground stations, Cisco XRd on a lunar relay, Juniper cRPD at a gateway, or any mix that makes the experiment worth running.
-
-The emulator does not care whose CLI is inside the node. It gives the router interfaces, carrier events, latency, bandwidth, and reachability. The router gives back behavior.
-
-The same boundary carries more than routers. A DTN bundle daemon, a QUIC endpoint, a traffic generator: if it runs in a container, a workload profile can put it on a node. NodalArc publishes no router images. Stacks arrive as vendor containers, pinned by digest, from whoever builds them.
-
-That is the point. Real stacks, same sky.
-
-### Real Kernel Networking
-
-The Node Agent builds veth pairs and VXLAN tunnels, then shapes them with `tc netem` and `tc htb`. Latency comes from range. Each interface transmits at its own terminal's transmit rate and receives at its receive rate. The lab has a substrate, and the substrate is measured.
-
-### Session Primitives
-
-NodalArc sessions are built from catalog primitives:
-
-- node models describe hardware: Ethernet ports, terminal mounts, payload mounts
-- terminals describe communications capability: signal, range, bandwidth, tracking limits
-- constellation geometry describes where the satellites move
-- ground sites describe where the network touches a body and which segments it provides
-- workload profiles describe what runs inside each node, router or otherwise
-- payloads describe carried hosts that ride a spacecraft bus or a site LAN
-
-Nobody writes an IP address. The resolver allocates all of it.
-
-Change one primitive and leave the others alone. Same sky, different routing. Same routing, different sky. Same constellation, different ground exits. A clean comparison has one deliberate difference.
-
-### Time Control
-
-Pause, resume, and change speed. If a failure happens during a pass, pause the
-system and inspect the state while the topology is still.
-
-### Multi-Node Scale
-
-A single machine can run hundreds of nodes. A Kubernetes cluster can spread the emulation across machines. Local links use host-mediated veths. Cross-node links use VXLAN. Substrate latency compensation keeps the emulated delay tied to the orbital path, not to the physical lab network.
-
-### External Path Engines
-
-NodalArc keeps the emulation substrate honest: orbital mechanics, carrier events, Linux interfaces, timing, and observability. External path engines, including NodalPath, can attach to that substrate when distributed routing is not the model you want to test.
-
-## Architecture At A Glance
-
-```text
-OME          Orbital mechanics and visibility truth
-Scheduler    Desired topology, reconciliation, and link intent
-Node Agent   Host kernel operations and proof of actual state
-Operator     Session lifecycle, pods, configs, and deployment
-VS-API       Browser/API front door and state aggregation
-VF           React + R3F + Three.js visualization frontend
-NATS         Event bus and durable fact stream
-```
-
-The boundary matters. OME computes the sky. The Scheduler decides what should exist. The Node Agent proves what Linux actually did. The router owns routing, and every other workload owns its own behavior.
-
-## Project Structure
-
-```text
-services/       Backend services: OME, Scheduler, Node Agent, VS-API, Operator
-adapters/       Workload adapters that render native config from resolved facts
-frontend/       Visualization frontend: React + R3F + Three.js
-lib/            Shared Python library
-images/         Container images built and loaded with the platform
-catalog/        Shipped catalog: bodies, terminals, orbits, nodes, sites, profiles, payloads, sessions
-deploy/         Helm chart and deployment tooling
-configs/        Platform configuration and ephemerides
-tests/          Unit and integration tests
-docs/           User, operations, and developer documentation
-scripts/        Lifecycle, host bootstrap, and operational scripts
-tools/          Python report, scenario, compare, and reconfig CLIs
-```
+On a remote machine, expose or forward port `3000` for the browser interface and port `8080` for VS-API.
 
 ## Documentation
 
-The docs are split by the work you are trying to do.
-
-- [User Guide](docs/user/) - visualization, sessions, node inspection, path tracing, terminal access, and API use
-- [Operations Guide](docs/ops/) - install, Kubernetes deployment, multi-node clusters, scaling, teardown, and troubleshooting
-- [Developer Guide](docs/dev/) - architecture, invariants, services, tests, and contribution workflow
+- [User Guide](docs/user/): the globe and topology views, sessions, time controls, terminals and the API
+- [Operations Guide](docs/ops/): installation, multi-server clusters, [scaling](docs/ops/scaling.md), teardown and troubleshooting; the install steps for the published runtime containers will live here
+- [Developer Guide](docs/dev/): building from source, architecture, invariants, services, tests and the contribution workflow
 
 ## Community
 
-NodalArc is open source under the Apache License 2.0 and welcomes useful contributions. Bugs, routing stacks, constellation models, visualization improvements, documentation fixes, and operational reports all help, as long as they respect the architecture.
+NodalArc is open source under the Apache License 2.0. Bug reports, routing stacks, constellation models, interface improvements, documentation fixes and reports from your own experiments are all welcome.
 
-- **Issues** - bug reports, feature requests, and questions
-- **Pull Requests** - read [CONTRIBUTING.md](CONTRIBUTING.md), the [Developer Guide](docs/dev/), and the [Contributor License Agreement](CLA.md) before opening one
-- **Discussions** - architecture proposals, use cases, and experiments
+- **Issues**: bug reports, feature requests and questions
+- **Pull Requests**: read [CONTRIBUTING.md](CONTRIBUTING.md), the [Developer Guide](docs/dev/) and the [Contributor License Agreement](CLA.md) before opening one
+- **Discussions**: architecture proposals, use cases and experiments
 
 ## License
 
-NodalArc is licensed under the Apache License 2.0. You can use, modify, and distribute it under the Apache License, Version 2.0. See [LICENSE](LICENSE) for full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party notices.
+NodalArc is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party notices.
 
 Copyright 2024-2026 .chance (dotchance)

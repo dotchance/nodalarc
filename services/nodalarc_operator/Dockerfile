@@ -57,3 +57,8 @@ COPY catalog/ catalog/
 
 ENTRYPOINT ["kopf", "run", "-m", "nodalarc_operator"]
 CMD ["--namespace", "nodalarc", "--liveness=http://0.0.0.0:8090/healthz"]
+
+# NodalArc's license, its additional terms and the third-party notices go with
+# every image whose label names AGPL-3.0-only (AGPL-3.0 Sections 4 and 6). The
+# last instruction, so a change to them rebuilds no other layer.
+COPY --from=nodalarc-legal LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/doc/nodalarc/

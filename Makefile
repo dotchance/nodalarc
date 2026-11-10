@@ -48,7 +48,10 @@ ifeq ($(strip $(PROJECT_VERSION)),)
 PROJECT_VERSION := 0+unknown
 endif
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)
-DOCKER_BUILD_METADATA_ARGS = --build-arg PROJECT_VERSION=$(PROJECT_VERSION) --build-arg VCS_REF=$(GIT_SHA) --build-arg BUILD_DATE=$(BUILD_DATE)
+# nodalarc-legal is the repository root as a named build context. Images copy
+# only LICENSE, NOTICE and THIRD_PARTY_NOTICES.md from it (the root
+# .dockerignore admits them), whatever their own build context is.
+DOCKER_BUILD_METADATA_ARGS = --build-arg PROJECT_VERSION=$(PROJECT_VERSION) --build-arg VCS_REF=$(GIT_SHA) --build-arg BUILD_DATE=$(BUILD_DATE) --build-context nodalarc-legal=.
 RUNTIME_CONSTRAINTS ?= build/runtime-constraints.txt
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,9 @@
 # Python caches, interface sources, source maps and frontend sources. It also
 # requires each image's SBOM: an SPDX document that names the component at the
 # version the image's own label states and lists at least one package. An
-# image that carries the scanner is refused.
+# image whose license label names AGPL-3.0-only must carry the tree's LICENSE,
+# NOTICE and THIRD_PARTY_NOTICES.md. An image that carries the scanner is
+# refused.
 #
 # usage: na-image-contents.sh [IMAGE...]
 #
@@ -27,6 +29,8 @@ ALLOWED_DOCS='^app/docs/ops/configuration-grammar\.md$'
 REFUSED='(^|/)(README[^/]*|Dockerfile)$|(^|/)(__pycache__|tests|\.git)(/|$)|\.(md|pyc|proto|map|ts|tsx)$'
 # Where every image keeps its SBOM, and the build tool that must not ship.
 SBOM_PATH='nodalarc/sbom.spdx.json'
+LEGAL_DIR='usr/share/doc/nodalarc'
+LEGAL_FILES=(LICENSE NOTICE THIRD_PARTY_NOTICES.md)
 SCANNER='(^|/)syft$'
 
 if [ "$#" -gt 0 ]; then
@@ -78,6 +82,19 @@ if not all(isinstance(f, str) and f and " " not in f for f in fields):
 print(*fields, len(doc.get("packages", [])) - 1)
 ' <<< "$document")" || sbom="unreadable"
     fi
+    licenses="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.licenses"}}' "$image")"
+    legal=()
+    notices="not required by its license label"
+    if [[ " $licenses " == *" AGPL-3.0-only "* ]]; then
+        notices="carried"
+        for name in "${LEGAL_FILES[@]}"; do
+            if ! carried="$(docker cp "$container:/$LEGAL_DIR/$name" - 2>/dev/null | tar -xO | sha256sum)"; then
+                legal+=("no /$LEGAL_DIR/$name")
+            elif [ "$carried" != "$(sha256sum < "$ROOT_DIR/$name")" ]; then
+                legal+=("/$LEGAL_DIR/$name differs from the tree's $name")
+            fi
+        done
+    fi
     docker rm "$container" >/dev/null
     count=0
     [ -n "$files" ] && count="$(printf '%s\n' "$files" | wc -l)"
@@ -85,6 +102,7 @@ print(*fields, len(doc.get("packages", [])) - 1)
     problems=()
     [ -n "$refused" ] && problems+=("files not needed to run")
     [ -n "$scanner" ] && problems+=("the SBOM scanner is in the image")
+    problems+=("${legal[@]}")
     read -r spdx subject version packages <<< "$sbom"
     case "$sbom" in
         absent) problems+=("no SBOM at /$SBOM_PATH") ;;
@@ -102,7 +120,7 @@ print(*fields, len(doc.get("packages", [])) - 1)
         printf '    %s\n' "${problems[@]}"
         printf '%s\n' "$refused" "$scanner" | grep . | sed 's/^/      /' || true
     else
-        echo "[contents] ok      $image: $count application files; SBOM $spdx $subject $version, $packages packages"
+        echo "[contents] ok      $image: $count application files; SBOM $spdx $subject $version, $packages packages; notices $notices"
     fi
 done
 

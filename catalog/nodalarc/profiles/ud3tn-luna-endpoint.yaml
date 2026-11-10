@@ -8,8 +8,8 @@
 profile:
   id: ud3tn-luna-endpoint
   display_name: uD3TN lunar DTN endpoint
-  registry: node01:5000
-  image: nodalarc-ud3tn-tools/tools@sha256:869961d3f3436577ef44c5334aa0f8d9995721056c814067a9cf8fe4ac4c9123
+  registry: registry.example
+  image: nodalarc/ud3tn-tools@sha256:0000000000000000000000000000000000000000000000000000000000000000
   env:
   - name: DTN_RELAY
     value_from:

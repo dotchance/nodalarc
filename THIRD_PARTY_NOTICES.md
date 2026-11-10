@@ -212,6 +212,27 @@ carried into generated binary artifact reports. For GPL-licensed FRR packages,
 published container images should also provide or link to the corresponding
 source code in the way required by the package distributor and GPL terms.
 
+## Session Images Built From Upstream Programs
+
+NodalArc builds the following session images from the upstream source or
+package named, at the pinned release. None is published yet; the shipped
+profiles name them by placeholder references. The last column says where the
+upstream license text is. NodalArc changes nothing in the upstream programs; its
+own additions are the scripts named, which are AGPL-3.0-only. The recipes are in
+`images/`.
+
+| Image | Upstream program | Pinned at | License | License text |
+| --- | --- | --- | --- | --- |
+| `nodalarc/frr` | FRRouting, official image `quay.io/frrouting/frr`, plus the `entrypoint.sh` start script | 10.6.2 | GPL-2.0-or-later | none: the official FRR image, and so this image, carries no license text; the GPL-2.0 text is `LICENSES/GPL-2.0-or-later.txt` in this repository |
+| `nodalarc/hdtn` | NASA Glenn HDTN, <https://github.com/nasa/HDTN>, plus the `hdtn-node` launcher | v3.0.0 (commit `7fbe90cdbe3c8c737efaacb5985f881f95fc7d2a`) | Apache-2.0 | `/opt/hdtn/share/doc/hdtn/LICENSE.md` |
+| `nodalarc/ion` | NASA JPL ION-DTN, <https://github.com/nasa-jpl/ION-DTN>, plus the `ion-node` launcher | 4.2.0 (commit `568df887cb9f18aa8ec013b1a566d83215e499ae`) | BSD-3-Clause (Caltech's wording); the Jerasure and GF-Complete libraries it ships are BSD-3-Clause and the libbloom code built into it is BSD-2-Clause | `/opt/ion/share/doc/ion/`: `license.txt`, `third-party-licenses.txt`, `jerasure-License.txt`, `gf-complete-License.txt`, `libbloom-LICENSE` |
+| `nodalarc/picoquic` | picoquic, <https://github.com/private-octopus/picoquic>, with picotls, <https://github.com/h2o/picotls> | commit `467cb81bcafc652bae2a1c8824b70f12f470039c` | MIT (picoquic, picotls); picotls's minicrypto contains cifra (CC0-1.0) and micro-ecc (BSD-2-Clause) | `/usr/share/doc/picoquic/LICENSE`, `/usr/share/doc/picotls/` |
+| `nodalarc/ud3tn-tools` | D3TN ud3tn-utils, <https://gitlab.com/d3tn/ud3tn> | 0.15.0 (PyPI) | BSD-3-Clause OR Apache-2.0; its Python dependencies are listed with their licenses in the image's SBOM | `/usr/local/lib/python3.12/site-packages/ud3tn_utils-0.15.0.dist-info/licenses/LICENSE` |
+
+The uD3TN daemon is not built by NodalArc: the uD3TN profiles reference D3TN's
+own published image, `registry.gitlab.com/d3tn/ud3tn-docker-images/ud3tn`, by
+digest. uD3TN is licensed under AGPL-3.0.
+
 ## Container Base Images and System Packages
 
 Docker images built from this repository inherit third-party software and license

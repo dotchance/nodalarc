@@ -1,5 +1,5 @@
 # The Mars relay network's DTN network, run by NASA JPL's ION (4.2.0,
-# packaged unmodified in nodalarc-ion). Every member runs this one profile:
+# packaged unmodified in images/ion). Every member runs this one profile:
 # ion-node in the image finds which member it is from its own address,
 # numbers the members in name order (arcadia ipn:1 ... tgo ipn:6; an
 # endpoint's file receiver is ipn:n.1) and runs LTP over UDP to each
@@ -21,8 +21,8 @@
 profile:
   id: ion-mars-relay-network
   display_name: ION Mars relay network member
-  registry: node01:5000
-  image: nodalarc-ion/ion@sha256:0a2b388ceb8e425524dcc49d2f1f661c4df1410fd56f43d2bcf11198afafae87
+  registry: registry.example
+  image: nodalarc/ion@sha256:0000000000000000000000000000000000000000000000000000000000000000
   env:
   - name: ION_ADDR_arcadia
     value_from:

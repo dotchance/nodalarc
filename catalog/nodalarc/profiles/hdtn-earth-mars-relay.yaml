@@ -1,5 +1,5 @@
 # The Earth-Mars relay chain's DTN network, run by NASA Glenn's HDTN
-# (v3.0.0, packaged unmodified in nodalarc-hdtn). Every member runs this one
+# (v3.0.0, packaged unmodified in images/hdtn). Every member runs this one
 # profile: hdtn-node in the image finds which member it is from its own
 # address, numbers the members in name order (arcadia ipn:1 ... tgo ipn:9;
 # an endpoint's file receiver is ipn:1000+n) and runs LTP over UDP to each
@@ -17,8 +17,8 @@
 profile:
   id: hdtn-earth-mars-relay
   display_name: HDTN Earth-Mars relay network member
-  registry: node01:5000
-  image: nodalarc-hdtn/hdtn@sha256:b429a08c954a63da09bbc73f50a6d09bcc3cebada69dfd4744bcf16e4536c366
+  registry: registry.example
+  image: nodalarc/hdtn@sha256:0000000000000000000000000000000000000000000000000000000000000000
   env:
   - name: HDTN_ADDR_arcadia
     value_from:

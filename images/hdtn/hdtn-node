@@ -1,0 +1,243 @@
+#!/bin/bash
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
+# hdtn-node: write one HDTN node's configuration and contact plan from its
+# environment, then run the node (and, for an endpoint, its file receiver).
+#
+# One environment describes a whole DTN network, and every node of the
+# network runs with the same one: each node finds itself as the network
+# member whose address is assigned to one of its own interfaces. So one
+# workload profile serves every node, and node numbers need no authoring.
+#
+# The node runs LTP over UDP to each DTN neighbour, the convergence layer
+# deep-space DTN uses: LTP keeps working across light-minute delays, where
+# a TCP convergence layer cannot open a connection. Local applications reach
+# the node over STCP on 127.0.0.1.
+#
+# Environment, every variable required:
+#   HDTN_ADDR_<name>   the IPv4 address of each network member, <name> in
+#                      lower-case letters and digits
+#   HDTN_CONTACTS      the network's DTN contacts, space separated, each
+#                      <a>-<b>:<OWLT_MS>:<MARGIN_MS>:<A_TO_B_BPS>:<B_TO_A_BPS> for
+#                      one pair of neighbours (a link's two directions often
+#                      differ in rate); routes are computed over it
+#   HDTN_ENDPOINTS     the members that run a file receiver, space separated
+#   HDTN_STORAGE_BYTES bundle storage held while contacts are down
+#
+# Numbering, the same on every node because every node sorts the same names:
+# member i (from 1, names sorted) is node ipn:i, and an endpoint's file
+# receiver is ipn:(1000+i); files sent to ipn:(1000+i).1 land in
+# /run/hdtn/received on member i. A node receives LTP from neighbour m on UDP
+# 10000+m and sends LTP to neighbour n from UDP 20000+n; LTP engine ids are
+# 10000*self+peer on each side. Contacts run from the node's start for
+# 2,000,000,000 s: the node finds out whether a neighbour is reachable from
+# LTP itself. The node prints the numbering when it starts and writes it to
+# /run/hdtn/members.
+set -euo pipefail
+
+die() { echo "hdtn-node: $*" >&2; exit 1; }
+need() { [[ -n "${!1:-}" ]] || die "$1 is required"; }
+is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
+need HDTN_CONTACTS
+need HDTN_ENDPOINTS
+need HDTN_STORAGE_BYTES
+is_uint "$HDTN_STORAGE_BYTES" || die "HDTN_STORAGE_BYTES must be a byte count"
+
+OUT=/run/hdtn
+mkdir -p "$OUT/store"
+
+# Members, numbered in name order.
+mapfile -t NAMES < <(compgen -e | sed -n 's/^HDTN_ADDR_//p' | sort)
+(( ${#NAMES[@]} > 0 )) || die "no HDTN_ADDR_<name> variables: the network has no members"
+(( ${#NAMES[@]} <= 999 )) || die "at most 999 members, got ${#NAMES[@]}"
+declare -A NUMBER=() ADDR=()
+for i in "${!NAMES[@]}"; do
+  name=${NAMES[$i]}
+  [[ "$name" =~ ^[a-z0-9]+$ ]] || die "member name $name must be lower-case letters and digits"
+  var="HDTN_ADDR_$name"
+  addr=${!var}
+  [[ "$addr" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$var must be an IPv4 address, got $addr"
+  NUMBER[$name]=$((i + 1))
+  ADDR[$name]=$addr
+done
+
+# This node: the member whose address is one of this node's own.
+mapfile -t LOCAL < <(ip -o -4 addr show | awk '{split($4, a, "/"); print a[1]}')
+SELF_NAME=""
+for name in "${NAMES[@]}"; do
+  for local in "${LOCAL[@]}"; do
+    if [[ "${ADDR[$name]}" == "$local" ]]; then
+      [[ -z "$SELF_NAME" ]] || die "members $SELF_NAME and $name both have an address of this node"
+      SELF_NAME=$name
+    fi
+  done
+done
+[[ -n "$SELF_NAME" ]] || die "no member address is assigned here (local addresses: ${LOCAL[*]})"
+SELF=${NUMBER[$SELF_NAME]}
+
+declare -A IS_ENDPOINT=()
+for name in $HDTN_ENDPOINTS; do
+  [[ -n "${NUMBER[$name]:-}" ]] || die "endpoint $name is not a member"
+  IS_ENDPOINT[$name]=1
+done
+
+declare -a CONTACT_JSON=() INDUCT_JSON=() OUTDUCT_JSON=()
+declare -A NEIGHBOURS=()
+contact_index=0
+
+add_contact() { # source dest owlt_s rate_bps
+  CONTACT_JSON+=("{\"contact\": $contact_index, \"source\": $1, \"dest\": $2, \"startTime\": 0, \"endTime\": 2000000000, \"rateBitsPerSec\": $4, \"owlt\": $3}")
+  contact_index=$((contact_index + 1))
+}
+
+for entry in $HDTN_CONTACTS; do
+  IFS=':' read -r pair owlt_ms margin_ms rate_ab rate_ba extra <<< "$entry"
+  [[ -z "${extra:-}" ]] || die "contact $entry has more than five fields"
+  IFS='-' read -r a b <<< "$pair"
+  [[ -n "${NUMBER[$a]:-}" && -n "${NUMBER[$b]:-}" ]] || die "contact $entry names a non-member"
+  [[ "$a" != "$b" ]] || die "contact $entry joins a member to itself"
+  for v in "$owlt_ms" "$margin_ms" "$rate_ab" "$rate_ba"; do
+    is_uint "$v" || die "contact $entry: expected <a>-<b>:OWLT_MS:MARGIN_MS:A_TO_B_BPS:B_TO_A_BPS"
+  done
+  owlt_s=$(( (owlt_ms + 999) / 1000 ))
+  add_contact "${NUMBER[$a]}" "${NUMBER[$b]}" "$owlt_s" "$rate_ab"
+  add_contact "${NUMBER[$b]}" "${NUMBER[$a]}" "$owlt_s" "$rate_ba"
+  if [[ "$a" == "$SELF_NAME" ]]; then peer=$b; elif [[ "$b" == "$SELF_NAME" ]]; then peer=$a; else continue; fi
+  [[ -z "${NEIGHBOURS[$peer]:-}" ]] || die "contact list names neighbour $peer twice"
+  NEIGHBOURS[$peer]="$owlt_ms:$margin_ms"
+done
+(( ${#NEIGHBOURS[@]} > 0 )) || die "HDTN_CONTACTS gives $SELF_NAME no neighbour"
+for i in "${!NAMES[@]}"; do
+  name=${NAMES[$i]}
+  [[ -z "${IS_ENDPOINT[$name]:-}" ]] || add_contact "${NUMBER[$name]}" $((1000 + NUMBER[$name])) 0 0
+done
+
+for peer in $(printf '%s\n' "${!NEIGHBOURS[@]}" | sort); do
+  p=${NUMBER[$peer]}
+  addr=${ADDR[$peer]}
+  IFS=':' read -r owlt_ms margin_ms <<< "${NEIGHBOURS[$peer]}"
+  INDUCT_JSON+=("{
+    \"name\": \"ltp-from-$peer\", \"convergenceLayer\": \"ltp_over_udp\",
+    \"boundPort\": $((10000 + p)), \"numRxCircularBufferElements\": 1000,
+    \"thisLtpEngineId\": $((SELF * 10000 + p)), \"remoteLtpEngineId\": $((p * 10000 + SELF)),
+    \"ltpReportSegmentMtu\": 1360, \"oneWayLightTimeMs\": $owlt_ms, \"oneWayMarginTimeMs\": $margin_ms,
+    \"clientServiceId\": 1, \"preallocatedRedDataBytes\": 200000, \"ltpMaxRetriesPerSerialNumber\": 5,
+    \"ltpRandomNumberSizeBits\": 64, \"ltpRemoteUdpHostname\": \"$addr\", \"ltpRemoteUdpPort\": $((20000 + SELF)),
+    \"ltpRxDataSegmentSessionNumberRecreationPreventerHistorySize\": 1000,
+    \"ltpMaxExpectedSimultaneousSessions\": 500, \"ltpMaxUdpPacketsToSendPerSystemCall\": 1,
+    \"delaySendingOfReportSegmentsTimeMsOrZeroToDisable\": 20, \"keepActiveSessionDataOnDisk\": false,
+    \"activeSessionDataOnDiskNewFileDurationMs\": 2000, \"activeSessionDataOnDiskDirectory\": \"$OUT/\"
+  }")
+  OUTDUCT_JSON+=("{
+    \"name\": \"ltp-to-$peer\", \"convergenceLayer\": \"ltp_over_udp\", \"nextHopNodeId\": $p,
+    \"remoteHostname\": \"$addr\", \"remotePort\": $((10000 + SELF)),
+    \"maxNumberOfBundlesInPipeline\": 50, \"maxSumOfBundleBytesInPipeline\": 50000000,
+    \"thisLtpEngineId\": $((SELF * 10000 + p)), \"remoteLtpEngineId\": $((p * 10000 + SELF)),
+    \"ltpDataSegmentMtu\": 1360, \"oneWayLightTimeMs\": $owlt_ms, \"oneWayMarginTimeMs\": $margin_ms,
+    \"clientServiceId\": 1, \"numRxCircularBufferElements\": 1000, \"ltpMaxRetriesPerSerialNumber\": 5,
+    \"ltpCheckpointEveryNthDataSegment\": 0, \"ltpRandomNumberSizeBits\": 64,
+    \"ltpSenderBoundPort\": $((20000 + p)), \"ltpMaxUdpPacketsToSendPerSystemCall\": 1,
+    \"ltpSenderPingSecondsOrZeroToDisable\": 15, \"delaySendingOfDataSegmentsTimeMsOrZeroToDisable\": 20,
+    \"keepActiveSessionDataOnDisk\": false, \"activeSessionDataOnDiskNewFileDurationMs\": 2000,
+    \"activeSessionDataOnDiskDirectory\": \"$OUT/\"
+  }")
+done
+
+ENDPOINT=${IS_ENDPOINT[$SELF_NAME]:-}
+SINK=$((1000 + SELF))
+# Local applications (bpsendfile, bpgen-async, bping) send into the node here.
+INDUCT_JSON+=("{\"name\": \"local-apps\", \"convergenceLayer\": \"stcp\", \"boundPort\": 4556, \"numRxCircularBufferElements\": 1000, \"keepAliveIntervalSeconds\": 15}")
+if [[ -n "$ENDPOINT" ]]; then
+  OUTDUCT_JSON+=("{\"name\": \"receiver\", \"convergenceLayer\": \"stcp\", \"nextHopNodeId\": $SINK, \"remoteHostname\": \"127.0.0.1\", \"remotePort\": 4558, \"maxNumberOfBundlesInPipeline\": 50, \"maxSumOfBundleBytesInPipeline\": 50000000, \"keepAliveIntervalSeconds\": 15}")
+fi
+
+join() { local IFS=','; echo "$*"; }
+
+cat > "$OUT/hdtn.json" <<EOF
+{
+  "hdtnConfigName": "$SELF_NAME (ipn:$SELF)",
+  "userInterfaceOn": false,
+  "mySchemeName": "unused_scheme_name",
+  "myNodeId": $SELF,
+  "myBpEchoServiceId": 2047,
+  "myCustodialSsp": "unused_custodial_ssp",
+  "myCustodialServiceId": 0,
+  "myRouterServiceId": 100,
+  "isAcsAware": true,
+  "acsMaxFillsPerAcsPacket": 100,
+  "acsSendPeriodMilliseconds": 1000,
+  "retransmitBundleAfterNoCustodySignalMilliseconds": 10000,
+  "maxBundleSizeBytes": 10000000,
+  "maxIngressBundleWaitOnEgressMilliseconds": 2000,
+  "bufferRxToStorageOnLinkUpSaturation": false,
+  "maxLtpReceiveUdpPacketSizeBytes": 65536,
+  "neighborDepletedStorageDelaySeconds": 0,
+  "fragmentBundlesLargerThanBytes": 0,
+  "enforceBundlePriority": false,
+  "zmqBoundRouterPubSubPortPath": 10200,
+  "zmqBoundTelemApiPortPath": 10305,
+  "inductsConfig": {"inductConfigName": "$SELF_NAME inducts", "inductVector": [$(join "${INDUCT_JSON[@]}")]},
+  "outductsConfig": {"outductConfigName": "$SELF_NAME outducts", "outductVector": [$(join "${OUTDUCT_JSON[@]}")]},
+  "storageConfig": {
+    "storageImplementation": "asio_single_threaded",
+    "tryToRestoreFromDisk": false,
+    "autoDeleteFilesOnExit": true,
+    "totalStorageCapacityBytes": $HDTN_STORAGE_BYTES,
+    "storageDeletionPolicy": "never",
+    "storageDiskConfigVector": [{"name": "d1", "storeFilePath": "$OUT/store/store1.bin"}]
+  }
+}
+EOF
+
+echo "{\"contacts\": [$(join "${CONTACT_JSON[@]}")]}" > "$OUT/contact-plan.json"
+
+# What a local sending application uses to reach this node.
+cat > "$OUT/app-outduct.json" <<EOF
+{"outductConfigName": "to $SELF_NAME", "outductVector": [{"name": "to-node", "convergenceLayer": "stcp", "nextHopNodeId": $SELF, "remoteHostname": "127.0.0.1", "remotePort": 4556, "maxNumberOfBundlesInPipeline": 50, "maxSumOfBundleBytesInPipeline": 50000000, "keepAliveIntervalSeconds": 15}]}
+EOF
+
+{
+  echo "# member node receiver"
+  for name in "${NAMES[@]}"; do
+    if [[ -n "${IS_ENDPOINT[$name]:-}" ]]; then r="ipn:$((1000 + NUMBER[$name])).1"; else r="-"; fi
+    echo "$name ipn:${NUMBER[$name]} $r"
+  done
+} > "$OUT/members"
+echo "hdtn-node: this node is $SELF_NAME, ipn:$SELF; neighbours $(printf '%s ' $(printf '%s\n' "${!NEIGHBOURS[@]}" | sort))"
+sed 's/^/hdtn-node: /' "$OUT/members"
+# A bundle's lifetime must cover the time it may wait for a contact plus the
+# light time; HDTN's tools default to 1000 s, less than three Earth-Mars light
+# times, so the example names one day.
+echo "hdtn-node: send a file with: bpsendfile --use-bp-version-7 --bundle-lifetime-milliseconds=86400000 --my-uri-eid=ipn:$((2000 + SELF)).1 --dest-uri-eid=<receiver> --outducts-config-file=$OUT/app-outduct.json --file-or-folder-path=<file>"
+
+pids=()
+trap 'kill -TERM "${pids[@]}" 2>/dev/null; wait; exit 143' TERM INT
+if [[ -n "$ENDPOINT" ]]; then
+  cat > "$OUT/receiver-induct.json" <<EOF
+{"inductConfigName": "receiver ipn:$SINK", "inductVector": [{"name": "from-node", "convergenceLayer": "stcp", "boundPort": 4558, "numRxCircularBufferElements": 1000, "keepAliveIntervalSeconds": 15}]}
+EOF
+  mkdir -p "$OUT/received"
+  echo "hdtn-node: files sent to ipn:$SINK.1 are written to $OUT/received"
+  bpreceivefile --my-uri-eid="ipn:$SINK.1" --inducts-config-file="$OUT/receiver-induct.json" \
+    --save-directory="$OUT/received" &
+  pids+=($!)
+fi
+# The node's output also goes to $OUT/hdtn.log, so a terminal opened into the
+# node reads when HDTN declared each LTP link up ("LINK UP Event sent for
+# outductArrayIndex=<n>": outducts are the neighbours in name order). The
+# container log alone is outside the node.
+hdtn-one-process --hdtn-config-file="$OUT/hdtn.json" --contact-plan-file="$OUT/contact-plan.json" \
+  > >(tee -a "$OUT/hdtn.log") 2>&1 &
+pids+=($!)
+# Either process ending ends the node: a node without its receiver, or a
+# receiver without its node, is not the node the session declared. Both run
+# until stopped, so even a clean exit is reported as a failure.
+set +e
+wait -n "${pids[@]}"
+status=$?
+echo "hdtn-node: a process of $SELF_NAME (ipn:$SELF) exited with status $status" >&2
+kill -TERM "${pids[@]}" 2>/dev/null
+wait
+(( status != 0 )) || status=1
+exit "$status"

@@ -1,14 +1,13 @@
 # A QUIC server endpoint: one zero-capability container running upstream
-# picoquic (built and published by the independent nodalarc-picoquic
-# project, referenced here by pinned identity). No routing daemon; the
-# platform attaches the host to its LAN and gateway at wiring time. Serves
-# synthetic documents over QUIC on UDP 4433 with the image's demo
-# certificates.
+# picoquic (NodalArc's picoquic image, built from images/picoquic). No
+# routing daemon; the platform attaches the host to its LAN and gateway at
+# wiring time. Serves synthetic documents over QUIC on UDP 4433 with the
+# image's demo certificates.
 profile:
   id: picoquic-server
   display_name: QUIC server endpoint
-  registry: node01:5000
-  image: nodalarc-picoquic/picoquic@sha256:0ce1ef8b27da95fa286d6c1e0db76668323093c7046a44358499d335c7b2041a
+  registry: registry.example
+  image: nodalarc/picoquic@sha256:0000000000000000000000000000000000000000000000000000000000000000
   command:
   - /bin/bash
   - -c

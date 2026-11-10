@@ -120,8 +120,8 @@ if ! image_args_text="$(bash "$ROOT_DIR/scripts/na-images.sh" helm-image-args)";
 fi
 mapfile -t image_args <<< "$image_args_text"
 
-# Development workload image overrides map the two exact built-in
-# placeholder references to this tree's images, matching the Make-owned
+# Development workload image overrides map the exact placeholder references
+# of the shipped profiles to this tree's images, matching the Make-owned
 # image resolution of every other runtime image. The value is a JSON
 # object; helm --set parsing would read its braces and commas as list
 # syntax, so it travels as a generated values file. The chart default

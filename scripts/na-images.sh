@@ -44,6 +44,10 @@ IMAGE_TABLE=(
     "base|base|-|build,session|required|built"
     "frr|-|-|build,session|required|built"
     "probe|-|-|build,session|required|built"
+    "hdtn|-|-|build,session|required|built"
+    "ion|-|-|build,session|required|built"
+    "picoquic|-|-|build,session|required|built"
+    "ud3tn-tools|-|-|build,session|required|built"
     "ome|ome|deployment/ome|build,platform|required|built"
     "scheduler|scheduler|deployment/nodalarc-scheduler|build,platform|required|built"
     "node-agent|nodeAgent|daemonset/nodalarc-node-agent|build,platform|required|built"
@@ -194,13 +198,17 @@ workload_dev_overrides() {
     # non-reproducible. Raw JSON: it must NEVER pass through helm --set
     # parsing, where braces and commas are list syntax. It travels as a
     # generated values file (workload-dev-overrides-values).
+    # Every shipped profile names a tree-built image as
+    # registry.example/nodalarc/NAME@sha256:<zeros>.
     local zeros="0000000000000000000000000000000000000000000000000000000000000000"
-    local frr base
-    # Command substitutions run without errexit: every failure is checked.
-    frr="$(session_image_ref frr)" || exit 1
-    base="$(session_image_ref base)" || exit 1
-    printf '{"registry.example/nodalarc/frr@sha256:%s":"%s","registry.example/nodalarc/base@sha256:%s":"%s"}' \
-        "$zeros" "$frr" "$zeros" "$base"
+    local name ref entries=()
+    for name in frr base hdtn ion picoquic ud3tn-tools; do
+        # Command substitutions run without errexit: every failure is checked.
+        ref="$(session_image_ref "$name")" || exit 1
+        entries+=("\"registry.example/nodalarc/$name@sha256:$zeros\":\"$ref\"")
+    done
+    local IFS=,
+    printf '{%s}' "${entries[*]}"
 }
 
 workload_dev_overrides_values() {

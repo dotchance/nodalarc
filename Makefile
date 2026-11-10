@@ -215,7 +215,7 @@ _clear-build-cache:
 	@docker builder prune --filter type=source.local -f >/dev/null 2>&1 || true
 
 ensure-base-images:
-	@for logical in base frr probe; do \
+	@for logical in base frr probe $(STACK_IMAGES); do \
 		img=$$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash scripts/na-images.sh image-for-tag $$logical latest); \
 		if ! docker image inspect $$img >/dev/null 2>&1; then \
 			echo "[build] Base image $$img not found — building base images..."; \
@@ -224,7 +224,18 @@ ensure-base-images:
 		fi; \
 	done
 
-build-base-images: build-base build-frr build-probe ## Build infrastructure images (base, FRR, probe)
+# The session images that deliver an upstream program (HDTN, ION, picoquic, the
+# uD3TN tools). Each builds from images/NAME with that directory as its context.
+STACK_IMAGES := hdtn ion picoquic ud3tn-tools
+
+build-base-images: build-base build-frr build-probe ## Build session images (base, FRR, probe, the stacks)
+	@for name in $(STACK_IMAGES); do \
+		ref=$$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash scripts/na-images.sh image-for $$name) || exit 1; \
+		latest=$$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash scripts/na-images.sh image-for-tag $$name latest) || exit 1; \
+		echo "docker build images/$$name/ -> $$ref"; \
+		docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$$ref" -t "$$latest" images/$$name/ || exit 1; \
+		bash scripts/na-image-sbom.sh $$name "$$ref" "$$latest" || exit 1; \
+	done
 
 build-base:
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$(call IMAGE_REF,base)" -t "$(call IMAGE_REF_TAG,base,latest)" images/base/

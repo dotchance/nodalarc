@@ -1,0 +1,255 @@
+#!/bin/bash
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
+# ion-node: write one ION node's configuration and contact plan from its
+# environment, start the node (and, for an endpoint, its file receiver), and
+# stay in the foreground while every ION daemon runs.
+#
+# One environment describes a whole DTN network, and every node of the
+# network runs with the same one: each node finds itself as the network
+# member whose address is assigned to one of its own interfaces. So one
+# workload profile serves every node, and node numbers need no authoring.
+#
+# The node runs LTP over UDP to each DTN neighbour, the convergence layer
+# deep-space DTN uses: LTP keeps working across light-minute delays, where a
+# TCP convergence layer cannot open a connection. ION applications on the
+# node (bpsendfile, bprecvfile, bping, bpsource, bpsink) attach to the node
+# through its shared memory, so they run in the node's own container.
+#
+# Environment, every variable required; values are in ION's own units:
+#   ION_ADDR_<name>  the IPv4 address of each network member, <name> in
+#                    lower-case letters and digits
+#   ION_CONTACTS     the network's contacts, space separated, each
+#                    <a>-<b>:<OWLT_S>:<A_TO_B_BYTES_S>:<B_TO_A_BYTES_S> for one
+#                    pair of neighbours: the one-way light time in whole
+#                    seconds (an ionadmin range) and each direction's rate
+#                    in bytes per second (two ionadmin contacts); contact
+#                    graph routing computes routes over it
+#   ION_ENDPOINTS    the members that run a file receiver, space separated
+#   ION_LTP_SPAN     the LTP span parameters used toward every neighbour:
+#                    <max_export_sessions> <max_import_sessions>
+#                    <max_segment_size> <aggregation_size_threshold>
+#                    <aggregation_time_limit>, as ltpadmin's "a span" takes them
+#   ION_HEAP_WORDS   the SDR heap in 8-byte words (ionconfig heapWords): the
+#                    bundle storage held while contacts are down
+#
+# Numbering, the same on every node because every node sorts the same names:
+# member i (from 1, names sorted) is node ipn:i and LTP engine i. Files sent
+# to ipn:i.1 land in /run/ion/received on member i, named testfileN in
+# arrival order (bprecvfile's naming); a member's applications send from
+# ipn:i.2. Every node receives LTP on UDP 1113, ION's LTP port. Contacts run
+# from the node's start for ten years: the node learns whether a neighbour
+# is reachable from LTP itself. The node prints the numbering when it starts
+# and writes it to /run/ion/members.
+#
+# Everything else is ION's default: ionconfig takes only heapWords and the
+# working directory; spans take ION's default queuing latency.
+set -euo pipefail
+
+die() { echo "ion-node: $*" >&2; exit 1; }
+need() { [[ -n "${!1:-}" ]] || die "$1 is required"; }
+is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
+need ION_CONTACTS
+need ION_ENDPOINTS
+need ION_LTP_SPAN
+need ION_HEAP_WORDS
+is_uint "$ION_HEAP_WORDS" || die "ION_HEAP_WORDS must be a word count"
+read -r -a SPAN <<< "$ION_LTP_SPAN"
+(( ${#SPAN[@]} == 5 )) || die "ION_LTP_SPAN must hold five numbers, got '$ION_LTP_SPAN'"
+for v in "${SPAN[@]}"; do is_uint "$v" || die "ION_LTP_SPAN must hold five numbers, got '$ION_LTP_SPAN'"; done
+
+OUT=/run/ion
+mkdir -p "$OUT/received"
+# ION writes ion.log, its transaction log and bprecvfile's files into the
+# working directory; the image's root filesystem is read-only.
+cd "$OUT"
+
+# Members, numbered in name order.
+mapfile -t NAMES < <(compgen -e | sed -n 's/^ION_ADDR_//p' | sort)
+(( ${#NAMES[@]} > 0 )) || die "no ION_ADDR_<name> variables: the network has no members"
+declare -A NUMBER=() ADDR=()
+for i in "${!NAMES[@]}"; do
+  name=${NAMES[$i]}
+  [[ "$name" =~ ^[a-z0-9]+$ ]] || die "member name $name must be lower-case letters and digits"
+  var="ION_ADDR_$name"
+  addr=${!var}
+  [[ "$addr" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$var must be an IPv4 address, got $addr"
+  NUMBER[$name]=$((i + 1))
+  ADDR[$name]=$addr
+done
+
+# This node: the member whose address is one of this node's own.
+mapfile -t LOCAL < <(ip -o -4 addr show | awk '{split($4, a, "/"); print a[1]}')
+SELF_NAME=""
+for name in "${NAMES[@]}"; do
+  for local in "${LOCAL[@]}"; do
+    if [[ "${ADDR[$name]}" == "$local" ]]; then
+      [[ -z "$SELF_NAME" ]] || die "members $SELF_NAME and $name both have an address of this node"
+      SELF_NAME=$name
+    fi
+  done
+done
+[[ -n "$SELF_NAME" ]] || die "no member address is assigned here (local addresses: ${LOCAL[*]})"
+SELF=${NUMBER[$SELF_NAME]}
+
+declare -A IS_ENDPOINT=()
+for name in $ION_ENDPOINTS; do
+  [[ -n "${NUMBER[$name]:-}" ]] || die "endpoint $name is not a member"
+  IS_ENDPOINT[$name]=1
+done
+
+# Ten years, so that every contact ends before 2038 even where a time is 32 bits.
+HORIZON=+315360000
+CONTACTS=()
+declare -A NEIGHBOURS=() PAIRS=()
+for entry in $ION_CONTACTS; do
+  IFS=':' read -r pair owlt_s rate_ab rate_ba extra <<< "$entry"
+  [[ -z "${extra:-}" ]] || die "contact $entry has more than four fields"
+  IFS='-' read -r a b <<< "$pair"
+  [[ -n "${NUMBER[$a]:-}" && -n "${NUMBER[$b]:-}" ]] || die "contact $entry names a non-member"
+  [[ "$a" != "$b" ]] || die "contact $entry joins a member to itself"
+  for v in "$owlt_s" "$rate_ab" "$rate_ba"; do
+    is_uint "$v" || die "contact $entry: expected <a>-<b>:OWLT_S:A_TO_B_BYTES_S:B_TO_A_BYTES_S"
+  done
+  na=${NUMBER[$a]} nb=${NUMBER[$b]}
+  key="$(( na < nb ? na : nb ))-$(( na < nb ? nb : na ))"
+  [[ -z "${PAIRS[$key]:-}" ]] || die "contact list names the pair $a-$b twice"
+  PAIRS[$key]=1
+  CONTACTS+=("a contact +0 $HORIZON $na $nb $rate_ab" "a contact +0 $HORIZON $nb $na $rate_ba")
+  # A range cited lower node first declares both directions.
+  if (( na < nb )); then CONTACTS+=("a range +0 $HORIZON $na $nb $owlt_s")
+  else CONTACTS+=("a range +0 $HORIZON $nb $na $owlt_s"); fi
+  if [[ "$a" == "$SELF_NAME" ]]; then peer=$b; elif [[ "$b" == "$SELF_NAME" ]]; then peer=$a; else continue; fi
+  NEIGHBOURS[$peer]=1
+done
+(( ${#NEIGHBOURS[@]} > 0 )) || die "ION_CONTACTS gives $SELF_NAME no neighbour"
+mapfile -t PEERS < <(printf '%s\n' "${!NEIGHBOURS[@]}" | sort)
+
+printf 'heapWords %s\npathName %s\n' "$ION_HEAP_WORDS" "$OUT" > "$OUT/node.ionconfig"
+
+{
+  echo "1 $SELF $OUT/node.ionconfig"
+  echo "s"
+  printf '%s\n' "${CONTACTS[@]}"
+} > "$OUT/node.ionrc"
+
+echo "1" > "$OUT/node.ionsecrc"
+
+{
+  echo "1 $(( SPAN[0] * ${#PEERS[@]} ))"
+  for peer in "${PEERS[@]}"; do
+    echo "a span ${NUMBER[$peer]} ${SPAN[0]} ${SPAN[1]} ${SPAN[2]} ${SPAN[3]} ${SPAN[4]} 'udplso ${ADDR[$peer]}:1113'"
+  done
+  echo "a seat 'udplsi 0.0.0.0:1113'"
+  echo "s"
+} > "$OUT/node.ltprc"
+
+{
+  for peer in "${PEERS[@]}"; do echo "a plan ${NUMBER[$peer]} ltp/${NUMBER[$peer]}"; done
+} > "$OUT/node.ipnrc"
+
+{
+  echo "1"
+  echo "a scheme ipn 'ipnfw' 'ipnadminep'"
+  echo "a endpoint ipn:$SELF.0 x"
+  # Bundles for the file receiver wait in the node while no receiver runs.
+  echo "a endpoint ipn:$SELF.1 q"
+  echo "a endpoint ipn:$SELF.2 x"
+  echo "a protocol ltp"
+  echo "a induct ltp $SELF ltpcli"
+  for peer in "${PEERS[@]}"; do echo "a outduct ltp ${NUMBER[$peer]} ltpclo"; done
+  echo "r 'ipnadmin $OUT/node.ipnrc'"
+  echo "s"
+} > "$OUT/node.bprc"
+
+{
+  echo "# member node receiver"
+  for name in "${NAMES[@]}"; do
+    if [[ -n "${IS_ENDPOINT[$name]:-}" ]]; then r="ipn:${NUMBER[$name]}.1"; else r="-"; fi
+    echo "$name ipn:${NUMBER[$name]} $r"
+  done
+} > "$OUT/members"
+echo "ion-node: this node is $SELF_NAME, ipn:$SELF; neighbours ${PEERS[*]}"
+sed 's/^/ion-node: /' "$OUT/members"
+
+# Each admin program applies its file and exits; the daemons it starts stay.
+# An admin program reports a rejected command in ion.log and still exits 0,
+# so each layer is checked with its own startup test before the next starts.
+# The startup test ("t p <seconds>") exits 1 when the layer is up and 0 when
+# it is not: ionadmin.c, ltpadmin.c and bpadmin.c set the exit code to their
+# *_is_up() result.
+echo "t p 30" > "$OUT/startup.test"
+started() {
+  local status=0
+  "$1" "$OUT/startup.test" || status=$?
+  (( status == 1 ))
+}
+ionadmin "$OUT/node.ionrc"
+started ionadmin || die "ION did not start; see $OUT/ion.log"
+ionsecadmin "$OUT/node.ionsecrc"
+ltpadmin "$OUT/node.ltprc"
+started ltpadmin || die "LTP did not start; see $OUT/ion.log"
+bpadmin "$OUT/node.bprc"
+started bpadmin || die "BP did not start; see $OUT/ion.log"
+
+ENDPOINT=${IS_ENDPOINT[$SELF_NAME]:-}
+RECEIVER=""
+if [[ -n "$ENDPOINT" ]]; then
+  echo "ion-node: files sent to ipn:$SELF.1 are written to $OUT/received"
+  (cd "$OUT/received" && exec bprecvfile "ipn:$SELF.1") &
+  RECEIVER=$!
+fi
+# A bundle's lifetime must cover the time it may wait for a contact plus the
+# light time; bpsendfile defaults to 300 s, less than one Earth-Mars light
+# time at conjunction, so the example names one day.
+echo "ion-node: send a file with: bpsendfile ipn:$SELF.2 <receiver> <file> 0 86400"
+
+# The daemons the admin programs started were handed to this process when
+# their parents exited, so they are not children it can wait for. It records
+# them by name (ION's own process list) and checks each one every 5 s.
+mapfile -t ION_NAMES < <(grep -v '^#' /opt/ion/bin/ionprocesses.txt | grep -v '^[[:space:]]*$')
+declare -A IS_ION_NAME=()
+for n in "${ION_NAMES[@]}"; do IS_ION_NAME[$n]=1; done
+declare -A DAEMON=()
+for dir in /proc/[0-9]*; do
+  pid=${dir#/proc/}
+  [[ "$pid" != "$$" && "$pid" != "$RECEIVER" ]] || continue
+  comm=$(cat "$dir/comm" 2>/dev/null) || continue
+  [[ -n "${IS_ION_NAME[$comm]:-}" ]] && DAEMON[$pid]=$comm
+done
+(( ${#DAEMON[@]} > 0 )) || die "no ION daemon is running after startup"
+echo "ion-node: ION daemons: $(for p in "${!DAEMON[@]}"; do printf '%s ' "${DAEMON[$p]}"; done)"
+
+stop() { killm > /dev/null 2>&1; }
+# A daemon that ended stays a zombie until its parent reaps it, and a zombie
+# still answers kill -0; its state letter in /proc tells.
+alive() {
+  local stat
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  stat=${stat##*) }
+  [[ "${stat:0:1}" != "Z" ]]
+}
+trap 'stop; exit 143' TERM INT
+
+# Any daemon or the receiver ending ends the node: a node missing one is not
+# the node the session declared. All of them run until stopped, so even a
+# clean exit is reported as a failure.
+while true; do
+  for pid in "${!DAEMON[@]}"; do
+    if ! alive "$pid"; then
+      echo "ion-node: ${DAEMON[$pid]} (pid $pid) of $SELF_NAME (ipn:$SELF) exited; see $OUT/ion.log" >&2
+      [[ -f "$OUT/ion.log" ]] && tail -20 "$OUT/ion.log" >&2
+      stop
+      exit 1
+    fi
+  done
+  if [[ -n "$RECEIVER" ]] && ! alive "$RECEIVER"; then
+    wait "$RECEIVER" && status=0 || status=$?
+    echo "ion-node: the file receiver of $SELF_NAME (ipn:$SELF) exited with status $status" >&2
+    stop
+    exit 1
+  fi
+  sleep 5 &
+  wait $! || true
+done

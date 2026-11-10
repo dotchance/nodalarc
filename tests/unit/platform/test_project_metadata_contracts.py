@@ -154,7 +154,29 @@ def test_helm_chart_renderer_injects_project_version(tmp_path: Path) -> None:
     assert chart["appVersion"] == "0.4.2"
 
 
-_SOURCE_PATTERNS = ("*.py", "*.ts", "*.tsx", "*.js", "*.mjs", "*.sh", "*.css", "*.j2", "*.proto")
+_SOURCE_PATTERNS = (
+    "*.py",
+    "*.ts",
+    "*.tsx",
+    "*.js",
+    "*.mjs",
+    "*.sh",
+    "*.css",
+    "*.j2",
+    "*.proto",
+    # Build, deployment and workflow sources.
+    "Makefile",
+    "*Dockerfile",
+    "deploy/helm/*.yaml",
+    "deploy/helm/*.in",
+    "configs/platform.yaml",
+    "config.mk.example",
+    "pyproject.toml",
+    ".pre-commit-config.yaml",
+    ".github/*.yml",
+    "frontend/nginx.conf",
+    "frontend/index.html",
+)
 _SPDX_LINE = re.compile(r"SPDX-License-Identifier: (AGPL-3\.0-only(?: AND [A-Za-z0-9.-]+)*)\b")
 # AGPL-3.0 Section 7: a file under additional terms says where they are.
 _NOTICE_POINTER = "Additional terms under AGPL-3.0 Section 7 are in the NOTICE file."

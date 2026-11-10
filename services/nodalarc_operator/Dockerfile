@@ -1,3 +1,6 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 # K8s Operator container — watches ConstellationSpec CRD, manages sessions.
 #
 # Build context must be the repo root:

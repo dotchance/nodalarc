@@ -28,10 +28,11 @@ Additional terms (Section 7)
    Section 13 to offer users the source of the modified version.
 
 2. Marking of modified versions (Section 7(c)). A modified version must not be
-   presented as the original NodalArc. It must not use the name "NodalArc" as
-   its own name; it may say it is based on NodalArc. The attribution term 1
-   requires marks it as a modified version and satisfies the rest of this
-   term.
+   presented as the original NodalArc and must not use "NodalArc" as its
+   product name; it may say it is based on NodalArc. Identifiers inside the
+   software, such as package, module, image and API group names, are not its
+   product name and need not change. A modified version must be marked as
+   modified, and carrying the attribution required by term 1 satisfies that.
 
 3. Names of the author (Section 7(d)). This License grants no right to use the
    name or likeness of .chance (dotchance) to endorse or promote a modified

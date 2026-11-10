@@ -1,3 +1,6 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 # FRR is pinned to 10.6.2. FRR 10.7.0 added a zebra shortcut that skips the kernel write when a
 # route is re-sent with an unchanged next-hop group id. When a router's only link loses carrier,
 # the kernel deletes that group and the routes that use it without telling zebra. Zebra re-creates

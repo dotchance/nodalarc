@@ -1,6 +1,6 @@
 # NodalArc Contributor License Agreement
 
-Version 1.0
+Version 1.1, 2026-11-10
 
 This Contributor License Agreement ("Agreement") applies to any contribution
 you submit to NodalArc, including code, documentation, tests, examples,
@@ -71,7 +71,7 @@ required to accept, use, or distribute any Contribution.
 To accept this Agreement for a pull request, comment exactly:
 
 ```text
-I have read the NodalArc Contributor License Agreement and I agree to it.
+I have read the NodalArc Contributor License Agreement version 1.1 and I agree to it.
 ```
 
 By posting that comment on a pull request, you agree that this Agreement

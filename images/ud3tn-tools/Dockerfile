@@ -1,3 +1,6 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 # NodalArc uD3TN tools image: a generic AAP 2.0 client for uD3TN nodes.
 #
 # This image packages D3TN's ud3tn-utils Python tools (BSD-3-Clause OR

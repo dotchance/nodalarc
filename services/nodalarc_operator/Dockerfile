@@ -50,8 +50,9 @@ COPY adapters/ adapters/
 # Copy platform configuration and static catalog data used by the resolver.
 COPY configs/ configs/
 # Convert the ephemeris frame kernels for ANISE once, at build time, so the
-# running service loads only local, pinned, already-converted data.
-RUN python -m nodalarc.physics /app/configs/ephemerides
+# running service loads only local, pinned, already-converted data. -B keeps
+# the run from leaving Python bytecode caches in /app.
+RUN python -B -m nodalarc.physics /app/configs/ephemerides
 COPY catalog/ catalog/
 
 ENTRYPOINT ["kopf", "run", "-m", "nodalarc_operator"]

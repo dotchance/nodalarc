@@ -47,8 +47,9 @@ COPY services/ome/ services/ome/
 COPY catalog/ catalog/
 COPY configs/ephemerides/ configs/ephemerides/
 # Convert the ephemeris frame kernels for ANISE once, at build time, so the
-# running service loads only local, pinned, already-converted data.
-RUN python -m nodalarc.physics /app/configs/ephemerides
+# running service loads only local, pinned, already-converted data. -B keeps
+# the run from leaving Python bytecode caches in /app.
+RUN python -B -m nodalarc.physics /app/configs/ephemerides
 
 # Health probe port
 EXPOSE 8081

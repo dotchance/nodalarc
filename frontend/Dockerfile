@@ -1,7 +1,7 @@
 # VF container — React/Vite SPA served by nginx.
 #
 # Build context must be the frontend/ directory:
-#   docker build --build-arg BUILD_HASH=<commit> \
+#   docker build --build-arg BUILD_HASH=<commit> --build-context nodalarc-legal=. \
 #     -t nodalarc/visualization:latest frontend/
 #
 # Runtime config: VS_API_URL and WS_URL env vars are written to
@@ -54,7 +54,9 @@ EXPOSE 80
 ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["nginx", "-g", "daemon off;"]
 
-# NodalArc's license, its additional terms and the third-party notices go with
-# every image whose label names AGPL-3.0-only (AGPL-3.0 Sections 4 and 6). The
-# last instruction, so a change to them rebuilds no other layer.
+# NodalArc's license, its additional terms, the third-party notices and the
+# license texts they name (LICENSES/) go with every image whose label names
+# AGPL-3.0-only (AGPL-3.0 Sections 4 and 6). The last instructions, so a change
+# to them rebuilds no other layer.
 COPY --from=nodalarc-legal LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/doc/nodalarc/
+COPY --from=nodalarc-legal LICENSES/ /usr/share/doc/nodalarc/LICENSES/

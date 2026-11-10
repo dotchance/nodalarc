@@ -7,7 +7,7 @@
 # container runtime tools.
 #
 # Build context must be the repo root:
-#   docker build -f services/node_agent/Dockerfile -t nodalarc/node-agent:latest .
+#   docker build --build-context nodalarc-legal=. -f services/node_agent/Dockerfile -t nodalarc/node-agent:latest .
 
 FROM python:3.14-slim@sha256:5b3879b6f3cb77e712644d50262d05a7c146b7312d784a18eff7ff5462e77033
 ARG PROJECT_VERSION=0+unknown
@@ -52,7 +52,9 @@ COPY services/node_agent/ services/node_agent/
 
 ENTRYPOINT ["python", "-m", "node_agent"]
 
-# NodalArc's license, its additional terms and the third-party notices go with
-# every image whose label names AGPL-3.0-only (AGPL-3.0 Sections 4 and 6). The
-# last instruction, so a change to them rebuilds no other layer.
+# NodalArc's license, its additional terms, the third-party notices and the
+# license texts they name (LICENSES/) go with every image whose label names
+# AGPL-3.0-only (AGPL-3.0 Sections 4 and 6). The last instructions, so a change
+# to them rebuilds no other layer.
 COPY --from=nodalarc-legal LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/doc/nodalarc/
+COPY --from=nodalarc-legal LICENSES/ /usr/share/doc/nodalarc/LICENSES/

@@ -5,7 +5,7 @@
 # Static catalog data is baked into the image.
 #
 # Build context must be the repo root:
-#   docker build -f services/ome/Dockerfile -t nodalarc/ome:latest .
+#   docker build --build-context nodalarc-legal=. -f services/ome/Dockerfile -t nodalarc/ome:latest .
 
 FROM python:3.14-slim@sha256:5b3879b6f3cb77e712644d50262d05a7c146b7312d784a18eff7ff5462e77033
 ARG PROJECT_VERSION=0+unknown
@@ -56,7 +56,9 @@ EXPOSE 8081
 
 ENTRYPOINT ["python", "-m", "ome.main"]
 
-# NodalArc's license, its additional terms and the third-party notices go with
-# every image whose label names AGPL-3.0-only (AGPL-3.0 Sections 4 and 6). The
-# last instruction, so a change to them rebuilds no other layer.
+# NodalArc's license, its additional terms, the third-party notices and the
+# license texts they name (LICENSES/) go with every image whose label names
+# AGPL-3.0-only (AGPL-3.0 Sections 4 and 6). The last instructions, so a change
+# to them rebuilds no other layer.
 COPY --from=nodalarc-legal LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/doc/nodalarc/
+COPY --from=nodalarc-legal LICENSES/ /usr/share/doc/nodalarc/LICENSES/

@@ -30,7 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 CMD ["/bin/bash"]
 
-# NodalArc's license, its additional terms and the third-party notices go with
-# every image whose label names AGPL-3.0-only (AGPL-3.0 Sections 4 and 6). The
-# last instruction, so a change to them rebuilds no other layer.
+# NodalArc's license, its additional terms, the third-party notices and the
+# license texts they name (LICENSES/) go with every image whose label names
+# AGPL-3.0-only (AGPL-3.0 Sections 4 and 6). The last instructions, so a change
+# to them rebuilds no other layer.
 COPY --from=nodalarc-legal LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/doc/nodalarc/
+COPY --from=nodalarc-legal LICENSES/ /usr/share/doc/nodalarc/LICENSES/

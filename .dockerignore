@@ -9,12 +9,14 @@
 !services
 !build/runtime-constraints.txt
 !docs/ops/configuration-grammar.md
-# NodalArc's license, its additional terms and the third-party notices, which
-# every image whose label names AGPL-3.0-only carries. Images built from
-# another directory reach them through the named context nodalarc-legal.
+# NodalArc's license, its additional terms, the third-party notices and the
+# license texts those notices name, which every image whose label names
+# AGPL-3.0-only carries. Images built from another directory reach them
+# through the named context nodalarc-legal.
 !LICENSE
 !NOTICE
 !THIRD_PARTY_NOTICES.md
+!LICENSES
 
 # Inside the admitted directories, files that describe or build the code and
 # are not needed to run it.

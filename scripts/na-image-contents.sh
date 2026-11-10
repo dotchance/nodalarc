@@ -8,8 +8,8 @@
 # requires each image's SBOM: an SPDX document that names the component at the
 # version the image's own label states and lists at least one package. An
 # image whose license label names AGPL-3.0-only must carry the tree's LICENSE,
-# NOTICE and THIRD_PARTY_NOTICES.md. An image that carries the scanner is
-# refused.
+# NOTICE, THIRD_PARTY_NOTICES.md and every license text in LICENSES/. An image
+# that carries the scanner is refused.
 #
 # usage: na-image-contents.sh [IMAGE...]
 #
@@ -30,7 +30,7 @@ REFUSED='(^|/)(README[^/]*|Dockerfile)$|(^|/)(__pycache__|tests|\.git)(/|$)|\.(m
 # Where every image keeps its SBOM, and the build tool that must not ship.
 SBOM_PATH='nodalarc/sbom.spdx.json'
 LEGAL_DIR='usr/share/doc/nodalarc'
-LEGAL_FILES=(LICENSE NOTICE THIRD_PARTY_NOTICES.md)
+mapfile -t LEGAL_FILES < <(cd "$ROOT_DIR" && printf '%s\n' LICENSE NOTICE THIRD_PARTY_NOTICES.md LICENSES/*)
 SCANNER='(^|/)syft$'
 
 if [ "$#" -gt 0 ]; then

@@ -1,7 +1,7 @@
 <h1>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/nodalarc-lockup-tagline-blue-mint-on-black.png">
-    <img alt="NodalArc: orbital network emulation tools" src="docs/images/nodalarc-lockup-tagline-ink-on-white.png" width="420">
+    <img alt="NodalArc: orbital network emulation" src="docs/images/nodalarc-lockup-tagline-ink-on-white.png" width="420">
   </picture>
 </h1>
 

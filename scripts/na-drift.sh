@@ -92,6 +92,57 @@ else
 fi
 rows+="frr (session pods)|$(short_ref "${frr_tree:-?}")|$frr_shown|$frr_marker"$'\n'
 
+# Session pods get their images through the Operator's development override
+# map (placeholder -> image), which make install and make upgrade write and
+# make deploy-<service> leaves as it was. A map that names any image other
+# than this tree's session image would start the next session from an older
+# tree, so it is drift and the session gate refuses it. A tree whose session
+# images the registry does not hold cannot be checked, and is drift too.
+session_drift=0
+tree_map="$(bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides 2>/dev/null || true)"
+deployed_map="$(kubectl get deployment/nodalarc-operator -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="operator")].env[?(@.name=="WORKLOAD_DEV_IMAGE_OVERRIDES")].value}' \
+    2>/dev/null || true)"
+if ! session_rows="$(python3 - "$tree_map" "$deployed_map" <<'PY'
+import json
+import sys
+
+
+def short(ref):
+    tail = ref.rsplit("/", 1)[-1]
+    tail = tail.split(":", 1)[1] if ":" in tail.split("@", 1)[0] else tail
+    if "@sha256:" in tail:
+        tag, digest = tail.split("@sha256:", 1)
+        tail = f"{tag}@{digest[:12]}"
+    return tail
+
+
+tree_text, deployed_text = sys.argv[1], sys.argv[2]
+if not tree_text:
+    print("session images|?|-|DRIFT (the registry does not hold this tree's session images)")
+    sys.exit(1)
+tree = json.loads(tree_text)
+deployed = json.loads(deployed_text) if deployed_text else {}
+stale = False
+for placeholder, ref in tree.items():
+    name = placeholder.rsplit("/", 1)[-1].split("@", 1)[0]
+    shown = deployed.get(placeholder)
+    if shown is None:
+        marker, shown_text = "DRIFT (the Operator has no image for it)", "absent"
+    elif shown != ref:
+        marker, shown_text = "DRIFT", short(shown)
+    else:
+        marker, shown_text = "ok", short(shown)
+    stale = stale or marker != "ok"
+    print(f"{name} (session image)|{short(ref)}|{shown_text}|{marker}")
+sys.exit(1 if stale else 0)
+PY
+)"; then
+    session_drift=1
+    drifted=1
+fi
+rows+="$session_rows"$'\n'
+
 if [ "$CHECK_MODE" = "--check" ]; then
     if [ "$drifted" -ne 0 ]; then
         echo "Platform drift detected — the cluster is not running this tree's images:" >&2
@@ -109,5 +160,9 @@ echo "Image drift (tree vs deployed):"
 } | column -t -s '|'
 if [ "$drifted" -ne 0 ]; then
     echo ""
-    echo "DRIFT present. Next: make deploy-<service> (one service) or make build && make load && make upgrade (all)."
+    if [ "$session_drift" -ne 0 ]; then
+        echo "DRIFT present. Session images move only with make upgrade. Next: make build && make load && make upgrade."
+    else
+        echo "DRIFT present. Next: make deploy-<service> (one service) or make build && make load && make upgrade (all)."
+    fi
 fi

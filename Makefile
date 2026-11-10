@@ -322,7 +322,7 @@ session: ## Start a session (DEFAULT_SESSION=...); refuses a drifted platform
 	@MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' bash scripts/na-drift.sh --check || { \
 		echo ""; \
 		echo "[session] REFUSED: the platform is not running this tree's images."; \
-		echo "[session] Next: make deploy-<service> or make build && make load && make upgrade."; \
+		echo "[session] Next: make deploy-<service> for a drifted service; make build && make load && make upgrade for drifted session images or everything."; \
 		exit 1; \
 	}
 	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' bash scripts/na-session.sh

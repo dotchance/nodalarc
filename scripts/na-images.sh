@@ -259,6 +259,7 @@ Commands:
   resource-for NAME
   list-platform-resources
   helm-image-args
+  workload-dev-overrides
   workload-dev-overrides-values
 EOF
 }
@@ -321,6 +322,7 @@ case "$command" in
         ;;
     list-platform-resources) list_platform_resources ;;
     helm-image-args) helm_image_args ;;
+    workload-dev-overrides) workload_dev_overrides ;;
     workload-dev-overrides-values) workload_dev_overrides_values ;;
     -h|--help|help) usage ;;
     *)

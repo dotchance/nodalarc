@@ -14,6 +14,13 @@
   font-size: var(--font-size-sm);
 }
 
+.topbar-logo {
+  display: block;
+  height: 28px;
+  width: auto;
+  flex: none;
+}
+
 .topbar-session {
   font-family: var(--font-ui);
   font-weight: var(--font-weight-semibold);

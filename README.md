@@ -1,4 +1,9 @@
-# NodalArc
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="frontend/public/nodalarc-lockup.svg">
+    <img alt="NodalArc" src="docs/images/nodalarc-lockup-ink-on-white.svg" width="420">
+  </picture>
+</h1>
 
 NodalArc is an emulator for space networks. It runs real routers and real protocol software inside a moving model of Earth orbit, the Moon and Mars, and you drive all of it from a web browser.
 

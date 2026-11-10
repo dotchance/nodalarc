@@ -104,6 +104,11 @@ export function ShortcutHelp({ onClose, viewMode }: ShortcutHelpProps) {
             Notices of AGPL-3.0 Section 5(d). */}
         <footer className="help-about" data-testid="about-notices">
           <h3>About</h3>
+          <img
+            className="help-about-logo"
+            src={`${import.meta.env.BASE_URL}nodalarc-lockup.svg`}
+            alt="NodalArc"
+          />
           <p>
             <strong>NodalArc</strong> by .chance (dotchance),{" "}
             <a href={SOURCE_URL} target="_blank" rel="noreferrer">

@@ -155,6 +155,7 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
 
   return (
     <div className="area-topbar topbar">
+      <img className="topbar-logo" src={`${import.meta.env.BASE_URL}nodalarc-icon.svg`} alt="NodalArc" />
       <button
         onClick={onOpenCatalog}
         disabled={switching}

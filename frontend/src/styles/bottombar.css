@@ -149,6 +149,7 @@
   color: var(--text-dim);
 }
 
+.help-about-logo { display: block; width: 280px; height: auto; margin: 0 0 var(--space-4); }
 .help-about p { margin: 0 0 var(--space-2); }
 .help-about p:last-child { margin-bottom: 0; }
 .help-about strong { color: var(--text-primary); }

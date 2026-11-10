@@ -16,8 +16,7 @@
     "@xterm/xterm": "^6.0.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "three": "0.172.0",
-    "troika-three-text": "^0.52.4"
+    "three": "0.172.0"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",

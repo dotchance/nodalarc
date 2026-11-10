@@ -96,14 +96,21 @@ rows+="frr (session pods)|$(short_ref "${frr_tree:-?}")|$frr_shown|$frr_marker"$
 # map (placeholder -> image), which make install and make upgrade write and
 # make deploy-<service> leaves as it was. A map that names any image other
 # than this tree's session image would start the next session from an older
-# tree, so it is drift and the session gate refuses it. A tree whose session
-# images the registry does not hold cannot be checked, and is drift too.
+# tree, so it is drift and the session gate refuses it. A tree map that cannot
+# be computed (the registry does not answer or holds no image at the tree's
+# tag) leaves nothing checked, so it is drift too, and its error is shown.
 session_drift=0
-tree_map="$(bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides 2>/dev/null || true)"
+tree_map_error="$(mktemp)"
+if [ -z "$tree_map_error" ] || [ ! -f "$tree_map_error" ]; then
+    echo "Platform drift cannot be checked: could not create a scratch file." >&2
+    exit 1
+fi
+trap 'rm -f -- "$tree_map_error"' EXIT
+tree_map="$(bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides 2>"$tree_map_error" || true)"
 deployed_map="$(kubectl get deployment/nodalarc-operator -n "$NAMESPACE" \
     -o jsonpath='{.spec.template.spec.containers[?(@.name=="operator")].env[?(@.name=="WORKLOAD_DEV_IMAGE_OVERRIDES")].value}' \
     2>/dev/null || true)"
-if ! session_rows="$(python3 - "$tree_map" "$deployed_map" <<'PY'
+if ! session_rows="$(python3 - "$tree_map" "$deployed_map" "$(tr '\n' ' ' < "$tree_map_error")" <<'PY'
 import json
 import sys
 
@@ -117,9 +124,9 @@ def short(ref):
     return tail
 
 
-tree_text, deployed_text = sys.argv[1], sys.argv[2]
+tree_text, deployed_text, tree_error = sys.argv[1], sys.argv[2], sys.argv[3].strip()
 if not tree_text:
-    print("session images|?|-|DRIFT (the registry does not hold this tree's session images)")
+    print(f"session images|?|-|DRIFT (could not compute this tree's session images: {tree_error})")
     sys.exit(1)
 tree = json.loads(tree_text)
 deployed = json.loads(deployed_text) if deployed_text else {}

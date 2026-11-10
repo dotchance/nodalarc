@@ -23,6 +23,12 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+# The build serves NodalArc's LICENSE, NOTICE and third-party notices under
+# legal/, and reads the license texts the repository supplies for packages that
+# ship none (LICENSES/npm). It reads them from the frontend directory's parent,
+# which is / in this stage.
+COPY --from=nodalarc-legal LICENSE NOTICE THIRD_PARTY_NOTICES.md /
+COPY --from=nodalarc-legal LICENSES/npm/ /LICENSES/npm/
 RUN npm run build
 
 FROM nginx:alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
@@ -37,7 +43,7 @@ LABEL org.opencontainers.image.title="NodalArc Visualization" \
       org.opencontainers.image.source="https://github.com/dotchance/nodalarc" \
       org.opencontainers.image.url="https://nodal.asmolab.net" \
       org.opencontainers.image.documentation="https://github.com/dotchance/nodalarc" \
-      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      org.opencontainers.image.licenses="AGPL-3.0-only AND MIT AND ISC AND OFL-1.1" \
       org.opencontainers.image.version="${PROJECT_VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}"

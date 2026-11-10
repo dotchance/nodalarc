@@ -229,9 +229,11 @@ def test_every_license_statement_names_the_same_license() -> None:
     citation = yaml.safe_load((ROOT / "CITATION.cff").read_text(encoding="utf-8"))
     package = json.loads((ROOT / "frontend/package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((ROOT / "frontend/package-lock.json").read_text(encoding="utf-8"))
-    # An image that delivers an upstream program also names that program's
-    # license in its label; the label of every other image names NodalArc's.
+    # An image that delivers an upstream program, or a page bundling npm
+    # packages, also names those licenses in its label; the label of every
+    # other image names NodalArc's alone.
     upstream_program_images = {
+        "frontend/Dockerfile",
         "images/frr/Dockerfile",
         "images/hdtn/Dockerfile",
         "images/ion/Dockerfile",

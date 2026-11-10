@@ -182,6 +182,13 @@ software. The table below is the source-tree baseline for current direct and
 known transitive package licenses. Release artifacts should still include a
 generated dependency license report for the exact artifact being distributed.
 
+The web page carries that report for its bundle: the build writes the name,
+version, license and shipped license text of every npm package the bundle holds
+to `legal/third-party-licenses.txt`, which the page serves and its About section
+links. A package that ships no license file has its text in `LICENSES/npm/`,
+named by package and version. The Python service images keep each installed
+package's own license files.
+
 For dependencies that offer more than one license, NodalArc uses the following
 license election when building and distributing project artifacts:
 

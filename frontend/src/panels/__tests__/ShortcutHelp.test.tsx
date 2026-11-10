@@ -45,8 +45,10 @@ describe("ShortcutHelp — About notices", () => {
     );
     expect(links).toEqual({
       "https://github.com/dotchance/nodalarc": "https://github.com/dotchance/nodalarc",
-      License: "https://github.com/dotchance/nodalarc/blob/main/LICENSE",
-      Notice: "https://github.com/dotchance/nodalarc/blob/main/NOTICE",
+      License: "/legal/LICENSE.txt",
+      Notice: "/legal/NOTICE.txt",
+      "Third-party notices": "/legal/THIRD_PARTY_NOTICES.txt",
+      "Third-party licenses": "/legal/third-party-licenses.txt",
       "Source code": "https://github.com/dotchance/nodalarc",
     });
   });

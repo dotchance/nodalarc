@@ -9,7 +9,10 @@
 # requires each image's SBOM: an SPDX document that names the component at the
 # version the image's own label states and lists at least one package. An
 # image whose license label names AGPL-3.0-only must carry the tree's LICENSE,
-# NOTICE, THIRD_PARTY_NOTICES.md and every license text in LICENSES/. An image
+# NOTICE, THIRD_PARTY_NOTICES.md and every license text in LICENSES/. A page
+# image (it serves index.html) must also serve the tree's LICENSE, NOTICE and
+# THIRD_PARTY_NOTICES.md and the license of each bundled npm package under
+# legal/, and its label must name every license those packages use. An image
 # that carries the scanner is refused.
 #
 # usage: na-image-contents.sh [IMAGE...]
@@ -31,7 +34,10 @@ REFUSED='(^|/)(README[^/]*|Dockerfile)$|(^|/)(__pycache__|tests|\.git)(/|$)|\.(m
 # Where every image keeps its SBOM, and the build tool that must not ship.
 SBOM_PATH='nodalarc/sbom.spdx.json'
 LEGAL_DIR='usr/share/doc/nodalarc'
-mapfile -t LEGAL_FILES < <(cd "$ROOT_DIR" && printf '%s\n' LICENSE NOTICE THIRD_PARTY_NOTICES.md LICENSES/*)
+mapfile -t LEGAL_FILES < <(cd "$ROOT_DIR" && printf '%s\n' LICENSE NOTICE THIRD_PARTY_NOTICES.md && find LICENSES -type f | sort)
+PAGE_INDEX='usr/share/nginx/html/index.html'
+SERVED_LEGAL_DIR='usr/share/nginx/html/legal'
+SERVED_LEGAL_FILES=(LICENSE:LICENSE.txt NOTICE:NOTICE.txt THIRD_PARTY_NOTICES.md:THIRD_PARTY_NOTICES.txt)
 SCANNER='(^|/)syft$'
 
 if [ "$#" -gt 0 ]; then
@@ -95,6 +101,35 @@ print(*fields, len(doc.get("packages", [])) - 1)
                 legal+=("/$LEGAL_DIR/$name differs from the tree's $name")
             fi
         done
+    fi
+    if printf '%s\n' "$listing" | grep -qx "$PAGE_INDEX"; then
+        notices="$notices; page serves legal/"
+        for pair in "${SERVED_LEGAL_FILES[@]}"; do
+            name="${pair%%:*}"
+            served="$SERVED_LEGAL_DIR/${pair#*:}"
+            if ! carried="$(docker cp "$container:/$served" - 2>/dev/null | tar -xO | sha256sum)"; then
+                legal+=("no /$served")
+            elif [ "$carried" != "$(sha256sum < "$ROOT_DIR/$name")" ]; then
+                legal+=("/$served differs from the tree's $name")
+            fi
+        done
+        if ! bundled="$(docker cp "$container:/$SERVED_LEGAL_DIR/third-party-licenses.txt" - 2>/dev/null | tar -xO)" \
+            || [ -z "$bundled" ]; then
+            legal+=("no /$SERVED_LEGAL_DIR/third-party-licenses.txt")
+        elif ! unnamed="$(python3 -c '
+import re, sys
+label = set(sys.argv[1].split())
+used = set()
+for expression in re.findall(r"^==== \S+ \S+ \((.+)\) ====$", sys.stdin.read(), re.M):
+    used.update(t for t in re.split(r"[\s()]+", expression) if t and t not in ("AND", "OR", "WITH"))
+if not used:
+    sys.exit("names no package")
+print(" ".join(sorted(used - label)))
+' "$licenses" <<< "$bundled")"; then
+            legal+=("/$SERVED_LEGAL_DIR/third-party-licenses.txt names no package")
+        elif [ -n "$unnamed" ]; then
+            legal+=("its license label does not name $unnamed, which bundled packages use")
+        fi
     fi
     docker rm "$container" >/dev/null
     count=0

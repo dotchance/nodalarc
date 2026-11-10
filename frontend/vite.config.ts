@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 import { defineConfig } from "vite";
+import { legalNotices } from "./legalNotices";
 
 function requiredBuildHash(command: string): string {
   const buildHash = process.env.VITE_BUILD_HASH?.trim();
@@ -29,8 +30,14 @@ export default defineConfig(({ command }) => {
       }
     : undefined;
 
+  const notices = legalNotices();
+
   return {
     envPrefix: "VITE_",
+    plugins: [notices.collect(), notices.emit],
+    worker: {
+      plugins: () => [notices.collect()],
+    },
     define: {
       __BUILD_HASH__: JSON.stringify(buildHash),
       __BUILD_TIME__: JSON.stringify(new Date().toISOString().substring(0, 19)),

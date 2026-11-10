@@ -14,6 +14,14 @@ import { Button } from "../ui/Button";
 import type { ViewMode } from "../types";
 
 const SOURCE_URL = "https://github.com/dotchance/nodalarc";
+// The page serves its own legal notices (frontend/legalNotices.ts), so the
+// copies linked here are the ones that came with the running version.
+const LEGAL_LINKS: Array<[string, string]> = [
+  ["License", "legal/LICENSE.txt"],
+  ["Notice", "legal/NOTICE.txt"],
+  ["Third-party notices", "legal/THIRD_PARTY_NOTICES.txt"],
+  ["Third-party licenses", "legal/third-party-licenses.txt"],
+];
 
 const THEME_LABELS: Record<ThemeName, string> = {
   "mission-light": "Mission Light",
@@ -110,14 +118,14 @@ export function ShortcutHelp({ onClose, viewMode }: ShortcutHelpProps) {
             warranty.
           </p>
           <p>
-            <a href={`${SOURCE_URL}/blob/main/LICENSE`} target="_blank" rel="noreferrer">
-              License
-            </a>
-            {" · "}
-            <a href={`${SOURCE_URL}/blob/main/NOTICE`} target="_blank" rel="noreferrer">
-              Notice
-            </a>
-            {" · "}
+            {LEGAL_LINKS.map(([label, file]) => (
+              <span key={file}>
+                <a href={`${import.meta.env.BASE_URL}${file}`} target="_blank" rel="noreferrer">
+                  {label}
+                </a>
+                {" · "}
+              </span>
+            ))}
             <a href={SOURCE_URL} target="_blank" rel="noreferrer">
               Source code
             </a>

@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Kubernetes objects as the API server reports them, kept current by LIST then WATCH.
 
 One LIST establishes the set, then a WATCH from the list's resourceVersion

@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """A recorded session's history is what the session showed while it ran.
 
 A user who deploys with "Record session history" reviews the run later. The link events NodalArc

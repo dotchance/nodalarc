@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Write what the Builder receives when it opens and compiles each shipped session.
 
 For every session in catalog/nodalarc/sessions the Builder's open and compile run in-process,

@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """The network namespace that holds every emulated LAN bridge on a server.
 
 An emulated LAN is an emulated site LAN or a satellite bus. On each server,

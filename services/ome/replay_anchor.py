@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Bounded-replay anchor conversions between OME state and the wire model.
 
 Recovery replays history to rebuild in-memory state; the anchor captures

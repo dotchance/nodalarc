@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Body-sample windows: the grid, values against SPICE, and the interpolation
 error at the sample spacing for every supported body."""
 

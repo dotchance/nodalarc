@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 from pathlib import Path
 
 import pytest

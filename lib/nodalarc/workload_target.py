@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The primary workload target of one session node: its pod and container.
 
 The Operator composes every session pod and is the only authority for which

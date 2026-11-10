@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** LinkBatch buffer behaviour: ISL = 16-segment bowed arc, ground = 1 straight segment,
  *  NaN = hidden (inactive / toggled-off / unresolved), classification by link_type. The
  *  injectable position source lets us assert exact buffer contents without a renderer. */

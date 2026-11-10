@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Obstruction of link paths by every session body and by the solar disk.
 
 A signal's path runs from the transmitter at emission to the receiver at arrival. Each body is

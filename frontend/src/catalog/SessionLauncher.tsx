@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Session launcher: user and shipped catalog sessions as dense source-aware
  *  rows, deployed via the session switch, plus raw-YAML file deploy. Sessions
  *  are authored in the Session Builder, which the rail opens.

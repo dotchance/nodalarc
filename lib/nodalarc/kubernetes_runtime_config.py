@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The ConfigMap codec for ordinary-file catalog uploads, and the runtime reader over it.
 
 One upload is one ConfigMap per catalog file: the upload label, the catalog

@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Deterministic, behavior-focused projections of resolved session truth.
 
 The projection is a characterization contract, not authored configuration and

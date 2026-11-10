@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Orbit-epoch anchoring: elements are a photograph at a declared instant.
 
 The dt propagation model requires elements valid at the pacing epoch.

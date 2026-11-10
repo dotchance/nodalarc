@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Focused contracts for the stateless canonical-to-visual inverse."""
 
 from __future__ import annotations

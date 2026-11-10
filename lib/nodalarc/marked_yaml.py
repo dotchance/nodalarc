@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """YAML decoding with JSON-pointer source locations for authoring diagnostics."""
 
 from __future__ import annotations

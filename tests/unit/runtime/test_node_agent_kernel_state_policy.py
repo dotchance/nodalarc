@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Kernel state under a link's names: create, reuse, or refuse, at the one owner."""
 
 from __future__ import annotations

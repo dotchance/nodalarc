@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Execute Node Agent operation plans with proof and rollback evidence."""
 
 from __future__ import annotations

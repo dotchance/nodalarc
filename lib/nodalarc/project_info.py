@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Project attribution and build metadata shared by API and tooling surfaces."""
 
 from __future__ import annotations
@@ -18,8 +18,11 @@ PROJECT_AUTHOR = ".chance (dotchance)"
 PROJECT_COPYRIGHT = "Copyright 2024-2026 .chance (dotchance)"
 PROJECT_SOURCE_URL = "https://github.com/dotchance/nodalarc"
 PROJECT_URL = "https://nodal.asmolab.net"
-PROJECT_LICENSE = "Apache-2.0"
-PROJECT_NOTICE = "See NOTICE and THIRD_PARTY_NOTICES.md."
+PROJECT_LICENSE = "AGPL-3.0-only"
+PROJECT_NOTICE = (
+    "Additional terms under AGPL-3.0 Section 7 are in NOTICE; "
+    "third-party notices are in THIRD_PARTY_NOTICES.md."
+)
 UNKNOWN_VERSION = "0.0.0+unknown"
 UNKNOWN_BUILD_VALUE = "unknown"
 

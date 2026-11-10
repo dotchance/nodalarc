@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Project metadata consistency contracts."""
 
 from __future__ import annotations
@@ -149,3 +151,71 @@ def test_helm_chart_renderer_injects_project_version(tmp_path: Path) -> None:
     assert result.stdout.strip() == str(output_chart)
     assert chart["version"] == "0.4.2"
     assert chart["appVersion"] == "0.4.2"
+
+
+_SOURCE_PATTERNS = ("*.py", "*.ts", "*.tsx", "*.js", "*.mjs", "*.sh", "*.css", "*.j2", "*.proto")
+_SPDX_LINE = re.compile(r"SPDX-License-Identifier: (AGPL-3\.0-only(?: AND [A-Za-z0-9.-]+)*)\b")
+
+
+def _tracked_files(*patterns: str) -> list[str]:
+    result = subprocess.run(
+        ["git", "ls-files", "--", *patterns],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return result.stdout.split()
+
+
+def test_every_tracked_source_file_names_the_project_license() -> None:
+    # The license of a file is read from its own header (REUSE practice), so a
+    # file without one is unlicensed in the eyes of every tool that scans it.
+    missing = []
+    for name in _tracked_files(*_SOURCE_PATTERNS):
+        head = "\n".join((ROOT / name).read_text(encoding="utf-8").splitlines()[:6])
+        if project_info.PROJECT_COPYRIGHT not in head or not _SPDX_LINE.search(head):
+            missing.append(name)
+    assert missing == []
+
+
+def test_every_license_statement_names_the_same_license() -> None:
+    license_id = project_info.PROJECT_LICENSE
+    citation = yaml.safe_load((ROOT / "CITATION.cff").read_text(encoding="utf-8"))
+    package = json.loads((ROOT / "frontend/package.json").read_text(encoding="utf-8"))
+    package_lock = json.loads((ROOT / "frontend/package-lock.json").read_text(encoding="utf-8"))
+    # An image that delivers an upstream program also names that program's
+    # license in its label; the label of every other image names NodalArc's.
+    upstream_program_images = {
+        "images/frr/Dockerfile",
+        "images/hdtn/Dockerfile",
+        "images/ion/Dockerfile",
+        "images/picoquic/Dockerfile",
+        "images/ud3tn-tools/Dockerfile",
+    }
+    labels = {
+        name: re.findall(
+            r'org\.opencontainers\.image\.licenses="([^"]+)"',
+            (ROOT / name).read_text(encoding="utf-8"),
+        )
+        for name in _tracked_files("*Dockerfile")
+        if name not in upstream_program_images
+    }
+
+    assert license_id == "AGPL-3.0-only"
+    assert citation["license"] == license_id
+    assert package["license"] == license_id
+    assert package_lock["packages"][""]["license"] == license_id
+    assert labels and all(found == [license_id] for found in labels.values()), labels
+    assert (
+        (ROOT / "LICENSE")
+        .read_text(encoding="utf-8")
+        .lstrip()
+        .startswith(
+            "GNU AFFERO GENERAL PUBLIC LICENSE\n                       Version 3, 19 November 2007"
+        )
+    )
+    assert "GNU Affero General Public License, version 3 only" in (ROOT / "NOTICE").read_text(
+        encoding="utf-8"
+    )

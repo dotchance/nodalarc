@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** L1: the canonical family pill. Tone comes from the single FAMILY_TONE source. */
 
 import { FAMILY_TONE, type Family } from "../families";

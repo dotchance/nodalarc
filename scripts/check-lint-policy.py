@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Guardrail for lint policy drift.
 
 This exists because the easy way around a lint failure is to weaken linting.

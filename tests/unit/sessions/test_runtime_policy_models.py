@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Tests for runtime policy helpers that are not persisted session roots."""
 
 from datetime import UTC, datetime

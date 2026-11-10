@@ -1,3 +1,5 @@
+/* Copyright 2024-2026 .chance (dotchance)
+   SPDX-License-Identifier: AGPL-3.0-only */
 /* Design tokens are injected by tokens.ts via applyTheme()
    which runs synchronously before React createRoot().
    This file is kept as an import target but defines no values —

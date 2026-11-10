@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """The one-way delays a link between two endpoints can have over a whole session.
 
 The range is bounded once, from facts that hold at every sim time a session can reach, seeks

@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Filesystem-backed scoped catalog repository with atomic generations."""
 
 from __future__ import annotations

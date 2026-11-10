@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Client-visible refusal messages carry the declared inputs, never host details."""
 
 from pathlib import Path

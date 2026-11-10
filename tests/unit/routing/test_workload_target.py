@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The primary workload target: published by the Operator, read one way."""
 
 from __future__ import annotations

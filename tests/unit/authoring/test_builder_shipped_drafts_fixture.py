@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The Builder fixtures the frontend tests render are what VS-API answers today.
 
 `frontend/src/builder/__tests__/fixtures/shipped/<session>.json` holds, per shipped session, the

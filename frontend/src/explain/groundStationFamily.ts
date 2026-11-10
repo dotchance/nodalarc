@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Default-state ground-station family — the canonical {@link Family} for a GS glyph on the globe
  * when NOTHING is selected, derived from the snapshot alone (active links + actuation notices),

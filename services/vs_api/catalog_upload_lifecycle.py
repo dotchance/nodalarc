@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Protection and garbage collection for ordinary catalog YAML uploads."""
 
 from __future__ import annotations

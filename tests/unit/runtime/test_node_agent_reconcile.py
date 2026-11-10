@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The cleaner's entry point, run as the teardown runs it."""
 
 from __future__ import annotations

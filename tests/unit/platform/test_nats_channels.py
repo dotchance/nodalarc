@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The NATS subject registry: one owner for every root, subject, wildcard and stream."""
 
 from __future__ import annotations

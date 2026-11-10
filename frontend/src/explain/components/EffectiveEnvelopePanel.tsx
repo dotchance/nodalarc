@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * L2: the combined envelope a user cannot infer by eye — configured vs effective
  * floor and the dead-knob callout (e.g. a 25 deg mask made non-binding by a

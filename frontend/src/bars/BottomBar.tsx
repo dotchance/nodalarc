@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Bottom bar — link/node counts, convergence, history recording, WS status, build provenance.
  *  The build hash line is part of the deploy drift-gate workflow — keep it. */
 

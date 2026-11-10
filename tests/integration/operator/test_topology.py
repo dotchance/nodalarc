@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Links come and go as the sky moves, and NodalArc keeps showing the truth afterward.
 
 Change of topology is the normal condition of a session. The test lets the sky move, then asks

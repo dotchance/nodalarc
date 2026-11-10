@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """The workload adapter contract: neutral per-node facts in, native config out.
 
 Core owns this contract and the selection of an adapter per node; it never

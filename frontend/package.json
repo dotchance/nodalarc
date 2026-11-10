@@ -1,7 +1,7 @@
 {
   "name": "nodalarc-visualization",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "VITE_BUILD_HASH=dev vite",

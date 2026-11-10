@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// SPDX-License-Identifier: AGPL-3.0-only
 /** The Builder's anatomy guide says of every shipped session what the backend resolved.
  *
  * fixtures/shipped holds, per shipped session, the parts of the compile result the Builder

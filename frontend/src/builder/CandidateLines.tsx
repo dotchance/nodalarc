@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Candidate-pair lines — the builder's link-rule preview overlay.
  *
  *  Draws straight lines between pair members using the same per-frame

@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """The packet limit of every link delay queue, and the rate shaper's burst, for both link classes.
 
 The experiment's terminal files state each terminal's rate and OME states each direction's delay.

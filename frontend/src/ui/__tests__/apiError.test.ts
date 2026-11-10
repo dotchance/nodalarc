@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** One error-message policy: the envelope's `message` (or a legacy route's
  *  `error`) reaches the user verbatim, with a status fallback for a
  *  non-envelope body and a named constant for a network failure that carries

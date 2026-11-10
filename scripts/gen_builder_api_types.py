@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Generate Builder application-contract TypeScript from Pydantic schemas.
 
 The emitted types describe browser/VS-API workflow DTOs only. They are not a
@@ -605,6 +607,8 @@ def _render_definition(
 
 
 _HEADER = [
+    "// Copyright 2024-2026 .chance (dotchance)",
+    "// SPDX-License-Identifier: AGPL-3.0-only",
     "// GENERATED FILE — DO NOT EDIT BY HAND.",
     "// Sources of truth: backend Pydantic application contracts in",
     "// lib/nodalarc/models.",

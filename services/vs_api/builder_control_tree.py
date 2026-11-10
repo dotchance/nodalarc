@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Build editable graphical controls directly from canonical configuration models."""
 
 from __future__ import annotations

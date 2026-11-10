@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """NodalArc never reports a link up when the Node Agent could not prove the kernel state.
 
 Why a stand-in: the Node Agent answers `dirty_kernel` when a kernel write or its proof failed part

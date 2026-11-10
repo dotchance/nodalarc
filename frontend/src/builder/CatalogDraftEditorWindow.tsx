@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Backend-owned graphical and YAML catalog component editing. */
 
 import { useCallback, useEffect, useRef, useState } from "react";

@@ -7,7 +7,7 @@ authors:
   - name: ".chance (dotchance)"
 repository-code: "https://github.com/dotchance/nodalarc"
 url: "https://nodal.asmolab.net"
-license: "Apache-2.0"
+license: "AGPL-3.0-only"
 keywords:
   - satellite networking
   - orbital routing

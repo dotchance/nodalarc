@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Netem delay in the kernel's 64-bit attribute: the request the Node Agent encodes and the dump
 it decodes, against a dump the kernel produced."""
 

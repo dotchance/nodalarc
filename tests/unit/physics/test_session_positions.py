@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Common-frame node positions for a resolved session, against SPICE.
 
 Ranking, and any other consumer of ``session_node_positions``, compares

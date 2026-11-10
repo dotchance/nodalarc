@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The client-visible reason a VS-API request was refused."""
 
 from __future__ import annotations

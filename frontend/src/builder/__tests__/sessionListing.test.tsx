@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** The outline and the segment links card list every link rule, routing
  *  domain and boundary the backend lists for the accepted session, with the
  *  pending edits laid over them. */

@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """A ground pair's tracking check judges each terminal by its own rate and its own limit.
 
 A station turns with its body while it holds a peer; an orbiter of another body holds the station

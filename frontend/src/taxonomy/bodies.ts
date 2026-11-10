@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Per-body identity on the page: the label and tint a body's nodes carry. Keyed by every body
  * the backend supports (the generated SupportedSurfaceBody), so a supported body without an

@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Candidate preview — the client renders the server's frozen-epoch verdicts.
  *
  *  Client geometry moved server-side, with numeric

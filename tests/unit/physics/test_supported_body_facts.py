@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Every body the production runtime supports has every fact the runtime needs: a shipped
 catalog object, ephemeris data and orientation, runtime constants, a name in the body
 vocabulary, and a largest separation from every other supported body. The page's body tables

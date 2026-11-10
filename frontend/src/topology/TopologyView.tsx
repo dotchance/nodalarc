@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** TopologyView — HTML5 Canvas 2D topology diagram with hover tooltips. */
 
 import { useEffect, useRef, useCallback, useState } from "react";

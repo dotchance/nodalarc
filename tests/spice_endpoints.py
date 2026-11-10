@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Temporary SPK files that let SPICE treat test endpoints as ephemeris objects: a site as a fixed
 point in its body's frame, and an orbiting satellite from the shared orbit model. SPICE then
 applies its own light-time and aberration corrections to them."""

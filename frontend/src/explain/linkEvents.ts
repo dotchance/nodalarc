@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Link-lifecycle event registry — the single source for the human label + canonical {@link Family}
  * of a LinkUp/LinkDown event reason (LinkState.link_reason + the link event history). This is a

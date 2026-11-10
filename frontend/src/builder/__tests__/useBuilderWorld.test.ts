@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Session coordinator contract: one backend-issued revision stream. */
 
 import { act, renderHook } from "@testing-library/react";

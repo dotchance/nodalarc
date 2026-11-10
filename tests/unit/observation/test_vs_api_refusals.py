@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """One translation from refusing exceptions to the ApiRefusal envelope."""
 
 from __future__ import annotations

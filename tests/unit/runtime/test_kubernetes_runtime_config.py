@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Tests for the one-list ordinary-file Kubernetes runtime reader."""
 
 from __future__ import annotations

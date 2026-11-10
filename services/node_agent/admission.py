@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Admission on the transmitting terminal of a long-delay link.
 
 At the end of a long-delay contact the transmitter stops admitting packets, and the packets it

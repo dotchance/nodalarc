@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Real filesystem conditions that make the platform's ephemeris data unreadable.
 
 Each stage builds a copy of the data directory in which reading genuinely fails

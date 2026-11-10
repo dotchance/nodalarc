@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """VS-API runtime views derived from the authoritative resolved session."""
 
 from __future__ import annotations

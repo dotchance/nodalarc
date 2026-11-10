@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Human-readable rendering of perf harness results.
 
 The JSON artifacts are for machines and trend tooling; this module is for

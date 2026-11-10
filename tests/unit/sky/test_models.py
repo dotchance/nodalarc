@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Test that every Pydantic model round-trips through JSON serialization.
 
 Proves the contract that NATS messages, SQLite records, and config

@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Unit tests for vs_api.introspect — whitelist validation and vtysh execution."""
 
 from types import SimpleNamespace

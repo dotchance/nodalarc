@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Backend authority for visual Builder draft creation, opening, and assembly."""
 
 from __future__ import annotations

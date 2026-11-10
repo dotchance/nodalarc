@@ -1,3 +1,5 @@
+/* Copyright 2024-2026 .chance (dotchance)
+   SPDX-License-Identifier: AGPL-3.0-only */
 /* Bottom status bar + the shortcut-help/About overlay. */
 
 .bottombar {
@@ -146,6 +148,8 @@
   color: var(--text-dim);
 }
 
+.help-about p { margin: 0 0 var(--space-2); }
+.help-about p:last-child { margin-bottom: 0; }
 .help-about strong { color: var(--text-primary); }
 .help-about a { color: var(--accent-blue); text-decoration: none; }
 .help-about a:hover { text-decoration: underline; }

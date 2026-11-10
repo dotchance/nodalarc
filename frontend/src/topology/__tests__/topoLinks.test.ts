@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 import { TRACE_BRIDGED_COLOR, TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR, hexToCSS } from "../../config";
 import type { LayoutNode } from "../layout";

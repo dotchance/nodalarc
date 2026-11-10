@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Orbital behaviour of the production orbit kernel and Earth's body-fixed frame.
 
 Validates against analytic properties: period, inclination bounds, return to

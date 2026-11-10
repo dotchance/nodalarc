@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Test doubles for the resolved OME runtime contract."""
 
 from collections.abc import Iterator, Mapping

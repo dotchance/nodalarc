@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Body samples: the page's interpolation against the backend's states, and the store's
  * rules for message order, seek, recovery, reconnect, window replacement and fast playback. */
 import { beforeEach, describe, expect, it } from "vitest";

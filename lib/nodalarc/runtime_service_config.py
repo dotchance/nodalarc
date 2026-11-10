@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Shared startup loading and health for runtime service processes."""
 
 from __future__ import annotations

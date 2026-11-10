@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Marked YAML decoding and JSON-pointer source-map contracts."""
 
 from __future__ import annotations

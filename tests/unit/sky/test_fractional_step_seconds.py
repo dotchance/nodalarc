@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Fractional step_seconds executes as declared.
 
 The grammar accepts any positive finite step_seconds. OME once truncated

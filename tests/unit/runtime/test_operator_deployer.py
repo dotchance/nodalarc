@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Unit tests for nodalarc_operator/session_deployer.py.
 
 Tests pure-logic functions and the K8s-mocked deploy pipeline with canonical

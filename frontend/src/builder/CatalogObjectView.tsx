@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Read-only spec view of one catalog document — click-to-inspect from the
  *  library. Renders the grammar object as nested key/value rows; the grammar
  *  is the schema, so nothing is reshaped or hidden. */

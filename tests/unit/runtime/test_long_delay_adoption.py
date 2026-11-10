@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """What a restarted Scheduler adopts of the long-delay contacts in the kernel, from the survey of
 both ends of a link, and when the contacts it recovers close."""
 

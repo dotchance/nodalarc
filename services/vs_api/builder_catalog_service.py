@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Storage-neutral application service for Builder catalog authoring."""
 
 from __future__ import annotations

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 # The single source of image-tag truth.
 #
 # Image identity must equal content identity: two different trees must never

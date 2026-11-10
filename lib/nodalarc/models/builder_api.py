@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Typed application contracts for Builder authoring APIs.
 
 These models describe browser/VS-API workflow state. They are not NodalArc

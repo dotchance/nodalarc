@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Durable, queryable state for VS-API session transitions.
 
 Transition records are operational evidence, not configuration grammar.  The

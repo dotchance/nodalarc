@@ -1,9 +1,10 @@
 # Third-Party Notices
 
 This file lists third-party material distributed with the NodalArc source tree or
-included in artifacts built from it. The Apache License 2.0 applies to
-NodalArc-owned code and documentation. Third-party material remains under its
-own license or usage terms.
+included in artifacts built from it. NodalArc-owned code and documentation are
+licensed under the GNU Affero General Public License, version 3 only
+(AGPL-3.0-only), with the additional terms and permissions in `NOTICE`.
+Third-party material remains under its own license or usage terms.
 
 ## Bundled Frontend Assets
 
@@ -124,10 +125,34 @@ NASA endorsement of NodalArc, its authors, or any related product or service.
 Natural Earth data is public domain. Citation requested by the project:
 "Made with Natural Earth. Free vector and raster map data @ naturalearthdata.com."
 
+## Ephemeris and Planetary Constants Files
+
+- Paths: `configs/ephemerides/`
+- Producer: NASA Jet Propulsion Laboratory (JPL): the Solar System Dynamics
+  group and the Navigation and Ancillary Information Facility (NAIF)
+- Source: <https://naif.jpl.nasa.gov/pub/naif/generic_kernels/>
+- Changes in NodalArc: none; each file is shipped as published, and NodalArc
+  checks its SHA-256 hash before reading it.
+
+| File | Content | Source path under `generic_kernels/` | SHA-256 |
+| --- | --- | --- | --- |
+| `de440s.bsp` | Planetary ephemeris DE440 (short span) | `spk/planets/de440s.bsp` | `c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2` |
+| `mar099s.bsp` | Mars system ephemeris (Phobos, Deimos) | `spk/satellites/mar099s.bsp` | `997dc93ba640e476da7a494d2237dcdeb145e528db37be8ccee588c615e4e1ff` |
+| `earth_latest_high_prec.bpc` | Measured Earth orientation | `pck/earth_latest_high_prec.bpc` | `c329bed712083e0ae7b6ff737b9552fd80b6e111d4a2a7b97394e98fe5df8b7d` |
+| `earth_2026_260806_2126_predict.bpc` | Predicted Earth orientation | `pck/earth_2026_260806_2126_predict.bpc` | `9f565ab5aaccd33afe54f3a1b20cb8b136636c31a0bd4c0986fac722b931c280` |
+| `moon_pa_de440_200625.bpc` | Lunar orientation (principal axes) | `pck/moon_pa_de440_200625.bpc` | `60cd55aa401ea2ea97360636f567554bfe4e37bb829f901b4460a455dfaf783f` |
+| `moon_de440_250416.tf` | Lunar reference frames | `fk/satellites/moon_de440_250416.tf` | `a47c71e9c9f33796bdafb2c9d69a7ee447b6016ecad80f71cd6f3e479f9cf768` |
+| `pck00011.tpc` | Planetary sizes, shapes and rotation models | `pck/pck00011.tpc` | `3dff7b1dbeceaa01f25467767d3fa25816051c85d162d1edf04acb310ee28bb1` |
+| `gm_de440.tpc` | Gravitational parameters | `pck/gm_de440.tpc` | `924ddf4fb9ead9fe8a1aa55780bcabde40b09d00065d58226e24b68d8092f140` |
+
+NASA and JPL should be acknowledged as the source of these files, and their use
+must not imply NASA or JPL endorsement of NodalArc, its authors, or any related
+product or service.
+
 ## Public Source Data
 
-NodalArc includes constellation, satellite type, scenario, and ground-station
-configuration data under `configs/`. Those files use factual orbital parameters,
+NodalArc includes orbit, constellation, terminal, site and session catalog data
+under `catalog/`. Those files use factual orbital parameters,
 gateway locations, antenna counts, and filing references from public sources
 where noted in the files themselves, including:
 
@@ -137,9 +162,11 @@ where noted in the files themselves, including:
   noted
 - Public or internally curated gateway research notes where noted
 
-Facts are not owned by NodalArc. The NodalArc-specific configuration files,
-schema, comments, selection, validation logic, and documentation remain covered
-by the Apache License 2.0 unless a file says otherwise.
+Facts are not owned by NodalArc. The NodalArc-specific catalog files, schema,
+comments, selection, validation logic, and documentation are covered by
+AGPL-3.0-only unless a file says otherwise; the catalog files and the
+documentation's example sessions are additionally available under CC0-1.0, as
+`NOTICE` states.
 
 ## Package Dependencies
 
@@ -160,7 +187,7 @@ license election when building and distributing project artifacts:
 
 | Package | Available licenses | NodalArc election |
 | --- | --- | --- |
-| `asyncssh` | EPL-2.0 OR GPL-2.0-or-later | EPL-2.0 |
+| `asyncssh` | EPL-2.0 OR GPL-2.0-or-later | GPL-2.0-or-later |
 | `pyroute2` | Apache-2.0 OR GPL-2.0-or-later | Apache-2.0 |
 
 Current package license families:
@@ -168,8 +195,7 @@ Current package license families:
 | License family | Current packages / artifacts | Local license text |
 | --- | --- | --- |
 | Apache-2.0 | `nats-py`, `grpcio`, `grpcio-tools`, `kubernetes`, `pyroute2` (elected), `typescript`, `aria-query`, `expect-type`, `xml-name-validator` | `LICENSES/Apache-2.0.txt` |
-| EPL-2.0 | `asyncssh` (elected) | `LICENSES/EPL-2.0.txt` |
-| GPL-2.0-or-later | FRRouting runtime image and FRR packages | `LICENSES/GPL-2.0-or-later.txt` |
+| GPL-2.0-or-later | `asyncssh` (elected), FRRouting runtime image and FRR packages | `LICENSES/GPL-2.0-or-later.txt` |
 | BSD-3-Clause | `numpy`, `jinja2`, `uvicorn`, `websockets`, `protobuf`, `httpx`, `source-map-js`, `tough-cookie`, `@webgpu/types` | `LICENSES/BSD-3-Clause.txt` |
 | BSD-2-Clause | `entities`, `webidl-conversions` | `LICENSES/BSD-2-Clause.txt` |
 | MIT | `pydantic`, `fastapi`, `sgp4`, `skyfield`, `react`, `react-dom`, `three`, `@xterm/xterm`, Vite/Rollup/esbuild ecosystem packages, D3 packages | `LICENSES/MIT.txt` |

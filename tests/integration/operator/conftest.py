@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Fixtures for tests that use NodalArc the way an operator does."""
 
 from __future__ import annotations

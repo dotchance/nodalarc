@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Keyboard-shortcut reference + About overlay. Rendered from the shortcut map
  * in useKeyboard.ts so the help can't drift from the bindings. Opened with
@@ -11,6 +11,8 @@ import { KEYBOARD_SHORTCUTS } from "../hooks/useKeyboard";
 import { activeThemeName, setTheme, THEMES, type ThemeName } from "../styles/tokens";
 import { Button } from "../ui/Button";
 import type { ViewMode } from "../types";
+
+const SOURCE_URL = "https://github.com/dotchance/nodalarc";
 
 const THEME_LABELS: Record<ThemeName, string> = {
   "mission-light": "Mission Light",
@@ -87,15 +89,33 @@ export function ShortcutHelp({ onClose, viewMode }: ShortcutHelpProps) {
           </div>
           <p className="help-note">Switching reloads the console so every surface repaints consistently.</p>
         </div>
-        <footer className="help-about">
-          <strong>NodalArc</strong> — high-fidelity orbital network emulation.{" "}
-          <span>
-            by{" "}
-            <a href="https://github.com/dotchance/nodalarc" target="_blank" rel="noreferrer">
-              .chance
-            </a>{" "}
-            · Apache-2.0
-          </span>
+        {/* The attribution and the source link are protected by the first
+            additional term in NOTICE; the copyright, warranty and license
+            lines are the Appropriate Legal Notices of AGPL-3.0 Section 5(d). */}
+        <footer className="help-about" data-testid="about-notices">
+          <p>
+            <strong>NodalArc</strong> by .chance (dotchance). High-fidelity orbital network
+            emulation.
+          </p>
+          <p>
+            Copyright 2024-2026 .chance (dotchance). NodalArc is free software: you may
+            redistribute and modify it under the GNU Affero General Public License, version 3
+            only (AGPL-3.0-only), with the additional terms in its NOTICE file. It comes with no
+            warranty.
+          </p>
+          <p>
+            <a href={`${SOURCE_URL}/blob/main/LICENSE`} target="_blank" rel="noreferrer">
+              License
+            </a>
+            {" · "}
+            <a href={`${SOURCE_URL}/blob/main/NOTICE`} target="_blank" rel="noreferrer">
+              Notice
+            </a>
+            {" · "}
+            <a href={SOURCE_URL} target="_blank" rel="noreferrer">
+              Source code
+            </a>
+          </p>
         </footer>
       </div>
     </div>

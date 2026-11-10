@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// SPDX-License-Identifier: AGPL-3.0-only
 /** The page's satellite positions against the backend's.
  *
  * For Earth GEO relays, lunar relays and an eccentric J2 Earth orbit, the backend's shared

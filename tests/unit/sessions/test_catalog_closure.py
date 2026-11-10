@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Tests for exact, typed persisted catalog dependency collection."""
 
 from __future__ import annotations

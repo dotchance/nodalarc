@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 # Deploy ONE service: push the image, move the Helm-owned image reference,
 # wait for honest convergence, then PROVE the cluster runs what was pushed.
 #

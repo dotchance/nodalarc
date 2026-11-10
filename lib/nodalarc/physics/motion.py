@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Body motion at many epochs at once: barycentric positions and orientations.
 
 Light time evaluates every receiver of a tick at its own epoch, about a thousand epochs per tick

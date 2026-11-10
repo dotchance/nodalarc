@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Test SQLite schema creation, WAL mode, and insert/query round-trips."""
 
 import sqlite3

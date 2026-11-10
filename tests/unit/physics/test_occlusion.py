@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Link-path obstruction against SPICE's occult on reference cases.
 
 SPICE's occult tests a point target behind an ellipsoid occulter as seen from an observer, with

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 # NodalArc status — shows system state and tells you the next step.
 # Called by `make status`. Environment: NAMESPACE, REGISTRY_HOST, DEFAULT_SESSION.
 set -euo pipefail

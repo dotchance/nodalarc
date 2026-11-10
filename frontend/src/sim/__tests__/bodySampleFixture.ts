@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Backend facts for the body-sample and satellite tests.
  *
  * fixtures/bodySamples.json is written by scripts/gen_body_sample_fixture.py from the

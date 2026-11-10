@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """What must be true of any ready session, whatever was done to reach it.
 
 Each function compares something NodalArc shows with what the emulated network itself does, and

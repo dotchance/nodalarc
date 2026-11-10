@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * L2: the focal candidate. A viable-but-withheld pair (connectivity available,
  * policy/capacity withheld it) is called out prominently — categorically

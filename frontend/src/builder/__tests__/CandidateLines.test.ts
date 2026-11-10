@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** the candidate-line geometry buffers must rebuild whenever the pairs
  *  array is a fresh identity OR the mounted geometry lost its position
  *  attribute — not only when the pair COUNT changed. Keying on length alone left

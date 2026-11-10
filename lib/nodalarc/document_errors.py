@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The errors a grammar validation found in one document, in that document's terms."""
 
 from __future__ import annotations

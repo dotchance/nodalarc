@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 # Start or replace the current NodalArc session.
 
 set -euo pipefail

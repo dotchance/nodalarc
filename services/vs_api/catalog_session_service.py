@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Scoped catalog-session listing and exact YAML retrieval."""
 
 from __future__ import annotations

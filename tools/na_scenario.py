@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """na-scenario — execute scenario YAML against a running session.
 
 PRD 13.22: reads a scenario YAML, validates against Pydantic model,

@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """NodalArc Operator — manages ConstellationSpec CRD lifecycle.
 
 When imported by kopf (via -m flag), this module registers all handlers.

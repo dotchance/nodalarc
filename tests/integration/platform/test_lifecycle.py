@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """A platform operator installs NodalArc, starts a session, restarts it and tears it down.
 
 Each step runs the make target a platform operator runs. It then checks what make reported

@@ -1,3 +1,5 @@
+/* Copyright 2024-2026 .chance (dotchance)
+   SPDX-License-Identifier: AGPL-3.0-only */
 /* DOM overlays inside the 3D scene container. These form a scene-local
    stacking ladder (labels < hud < seek < tooltip) independent of the app
    chrome z tokens — the viewport is its own stacking context. */

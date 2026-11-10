@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Typed application contracts for Builder catalog authoring operations."""
 
 from __future__ import annotations

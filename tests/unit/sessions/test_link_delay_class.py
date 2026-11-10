@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Local and long-delay link classes: the delay range each candidate can have, and the class the
 resolver gives it against the platform's long-delay bound."""
 

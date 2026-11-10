@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Constellation — all satellites as one InstancedMesh (O(1) draw call at any scale).
  * The snapshot seeds instance slots + colors; every frame

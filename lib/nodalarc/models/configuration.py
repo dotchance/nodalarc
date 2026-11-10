@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Canonical catalog-family registry and configuration document union."""
 
 from __future__ import annotations

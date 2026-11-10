@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Tests for tools/na_report.py single-session report semantics.
 
 The tests create a SQLite session with known events, run the user-facing report

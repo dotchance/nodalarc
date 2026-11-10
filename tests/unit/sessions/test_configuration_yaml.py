@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Strict decoding and runtime-required persisted configuration semantics."""
 
 from __future__ import annotations

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 # Implement make load for single-node containerd import and multi-node registry push.
 
 set -euo pipefail

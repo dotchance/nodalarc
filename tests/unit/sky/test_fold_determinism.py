@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Determinism tests for the OME stateful fold.
 
 NON-NEGOTIABLE GATES: the look-ahead thread and the real-time pacing

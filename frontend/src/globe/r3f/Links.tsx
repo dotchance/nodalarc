@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Links — the batched ISL + ground link renderer. Wraps LinkBatch (the faithful port of
  * link batch in the R3F lifecycle: the batch's LineSegments2 is created lazily and

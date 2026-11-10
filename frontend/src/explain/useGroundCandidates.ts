@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Hook: live `ground-link-decisions` (the candidate set) for one node, sliced server-side to that
  * node, refreshing on the sim clock. The single fetch the globe's on-select sat tinting consumes

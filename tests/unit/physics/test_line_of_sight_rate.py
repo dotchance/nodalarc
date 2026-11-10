@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Line-of-sight angular rate of signals between two Earth satellites.
 
 ``SignalEnd.rate_rad_s`` for two ends on one central body is the rate in that body's rotating

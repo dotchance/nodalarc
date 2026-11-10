@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Translate an admitted catalog profile and its plan into Kubernetes data.
 
 Pure translation: one admitted profile plus one node's plan becomes a

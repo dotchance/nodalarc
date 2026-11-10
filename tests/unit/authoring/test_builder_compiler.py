@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Focused contracts for read-only Builder draft compilation."""
 
 from __future__ import annotations

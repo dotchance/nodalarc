@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The body motion table against SPICE: barycentric positions and orientations at arbitrary
 epochs, interpolated from grid points 600 s apart.
 

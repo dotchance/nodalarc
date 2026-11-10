@@ -196,7 +196,7 @@ On a remote machine, expose or forward port `3000` for the browser interface and
 
 ## Community
 
-NodalArc is open source under the Apache License 2.0. Bug reports, routing stacks, constellation models, interface improvements, documentation fixes and reports from your own experiments are all welcome.
+NodalArc is open source under the GNU Affero General Public License, version 3 only. Bug reports, routing stacks, constellation models, interface improvements, documentation fixes and reports from your own experiments are all welcome.
 
 - **Issues**: bug reports, feature requests and questions
 - **Pull Requests**: read [CONTRIBUTING.md](CONTRIBUTING.md), the [Developer Guide](docs/dev/) and the [Contributor License Agreement](CLA.md) before opening one
@@ -204,6 +204,6 @@ NodalArc is open source under the Apache License 2.0. Bug reports, routing stack
 
 ## License
 
-NodalArc is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for the full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party notices.
+NodalArc is licensed under the GNU Affero General Public License, version 3 only (AGPL-3.0-only). See [LICENSE](LICENSE) for the full terms. [NOTICE](NOTICE) holds the additional terms under Section 7 of that License: modified versions keep the "NodalArc by .chance (dotchance)" credit and the link to this repository, mark themselves as modified, and get no right to the NodalArc name. NOTICE also states two additional permissions. The software NodalArc runs on emulated nodes stays under its own license. The catalog files and the documentation's example sessions are also available under CC0-1.0, so experiment files built from them carry no AGPL obligations. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists bundled third-party notices.
 
 Copyright 2024-2026 .chance (dotchance)

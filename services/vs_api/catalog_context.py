@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """VS-API ownership boundary for the currently selected catalog scope."""
 
 from __future__ import annotations

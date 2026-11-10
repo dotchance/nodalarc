@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Body positions, body orientation and orbit-element bases from ANISE.
 
 One ``PhysicsContext`` per session (and per Builder preview) holds its own

@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** L1: one clickable candidate row (a sat under a GS, or a GS under a sat),
  * family-toned, opening the Per-Pair Inspector. Shared by both detail panels. */
 

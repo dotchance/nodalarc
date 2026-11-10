@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** Space segment editor. The segment's own fields are its pending edit,
  *  edited in the field editor the caller passes in. The constellation it
  *  places, with its orbit and node, is a document: one the session proposes

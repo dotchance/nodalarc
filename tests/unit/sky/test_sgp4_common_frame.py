@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """SGP4 common-frame authority: GCRS for cross-body, Earth-fixed for same-body.
 
 The SGP4 boundary returns GCRS state only; the Earth-fixed state comes from

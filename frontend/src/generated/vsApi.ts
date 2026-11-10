@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// SPDX-License-Identifier: AGPL-3.0-only
 // GENERATED FILE — DO NOT EDIT BY HAND.
 // Sources of truth: backend Pydantic application contracts in
 // lib/nodalarc/models.

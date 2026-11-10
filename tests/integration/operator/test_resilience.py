@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """When part of the emulated network breaks under NodalArc, it says so and returns to the truth.
 
 Each test breaks one thing outside NodalArc's API, then acts only as the operator. Select these

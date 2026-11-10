@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 // Dashboard — session health at a glance: large metrics, convergence state,
 // and live fault rows. Values are neutral; tone appears only where a fact is
 // healthy/degraded/faulted (color-slot law).

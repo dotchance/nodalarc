@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """The per-buffer memory a server needs from the queue estimate, by page size: what node
 qualification compares with network.queueMemory.bytesPerBuffer and names when it refuses."""
 

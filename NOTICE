@@ -9,5 +9,54 @@ https://github.com/dotchance/nodalarc
 Project site:
 https://nodal.asmolab.net
 
+License
+
+NodalArc is licensed under the GNU Affero General Public License, version 3 only
+(SPDX: AGPL-3.0-only). The full text is in the LICENSE file. The following
+additional terms under Section 7 of that License, and the additional
+permissions after them, apply to NodalArc.
+
+Additional terms (Section 7)
+
+1. Attribution (Section 7(b)). Any modified version of NodalArc must preserve,
+   wherever the unmodified program displays them, the author attribution
+   "NodalArc by .chance (dotchance)" and a link to the original source
+   repository, https://github.com/dotchance/nodalarc. The unmodified program
+   displays them in the About panel of its web interface and in the response
+   of its GET /api/v1/about endpoint. This term does not replace the duty of
+   Section 13 to offer the source of the modified version; a modified version
+   shows both.
+
+2. Marking of modified versions (Section 7(c)). A modified version must not be
+   presented as the original NodalArc, and must state in the same places that
+   it has been modified, by whom, and when.
+
+3. Names of the author (Section 7(d)). This License grants no right to use the
+   name or likeness of .chance (dotchance) to endorse or promote a modified
+   version or a service built on NodalArc, beyond the attribution required
+   above.
+
+4. Trademarks (Section 7(e)). This License grants no rights under trademark law
+   in the name "NodalArc" or any NodalArc logo, other than accurately stating
+   that a work is based on NodalArc.
+
+Additional permissions
+
+5. Software run by NodalArc. The software NodalArc runs on emulated nodes
+   (container images, the routing, protocol and application programs inside
+   them, and their configuration) are separate programs, not part of NodalArc.
+   Running them under NodalArc does not place them under this License,
+   whatever their own license is. NodalArc's own files in the images built
+   from this repository remain part of NodalArc.
+
+6. Catalog and sessions. The files in catalog/ (bodies, orbits, terminals,
+   nodes, sites, profiles, payloads, constellations, space node sets and
+   sessions) and the example sessions in the documentation may additionally be
+   used, copied, modified and distributed under the Creative Commons Zero 1.0
+   dedication (CC0-1.0), so experiment files derived from them carry no AGPL
+   obligations.
+
+Third-party material
+
 This product includes third-party components and assets. See
 THIRD_PARTY_NOTICES.md for bundled third-party notices and license details.

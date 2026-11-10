@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Namespaced Kubernetes storage for ordinary catalog YAML files."""
 
 from __future__ import annotations

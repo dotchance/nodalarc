@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """The wiring manifest as the API server last reported it, kept current by a watch.
 
 The Node Agent's wiring watcher reads the manifest from here instead of

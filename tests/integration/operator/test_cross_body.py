@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """A ground station links to an orbiter of another body, and a direct link between the surfaces
 of two bodies is refused.
 

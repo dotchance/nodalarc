@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """The proof a station's kernel audit asks for, pass by pass.
 
 The Scheduler's periodic clean-state audit of a station and the re-check of a station that is not

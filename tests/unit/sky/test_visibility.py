@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Test link constraints (range, elevation, ground and satellite field of regard, tracking rate,
 polar seam) and ISL terminal scheduling.
 

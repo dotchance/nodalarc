@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Copyright 2024-2026 .chance (dotchance)
+// SPDX-License-Identifier: AGPL-3.0-only
 // Fail the build when npm reports a high or critical advisory against the
 // locked frontend dependency tree.
 //

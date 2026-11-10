@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Unit tests for probe daemon — flow state management and result tracking."""
 
 from measurement.probe_daemon import (

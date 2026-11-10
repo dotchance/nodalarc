@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """FastAPI contracts for backend-owned visual Builder drafts."""
 
 from __future__ import annotations

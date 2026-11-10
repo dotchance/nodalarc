@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Node Agent entry point — async NATS-native actor for netlink operations.
 
 Runs as a DaemonSet on each K3s node. Connects to NATS IMMEDIATELY on

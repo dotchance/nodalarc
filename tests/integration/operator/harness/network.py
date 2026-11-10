@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The network NodalArc shows, and the same network as its routers report it.
 
 A new routing protocol needs one entry in NEIGHBOR_READERS.

@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Typed application contracts for backend-derived graphical controls.
 
 These models are transient Builder projections. They describe editable controls

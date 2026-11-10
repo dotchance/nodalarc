@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Ground stations — a billboarded antenna-glyph sprite per GS plus the elevation-coverage
  * cone shown while the GS is selected. The cone uses the EFFECTIVE envelope floor (the

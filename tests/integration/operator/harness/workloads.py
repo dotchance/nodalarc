@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """What a session's workloads can do, asked from each workload's own shell.
 
 A new kind of workload needs one finder here: it recognises the workload from the tools and

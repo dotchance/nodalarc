@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only AND ISC
 /**
  * Icon artwork extracted from Lucide (https://lucide.dev), ISC license —
  * see THIRD_PARTY_NOTICES.md and LICENSES/Lucide-ISC.txt. Generated from

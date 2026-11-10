@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Synchronous test facade over HTTPX's supported async ASGI transport."""
 
 from __future__ import annotations

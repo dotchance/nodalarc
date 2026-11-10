@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """What NodalArc shows about the running session is what the emulated network does.
 
 The same checks run at the end of every scenario that changes a session (test_sessions,

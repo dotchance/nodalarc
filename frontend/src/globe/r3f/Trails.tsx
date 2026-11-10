@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * Trails — every satellite's orbital trail batched into ONE THREE.LineSegments draw call,
  * an R3F trail batch. Each satellite owns a TRAIL_LENGTH ring

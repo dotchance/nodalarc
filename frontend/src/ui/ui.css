@@ -1,3 +1,5 @@
+/* Copyright 2024-2026 .chance (dotchance)
+   SPDX-License-Identifier: AGPL-3.0-only */
 /* Shared UI primitives (Button, Badge, KeyValueRow, Tabs, FloatingWindow,
    DataTable). Tokens + color-mix only — no raw palette values. */
 

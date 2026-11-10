@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Tests for required-selection runtime service startup and health."""
 
 from __future__ import annotations

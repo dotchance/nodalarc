@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Integration test: End-to-end OME pipeline verification.
 
 PRD Appendix B: runs ome.main.run() with reference constellations,

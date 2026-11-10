@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** A scene owns the body-sample store while it is mounted, and values a render derives from
  *  the store recompute when samples are accepted. Real backend windows
  *  (fixtures/bodySamples.json). */

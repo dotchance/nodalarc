@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """na-report — single-session report tool.
 
 Generates reports from one recorded session's history database. Distinct from

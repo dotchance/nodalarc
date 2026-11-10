@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """VS-API Builder resolved-world projection from shared resolver and OME facts.
 
 Runs the exact chain the OME main loop runs at session start — resolver →

@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """One readiness rule for a wiring proof, applied identically by every consumer."""
 
 from __future__ import annotations

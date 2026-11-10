@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """OME names each contact of a fixed long-delay link: the sim time it opened, within its epoch.
 
 The Node Agent keeps one delay queue per contact and refuses to change a contact it does not

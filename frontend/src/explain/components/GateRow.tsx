@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /**
  * L1: one decision-funnel gate row. Family-agnostic — takes a `bindingTone`
  * (CSS color) so the binding gate is emphasized in the family's tone (slate for

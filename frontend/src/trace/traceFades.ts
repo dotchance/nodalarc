@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Apache License, Version 2.0. See LICENSE file.
+// SPDX-License-Identifier: AGPL-3.0-only
 /** When a traced path is drawn, shared by the globe and the topology view.
  *
  *  A live trace is drawn at full opacity with its dash flowing. A trace this

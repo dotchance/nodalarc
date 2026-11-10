@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Apache License, Version 2.0. See LICENSE file.
+# SPDX-License-Identifier: AGPL-3.0-only
 """Immutable mapping for deep-frozen model boundaries.
 
 Pydantic ``frozen=True`` only blocks attribute reassignment; a ``dict`` field

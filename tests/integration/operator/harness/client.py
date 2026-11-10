@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """What an operator can do to a NodalArc cluster: the REST API, the state feed and the terminal.
 
 Nothing here reaches around VS-API. A test built on this client can only do what a user at the

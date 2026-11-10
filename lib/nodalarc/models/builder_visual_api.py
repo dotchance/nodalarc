@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Typed backend-owned visual Builder draft contracts.
 
 These application DTOs describe authoring gestures, not persisted NodalArc

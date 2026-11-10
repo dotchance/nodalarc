@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Test na-compare cross-session analysis semantics.
 
 Creates two temp SQLite databases with known data, runs each report type, and

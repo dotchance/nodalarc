@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """The one translation from a refusing exception to a client-visible response.
 
 Every exception family whose message is public evidence by producer contract is

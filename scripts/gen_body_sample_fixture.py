@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 """Write the backend facts the page's body-sample and satellite tests compare against.
 
 For the shipped earth-luna-dtn session this builds the Builder world in-process, the way

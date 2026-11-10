@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 # clean-registry.sh — Remote purge of nodalarc/* images from REGISTRY_HOST
 # via the Registry V2 HTTP API.
 #

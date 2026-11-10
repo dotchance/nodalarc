@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
 # na-teardown.sh — Complete NodalArc teardown
 # This is the ONLY permitted teardown mechanism. Never use kubectl delete namespace
 # as a standalone teardown. Never construct custom teardown sequences.

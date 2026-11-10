@@ -211,6 +211,34 @@ echo "ion-node: send a file with: bpsendfile ipn:$SELF.2 <receiver> <file> 0 864
 mapfile -t ION_NAMES < <(grep -v '^#' /opt/ion/bin/ionprocesses.txt | grep -v '^[[:space:]]*$')
 declare -A IS_ION_NAME=()
 for n in "${ION_NAMES[@]}"; do IS_ION_NAME[$n]=1; done
+# An admin program starts each daemon by forking a copy of itself that then
+# executes the daemon's program, so for a moment a starting daemon carries
+# the admin program's name. ionadmin also starts ionwarn, which prints its
+# congestion forecast and exits. Recording processes in that moment recorded
+# those copies and ionwarn as daemons, and their normal end then stopped the
+# node (seen on every node of the Mars ION session). So the record waits until
+# no process carries an admin program's or ionwarn's name. One still running
+# 30 s after the startup tests passed is a fault, and the node fails.
+TRANSIENT_NAMES=(ionadmin ionsecadmin ltpadmin bpadmin ipnadmin ionwarn)
+starting() {
+  local dir comm t
+  for dir in /proc/[0-9]*; do
+    comm=$(cat "$dir/comm" 2>/dev/null) || continue
+    for t in "${TRANSIENT_NAMES[@]}"; do
+      [[ "$comm" == "$t" ]] && return 0
+    done
+  done
+  return 1
+}
+deadline=$((SECONDS + 30))
+while starting; do
+  (( SECONDS < deadline )) || die "ION was still starting 30 s after its startup tests passed; see $OUT/ion.log"
+  sleep 0.2
+done
+# cpsd (contact plan synchronization) stops by itself on a node with no
+# multicast configuration, and this launcher configures none, so it is not a
+# daemon the node keeps.
+unset 'IS_ION_NAME[cpsd]'
 declare -A DAEMON=()
 for dir in /proc/[0-9]*; do
   pid=${dir#/proc/}

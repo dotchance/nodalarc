@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """What part of the ephemeris data one simulation tick needs, and whether the data has it.
 
 A tick at sim time t queries the data at other epochs too:

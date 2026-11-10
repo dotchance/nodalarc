@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """A long-delay link gives each direction its own delay, the light time of a signal sent that way.
 
 The two directions of a link between bodies differ, because each end moves while a signal

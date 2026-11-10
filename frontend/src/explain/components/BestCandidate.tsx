@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * L2: the focal candidate. A viable-but-withheld pair (connectivity available,
  * policy/capacity withheld it) is called out prominently — categorically

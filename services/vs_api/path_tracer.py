@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """One measured trace of the path between two nodes.
 
 A trace runs traceroute from each end toward the other end's loopback,

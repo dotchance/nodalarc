@@ -1,5 +1,6 @@
 /* Copyright 2024-2026 .chance (dotchance)
-   SPDX-License-Identifier: AGPL-3.0-only */
+   SPDX-License-Identifier: AGPL-3.0-only
+   Additional terms under AGPL-3.0 Section 7 are in the NOTICE file. */
 /* Bottom status bar + the shortcut-help/About overlay. */
 
 .bottombar {
@@ -160,7 +161,8 @@
   border-top: 1px solid var(--border);
 }
 
-.help-theme h3 {
+.help-theme h3,
+.help-about h3 {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;

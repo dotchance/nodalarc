@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Project metadata consistency contracts."""
 
 from __future__ import annotations
@@ -155,6 +156,8 @@ def test_helm_chart_renderer_injects_project_version(tmp_path: Path) -> None:
 
 _SOURCE_PATTERNS = ("*.py", "*.ts", "*.tsx", "*.js", "*.mjs", "*.sh", "*.css", "*.j2", "*.proto")
 _SPDX_LINE = re.compile(r"SPDX-License-Identifier: (AGPL-3\.0-only(?: AND [A-Za-z0-9.-]+)*)\b")
+# AGPL-3.0 Section 7: a file under additional terms says where they are.
+_NOTICE_POINTER = "Additional terms under AGPL-3.0 Section 7 are in the NOTICE file."
 
 
 def _tracked_files(*patterns: str) -> list[str]:
@@ -175,9 +178,28 @@ def test_every_tracked_source_file_names_the_project_license() -> None:
     missing = []
     for name in _tracked_files(*_SOURCE_PATTERNS):
         head = "\n".join((ROOT / name).read_text(encoding="utf-8").splitlines()[:6])
-        if project_info.PROJECT_COPYRIGHT not in head or not _SPDX_LINE.search(head):
+        if (
+            project_info.PROJECT_COPYRIGHT not in head
+            or not _SPDX_LINE.search(head)
+            or _NOTICE_POINTER not in head
+        ):
             missing.append(name)
     assert missing == []
+
+
+def test_every_catalog_file_carries_the_second_license() -> None:
+    # NOTICE licenses catalog/ under AGPL-3.0-only OR CC0-1.0; the header of
+    # each file carries that choice wherever the file is copied to.
+    expected = (
+        f"# {project_info.PROJECT_COPYRIGHT}\n"
+        "# SPDX-License-Identifier: AGPL-3.0-only OR CC0-1.0\n"
+        f"# {_NOTICE_POINTER}\n"
+    )
+    files = _tracked_files("catalog/*.yaml")
+    assert files
+    assert [
+        n for n in files if not (ROOT / n).read_text(encoding="utf-8").startswith(expected)
+    ] == []
 
 
 def test_every_license_statement_names_the_same_license() -> None:

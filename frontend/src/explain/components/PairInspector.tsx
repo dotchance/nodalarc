@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * L3: the Per-Pair Inspector — the most precise view, for one GS<->sat pair. It
  * renders the canonical decision funnel (reusing the GroundStationCard) plus the

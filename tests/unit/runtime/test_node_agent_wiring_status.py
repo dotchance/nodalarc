@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 import pytest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.wiring_status import failed_status

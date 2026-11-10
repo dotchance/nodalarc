@@ -51,6 +51,10 @@ intended to preserve the project's ability to use, distribute, and relicense
 contributions, including under open-source, source-available, commercial, or
 dual-license terms.
 
+You submit each Contribution to the files in catalog/, and to the YAML examples
+in README.md and under docs/, under AGPL-3.0-only OR CC0-1.0, at the
+recipient's choice, as NodalArc's NOTICE file states for those files.
+
 ## 5. No Warranty
 
 Your Contribution is provided "AS IS", without warranty or condition of any

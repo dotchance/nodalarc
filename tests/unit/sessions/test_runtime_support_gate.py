@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """The runtime-support gate is mandatory at resolve time.
 
 Production never passes an explicit RuntimeSupport, so the resolver default

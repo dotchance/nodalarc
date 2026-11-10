@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Typed refusals name catalog paths and declared inputs, never host paths.
 
 Every producer below chains the operating system's error as ``__cause__`` so a

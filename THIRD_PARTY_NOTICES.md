@@ -162,11 +162,11 @@ where noted in the files themselves, including:
   noted
 - Public or internally curated gateway research notes where noted
 
-Facts are not owned by NodalArc. The NodalArc-specific catalog files, schema,
-comments, selection, validation logic, and documentation are covered by
-AGPL-3.0-only unless a file says otherwise; the catalog files and the
-documentation's example sessions are additionally available under CC0-1.0, as
-`NOTICE` states.
+Facts are not owned by NodalArc. The NodalArc-specific schema, selection,
+validation logic, and documentation are covered by AGPL-3.0-only. The catalog
+files, and the YAML examples in `README.md` and under `docs/`, are licensed
+under AGPL-3.0-only OR CC0-1.0, as `NOTICE` and each catalog file's header
+state.
 
 ## Package Dependencies
 

@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only AND ISC
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Icon artwork extracted from Lucide (https://lucide.dev), ISC license —
  * see THIRD_PARTY_NOTICES.md and LICENSES/Lucide-ISC.txt. Generated from

@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Probe daemon — lightweight custom UDP probe sidecar for ground station pods.
 
 REST API on port 9100. Sends timestamped UDP probe packets with sequence

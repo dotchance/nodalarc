@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 // Dashboard — session health at a glance: large metrics, convergence state,
 // and live fault rows. Values are neutral; tone appears only where a fact is
 // healthy/degraded/faulted (color-slot law).

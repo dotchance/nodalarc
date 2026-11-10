@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Hook: live `ground-link-decisions` (the candidate set) for one node, sliced server-side to that
  * node, refreshing on the sim clock. The single fetch the globe's on-select sat tinting consumes

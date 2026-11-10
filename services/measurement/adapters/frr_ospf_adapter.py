@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """FRR OSPF protocol adapter — vtysh polling + log file parsing.
 
 Collects OSPF adjacency state via `show ip ospf neighbor` polling and

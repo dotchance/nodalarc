@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Translate an admitted catalog profile and its plan into Kubernetes data.
 
 Pure translation: one admitted profile plus one node's plan becomes a

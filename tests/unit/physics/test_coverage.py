@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Coverage of the ephemeris data against what a tick queries, at the shipped data's real edges:
 Earth's orientation data ends 2126-11-03T00:00Z, the planetary positions on 2150-01-21."""
 

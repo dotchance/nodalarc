@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Fixtures for the shared physics module: converted datasets and a SPICE reference.
 
 Reference values come from SPICE loading the same NAIF files the platform

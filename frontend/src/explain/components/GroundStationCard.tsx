@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * L3: the ground-station explanation card. Composes the family headline,
  * actuation summary, best candidate, effective envelope, and decision ladder

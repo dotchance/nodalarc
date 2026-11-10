@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Initial topology wiring — executes data plane setup from wiring manifest.
 
 Called by the Node Agent when a new nodalarc-topology-wiring ConfigMap

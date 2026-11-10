@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """What a session's workloads can do, asked from each workload's own shell.
 
 A new kind of workload needs one finder here: it recognises the workload from the tools and

@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Every session NodalArc ships runs, and shows the truth before and after its sky moves.
 
 This is the long run. It replaces the session on the cluster once per shipped session and ends

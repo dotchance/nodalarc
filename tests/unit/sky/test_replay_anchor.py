@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Bounded-replay anchor: anchor-plus-gap must equal full replay, exactly.
 
 Recovery correctness rests on one equality: replaying from an anchor at

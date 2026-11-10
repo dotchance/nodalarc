@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Identity of an assembled Helm chart, and whether a release runs it.
 
 digest CHART_DIR

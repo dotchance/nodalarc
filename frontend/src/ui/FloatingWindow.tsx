@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Floating operational window chrome (the design system's "operational
  * window" contract): title-bar drag, 8-direction edge/corner resize, close,

@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Whether a wall-clock result was measured entirely at the speed of the emulated world.
 
 Linux queues, routing daemons and workloads run on wall time at every playback speed; OME's sim

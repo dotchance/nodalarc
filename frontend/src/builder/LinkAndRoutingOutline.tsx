@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** The outline's Links and Routing groups: every link rule, routing domain
  *  and boundary the session declares, as the backend lists them with the
  *  pending edits laid over them. Every link rule and routing domain opens its

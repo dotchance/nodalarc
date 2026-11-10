@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Parse BusyBox ``traceroute -I -n -q 1`` output.
 
 Pure parsing, no I/O. With one probe per hop and numeric addresses, every hop

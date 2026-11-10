@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Admission on the transmitting terminal of a long-delay link.
 
 At the end of a long-delay contact the transmitter stops admitting packets, and the packets it

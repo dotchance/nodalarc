@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """FRR introspection — execute whitelisted vtysh commands in node containers.
 
 Uses the kubernetes Python client to exec into the node's primary workload

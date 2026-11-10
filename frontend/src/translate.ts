@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** Display formatters for non-decision values (link type, durations, timestamps).
  *
  * Link-event reason text is NOT here: it moved to the single family-classified registry

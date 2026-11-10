@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """OME inputs derived from the resolved catalog runtime contract.
 
 The OME algorithms already have mature physics/allocation inputs. This module

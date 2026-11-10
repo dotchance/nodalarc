@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** Candidate-pair lines — the builder's link-rule preview overlay.
  *
  *  Draws straight lines between pair members using the same per-frame

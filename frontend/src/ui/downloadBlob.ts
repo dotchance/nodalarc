@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** One browser-download implementation for every "save this to a file" site.
  *
  *  Each caller previously created a Blob URL, clicked a synthetic anchor, and

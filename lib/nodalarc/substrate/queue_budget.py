@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """The long-delay queue capacity estimate: the kernel memory a session's long-delay link queues
 can hold on each server, against the server's budget.
 

@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** Multi-session persistent terminal — single renderer, multiple backends.
  *
  *  ONE xterm.js Terminal instance (single WebGL canvas) shared across all

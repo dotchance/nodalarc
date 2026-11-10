@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** A trace line draws every segment it was given, however much the line grows. three.js fixes a
  *  geometry's drawable instances when it first renders, so growth must come from a new geometry. */
 

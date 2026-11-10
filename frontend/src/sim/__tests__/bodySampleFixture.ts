@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** Backend facts for the body-sample and satellite tests.
  *
  * fixtures/bodySamples.json is written by scripts/gen_body_sample_fixture.py from the

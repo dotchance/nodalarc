@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** The pieces a link rule, routing domain or boundary window edits its object
  *  with. The object is edited as a pending edit: a card sends its whole card
  *  value, and the field editor sends batches of field changes. The backend

@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * GlobeActionsBridge — the R3F implementation of the imperative GlobeActions handle the rest of
  * the app drives (Toolbar buttons, keyboard shortcuts, NodePopover, view-switch fly-to). It lives

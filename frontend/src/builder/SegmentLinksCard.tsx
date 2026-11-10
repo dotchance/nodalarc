@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** The connect gesture, on the segment: a segment's
  *  editor lists the rules that touch it and offers "+ link to…" — pick the
  *  other end and the rule is created with physics derived from both

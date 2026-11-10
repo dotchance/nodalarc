@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Keyboard-shortcut reference + About overlay. Rendered from the shortcut map
  * in useKeyboard.ts so the help can't drift from the bindings. Opened with
@@ -89,13 +90,18 @@ export function ShortcutHelp({ onClose, viewMode }: ShortcutHelpProps) {
           </div>
           <p className="help-note">Switching reloads the console so every surface repaints consistently.</p>
         </div>
-        {/* The attribution and the source link are protected by the first
-            additional term in NOTICE; the copyright, warranty and license
-            lines are the Appropriate Legal Notices of AGPL-3.0 Section 5(d). */}
+        {/* The first additional term in NOTICE names this section: a modified
+            version keeps the attribution and the repository here. The
+            copyright, warranty and license lines are the Appropriate Legal
+            Notices of AGPL-3.0 Section 5(d). */}
         <footer className="help-about" data-testid="about-notices">
+          <h3>About</h3>
           <p>
-            <strong>NodalArc</strong> by .chance (dotchance). High-fidelity orbital network
-            emulation.
+            <strong>NodalArc</strong> by .chance (dotchance),{" "}
+            <a href={SOURCE_URL} target="_blank" rel="noreferrer">
+              {SOURCE_URL}
+            </a>
+            . High-fidelity orbital network emulation.
           </p>
           <p>
             Copyright 2024-2026 .chance (dotchance). NodalArc is free software: you may

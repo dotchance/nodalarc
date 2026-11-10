@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Faults, made the way the world makes them: outside NodalArc's API.
 
 A resilience test breaks one thing on purpose and from then on acts only as the operator. This

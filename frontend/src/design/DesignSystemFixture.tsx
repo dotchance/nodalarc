@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Design-system fixture — the review surface for tokens, typography, taxonomy,
  * and (as they land) component primitives. Dev-only: served at ?fixture=1 by

@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Universe: the scene root — the R3F Canvas, camera rig, OrbitControls, lighting, and
  * background. Children are bodies (and, later, inter-body relay paths and the selection

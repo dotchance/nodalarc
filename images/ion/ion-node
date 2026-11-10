@@ -1,6 +1,7 @@
 #!/bin/bash
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 # ion-node: write one ION node's configuration and contact plan from its
 # environment, start the node (and, for an endpoint, its file receiver), and
 # stay in the foreground while every ION daemon runs.

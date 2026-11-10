@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** The one rule for drawing a traced path, shared by the globe and the topology view.
  *
  *  A trace lists what answered at each hop: a node, an address no node owns,

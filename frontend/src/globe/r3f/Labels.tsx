@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Labels — HTML DOM labels for satellites and ground stations, positioned in screen space by
  * projecting each node's WORLD position with the camera every frame. Reproduces the legacy

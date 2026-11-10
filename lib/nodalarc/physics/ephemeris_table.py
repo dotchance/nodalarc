@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """The platform's ephemeris table: which data files describe each body.
 
 Where a body is and how it is oriented is platform physics, like the J2

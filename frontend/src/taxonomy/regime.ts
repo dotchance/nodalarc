@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Orbital-regime taxonomy: the common visual identity for constellation
  * classes. Regime is an INTRINSIC property of a node's authored orbit — a

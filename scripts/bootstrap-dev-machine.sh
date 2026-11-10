@@ -1,6 +1,7 @@
 #!/bin/bash
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 # One-time bootstrap of a NodalArc development machine: the machine a
 # developer runs make on to build the images and drive the cluster. Users do
 # not run it; they receive the chart and the images and never build code.

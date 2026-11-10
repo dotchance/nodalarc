@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """The proof a station's kernel audit asks for, pass by pass.
 
 The Scheduler's periodic clean-state audit of a station and the re-check of a station that is not

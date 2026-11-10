@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Body: a celestial body's local coordinate frame (Earth, Luna, Mars). It is a group
  * positioned in the universe frame plus a BodyFrame context; its children — the body's

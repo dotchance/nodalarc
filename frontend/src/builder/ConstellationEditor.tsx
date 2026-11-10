@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** Space segment editor. The segment's own fields are its pending edit,
  *  edited in the field editor the caller passes in. The constellation it
  *  places, with its orbit and node, is a document: one the session proposes

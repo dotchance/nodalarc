@@ -1,3 +1,6 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only OR CC0-1.0
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 # The FRR reference router with a zero-capability observer beside it. The
 # frr adapter renders frr.conf and daemons per node from
 # resolved session facts; the rendered files arrive read-only at

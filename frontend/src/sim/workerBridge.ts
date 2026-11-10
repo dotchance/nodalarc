@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 // Main-thread interface to the Keplerian/J2 propagation Web Worker.
 // Allocates the double-buffered SharedArrayBuffer, sends ephemeris data
 // to the Worker, and reads interpolated positions for the render loop.

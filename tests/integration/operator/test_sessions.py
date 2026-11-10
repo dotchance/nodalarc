@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """An operator selects a session, runs it, and switches to another.
 
 Switching replaces the session running on the cluster. The test ends on the session it found.

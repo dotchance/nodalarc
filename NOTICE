@@ -13,23 +13,25 @@ License
 
 NodalArc is licensed under the GNU Affero General Public License, version 3 only
 (SPDX: AGPL-3.0-only). The full text is in the LICENSE file. The following
-additional terms under Section 7 of that License, and the additional
-permissions after them, apply to NodalArc.
+additional terms and additional permission under Section 7 of that License
+apply to NodalArc. The SPDX identifier does not name them, and they still
+apply.
 
 Additional terms (Section 7)
 
-1. Attribution (Section 7(b)). Any modified version of NodalArc must preserve,
-   wherever the unmodified program displays them, the author attribution
-   "NodalArc by .chance (dotchance)" and a link to the original source
-   repository, https://github.com/dotchance/nodalarc. The unmodified program
-   displays them in the About panel of its web interface and in the response
-   of its GET /api/v1/about endpoint. This term does not replace the duty of
-   Section 13 to offer the source of the modified version; a modified version
-   shows both.
+1. Attribution (Section 7(b)). A modified version of NodalArc must carry the
+   attribution "Based on NodalArc by .chance (dotchance),
+   https://github.com/dotchance/nodalarc" in its documentation and, where it
+   has an interactive user interface, in that interface's Appropriate Legal
+   Notices. If it keeps the GET /api/v1/about endpoint, the endpoint's response
+   carries the attribution too. This term does not replace the duty of
+   Section 13 to offer users the source of the modified version.
 
 2. Marking of modified versions (Section 7(c)). A modified version must not be
-   presented as the original NodalArc, and must state in the same places that
-   it has been modified, by whom, and when.
+   presented as the original NodalArc. It must not use the name "NodalArc" as
+   its own name; it may say it is based on NodalArc. The attribution term 1
+   requires marks it as a modified version and satisfies the rest of this
+   term.
 
 3. Names of the author (Section 7(d)). This License grants no right to use the
    name or likeness of .chance (dotchance) to endorse or promote a modified
@@ -40,21 +42,25 @@ Additional terms (Section 7)
    in the name "NodalArc" or any NodalArc logo, other than accurately stating
    that a work is based on NodalArc.
 
-Additional permissions
+Additional permission (Section 7)
 
-5. Software run by NodalArc. The software NodalArc runs on emulated nodes
-   (container images, the routing, protocol and application programs inside
-   them, and their configuration) are separate programs, not part of NodalArc.
-   Running them under NodalArc does not place them under this License,
-   whatever their own license is. NodalArc's own files in the images built
-   from this repository remain part of NodalArc.
+5. Software run by NodalArc. You may run NodalArc with any program on its
+   emulated nodes (container images, the routing, protocol and application
+   programs inside them, and the configuration files given to them), and
+   propagate and convey such programs together with NodalArc, without this
+   License applying to those programs. This permission does not cover
+   NodalArc itself: its source code, including its adapters and their
+   configuration templates, and NodalArc's own files in the images built from
+   this repository remain under this License.
 
-6. Catalog and sessions. The files in catalog/ (bodies, orbits, terminals,
-   nodes, sites, profiles, payloads, constellations, space node sets and
-   sessions) and the example sessions in the documentation may additionally be
-   used, copied, modified and distributed under the Creative Commons Zero 1.0
-   dedication (CC0-1.0), so experiment files derived from them carry no AGPL
-   obligations.
+Catalog and examples: a second license
+
+The files in catalog/, and the YAML examples in README.md and in the files
+under docs/, are licensed under AGPL-3.0-only OR CC0-1.0, at the recipient's
+choice (each catalog file states this in its SPDX header). The CC0-1.0
+dedication is a separate, irrevocable grant, not a Section 7 permission, so
+nobody who conveys these files can remove it. Experiment files built from them
+carry no AGPL obligations when taken under CC0-1.0.
 
 Third-party material
 

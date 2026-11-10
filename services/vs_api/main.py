@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """VS-API — Visualization State API server.
 
 FastAPI server with WebSocket (full snapshots at ~1Hz) and REST endpoints.

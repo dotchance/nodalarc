@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """A user authors a session, and the session that runs is the one they authored.
 
 Each test ends on the session it found and deletes the user catalog objects it created.

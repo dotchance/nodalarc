@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Pre-deployment validation for resolved catalog sessions.
 
 The resolver is the authority that turns catalog YAML into runtime truth. This

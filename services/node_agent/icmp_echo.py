@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """ICMP echo from the Node Agent's own process, in the calling thread.
 
 The substrate monitor measures round-trip time to peer hosts and proves that

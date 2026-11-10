@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** Link rule editor — comms intent between placed segments.
  *
  *  A rule declares who may link; OME computes feasibility from geometry,

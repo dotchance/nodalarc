@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """The applications a session runs carry data over the emulated network.
 
 Each check acts from the workload's own shell, the one the page opens on a host node, and takes

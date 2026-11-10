@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 #
 # Lists what each built image carries under its application directories and
 # refuses a file an image does not need to run: documentation, build files,

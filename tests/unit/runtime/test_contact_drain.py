@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """The Scheduler's order of a long-delay contact: stop admission, keep the contact draining,
 close each end when the last packet sent toward it has arrived in real time.
 

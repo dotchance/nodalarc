@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * L1: one decision-funnel gate row. Family-agnostic — takes a `bindingTone`
  * (CSS color) so the binding gate is emphasized in the family's tone (slate for

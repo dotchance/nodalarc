@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """The order of a long-delay contact's commands: open, stop admission, close each end.
 
 A long-delay link (a fixed link the resolver classes long-delay) drains at the end of its

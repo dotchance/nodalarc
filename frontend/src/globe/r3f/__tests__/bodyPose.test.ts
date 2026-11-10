@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /** The frame law: where each body sits and how it is turned in each view, from real body
  *  samples (fixtures/bodySamples.json, written by the backend). */
 

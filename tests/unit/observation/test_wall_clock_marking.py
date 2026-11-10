@@ -1,5 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """A wall-clock result is representative only when OME ran its whole interval at 1x.
 
 The record is OME's own: the playback control handler and the pacing thread append a regime at

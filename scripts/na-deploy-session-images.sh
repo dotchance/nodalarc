@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 # Deploy the session images: push every session image the tree built, move
 # the Operator's session image map to them, wait for the Operator to roll,
 # then prove the Operator holds this tree's map.

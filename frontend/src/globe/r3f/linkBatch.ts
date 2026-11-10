@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * LinkBatch — all ISL + ground links in ONE LineSegments2 draw call, ported faithfully
  * as an injectable, instance-scoped class for the R3F scene. The

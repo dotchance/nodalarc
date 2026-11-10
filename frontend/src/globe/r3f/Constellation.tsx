@@ -1,5 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // SPDX-License-Identifier: AGPL-3.0-only
+// Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 /**
  * Constellation — all satellites as one InstancedMesh (O(1) draw call at any scale).
  * The snapshot seeds instance slots + colors; every frame

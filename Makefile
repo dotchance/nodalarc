@@ -322,7 +322,7 @@ session: ## Start a session (DEFAULT_SESSION=...); refuses a drifted platform
 	@MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' bash scripts/na-drift.sh --check || { \
 		echo ""; \
 		echo "[session] REFUSED: the platform is not running this tree's images."; \
-		echo "[session] Next: make deploy-<service> for a drifted service; make build && make load && make upgrade for drifted session images or everything."; \
+		echo "[session] Next: make deploy-<service> for a drifted service; make deploy-all for drifted session images or everything."; \
 		exit 1; \
 	}
 	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' bash scripts/na-session.sh
@@ -390,13 +390,14 @@ define _deploy-service
 	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-deploy-service.sh $1
 endef
 
-deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf ## Build + push + Helm-move + digest-verify every platform service
+deploy-all: build-base-images build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf ## Build + push + Helm-move + verify every platform service and the session images
 	$(call _deploy-service,ome)
 	$(call _deploy-service,scheduler)
 	$(call _deploy-service,node-agent)
 	$(call _deploy-service,vs-api)
 	$(call _deploy-service,operator)
 	$(call _deploy-service,vf)
+	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-deploy-session-images.sh
 
 deploy-ome: build-ome ## Build + push + Helm-move + digest-verify OME
 	$(call _deploy-service,ome)

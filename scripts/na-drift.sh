@@ -93,10 +93,10 @@ fi
 rows+="frr (session pods)|$(short_ref "${frr_tree:-?}")|$frr_shown|$frr_marker"$'\n'
 
 # Session pods get their images through the Operator's development override
-# map (placeholder -> image), which make install and make upgrade write and
-# make deploy-<service> leaves as it was. A map that names any image other
-# than this tree's session image would start the next session from an older
-# tree, so it is drift and the session gate refuses it. A tree map that cannot
+# map (placeholder -> image), which make install, make upgrade and make
+# deploy-all write and make deploy-<service> leaves as it was. A map that names
+# any image other than this tree's session image would start the next session
+# from an older tree, so it is drift and the session gate refuses it. A tree map that cannot
 # be computed (the registry does not answer or holds no image at the tree's
 # tag) leaves nothing checked, so it is drift too, and its error is shown.
 session_drift=0
@@ -168,7 +168,7 @@ echo "Image drift (tree vs deployed):"
 if [ "$drifted" -ne 0 ]; then
     echo ""
     if [ "$session_drift" -ne 0 ]; then
-        echo "DRIFT present. Session images move only with make upgrade. Next: make build && make load && make upgrade."
+        echo "DRIFT present. Session images move with make deploy-all or make upgrade. Next: make deploy-all."
     else
         echo "DRIFT present. Next: make deploy-<service> (one service) or make build && make load && make upgrade (all)."
     fi

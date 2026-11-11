@@ -56,7 +56,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-delete-policy: before-hook-creation
+    # A passing test leaves no pod behind (Helm never deletes hook pods on
+    # uninstall); a failing one stays for its log.
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   serviceAccountName: nodalarc-lifecycle
   restartPolicy: Never

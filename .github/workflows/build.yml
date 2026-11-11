@@ -4,10 +4,12 @@
 name: Build
 
 # Builds every NodalArc image from a clean checkout and refuses an image that
-# carries files it does not need to run. It publishes nothing, and it runs
-# only when someone starts it: from the Actions page (Build, Run workflow) or
-# with `gh workflow run build.yml --ref <branch or tag>`.
+# carries files it does not need to run. It publishes nothing. It runs on every
+# push to main, and when someone starts it: from the Actions page (Build, Run
+# workflow) or with `gh workflow run build.yml --ref <branch or tag>`.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -31,11 +33,6 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
 
       - name: Build images
         run: make build

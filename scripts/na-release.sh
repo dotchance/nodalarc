@@ -94,7 +94,7 @@ release_images() {
         remote="$registry/nodalarc/$name:$(semver_tag "$version")"
         echo "[release] $name $version -> $remote"
         docker tag "$local_ref" "$remote"
-        docker push "$remote" >/dev/null
+        docker push "$remote"
         digest="$(crane digest "${crane_flags[@]}" "$remote")"
         [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "$remote has no digest in the registry"
         printf '%s\t%s\t%s@%s\n' "$name" "$version" "$remote" "$digest" >> "$work/components.tsv"

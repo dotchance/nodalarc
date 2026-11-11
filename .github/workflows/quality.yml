@@ -7,6 +7,16 @@ on:
   push:
     branches:
       - main
+    # Documentation is in no image and no code. THIRD_PARTY_NOTICES.md is in every
+    # image, so it is not listed.
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "CLA.md"
+  # Every pull request runs: branch protection on main requires the Lint check, and a
+  # skipped workflow would leave a documentation pull request waiting for it.
   pull_request:
 
 permissions:

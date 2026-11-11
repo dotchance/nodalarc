@@ -8,6 +8,13 @@
 # as yourself, not as root:
 #
 #   scripts/build-k3s-cluster.sh [--registry-port PORT] [--yes] SERVER [SERVER ...]
+#   build-k3s-cluster.sh --published-images [--yes] SERVER [SERVER ...]
+#
+# --published-images builds a cluster for NodalArc's published images, which
+# the cluster pulls from their own registry: no image registry on the servers,
+# no config.mk and no Docker on this machine, only the servers and the
+# kubeconfig. It needs no checkout: build-k3s-node.sh beside this script, ssh
+# and kubectl. Both scripts are attached to every NodalArc release.
 #
 # Each SERVER is an ssh destination ([user@]host) whose user may run sudo
 # there. The first SERVER starts the cluster and runs the image registry that
@@ -33,19 +40,25 @@
 #   4. checks that every server is Ready, that the registry answers and that
 #      Docker pushes to it over plain HTTP.
 #
-# Then run make all. To add servers later, run it again with every server,
-# the first one first; servers already in the cluster keep their settings.
+# With --published-images, only step 1 runs, and the check covers the servers.
+#
+# Then run make all, or helm install for published images. To add servers
+# later, run it again with every server, the first one first; servers already
+# in the cluster keep their settings.
 
 set -euo pipefail
 
 REGISTRY_PORT=5000
+REGISTRY_PORT_SET=0
 ASSUME_YES=0
+PUBLISHED=0
 servers=()
 while [ $# -gt 0 ]; do
     case "$1" in
-        --registry-port) REGISTRY_PORT="$2"; shift 2 ;;
+        --registry-port) REGISTRY_PORT="$2"; REGISTRY_PORT_SET=1; shift 2 ;;
         --yes) ASSUME_YES=1; shift ;;
-        -h|--help) sed -n '/^# Build a K3s cluster/,/^# the first one first/p' "$0"; exit 0 ;;
+        --published-images) PUBLISHED=1; shift ;;
+        -h|--help) sed -n '/^# Build a K3s cluster/,/^# in the cluster keep/p' "$0"; exit 0 ;;
         -*) echo "ERROR: unknown argument $1" >&2; exit 2 ;;
         *) servers+=("$1"); shift ;;
     esac
@@ -53,6 +66,10 @@ done
 case "$REGISTRY_PORT" in
     ''|*[!0-9]*) echo "ERROR: --registry-port takes a port number" >&2; exit 2 ;;
 esac
+if [ "$PUBLISHED" -eq 1 ] && [ "$REGISTRY_PORT_SET" -eq 1 ]; then
+    echo "ERROR: --published-images runs no image registry, so --registry-port does not apply" >&2
+    exit 2
+fi
 if [ "${#servers[@]}" -eq 0 ]; then
     echo "ERROR: name at least one server: $(basename "$0") [--registry-port PORT] [--yes] SERVER [SERVER ...]" >&2
     exit 2
@@ -62,38 +79,51 @@ if [ "$(id -u)" -eq 0 ]; then
     exit 1
 fi
 
-checkout="$(cd "$(dirname "$0")/.." && pwd)"
-builder="$checkout/scripts/build-k3s-node.sh"
-config_mk="$checkout/config.mk"
+builder="$(cd "$(dirname "$0")" && pwd)/build-k3s-node.sh"
 kubeconfig="$HOME/.kube/nodalarc.yaml"
 daemon_json=/etc/docker/daemon.json
-for f in "$builder" "$checkout/config.mk.example"; do
-    if [ ! -f "$f" ]; then
-        echo "ERROR: $f is missing; run this script from a NodalArc checkout." >&2
-        exit 1
-    fi
-done
-
-# make reads KUBECONFIG and REGISTRY_HOST from the environment before config.mk,
-# so a value exported in this shell would point make somewhere else.
-for var in KUBECONFIG REGISTRY_HOST; do
-    if [ -n "${!var:-}" ]; then
-        echo "ERROR: $var is set in your environment (${!var}); make would use it instead of the" >&2
-        echo "       value this script writes to config.mk. Unset it and run this script again." >&2
-        exit 1
-    fi
-done
-
-for tool in ssh scp jq curl kubectl docker; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "ERROR: $tool is not installed; run sudo scripts/bootstrap-dev-machine.sh first." >&2
-        exit 1
-    fi
-done
-if ! docker info >/dev/null 2>&1; then
-    echo "ERROR: Docker does not answer for your account. Check that its daemon runs and that your" >&2
-    echo "       account is in the docker group (after joining it, log out and back in)." >&2
+if [ ! -f "$builder" ]; then
+    echo "ERROR: $builder is missing; it belongs beside this script." >&2
     exit 1
+fi
+
+if [ "$PUBLISHED" -eq 1 ]; then
+    for tool in ssh scp kubectl; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "ERROR: $tool is not installed on this machine." >&2
+            exit 1
+        fi
+    done
+else
+    checkout="$(cd "$(dirname "$0")/.." && pwd)"
+    config_mk="$checkout/config.mk"
+    if [ ! -f "$checkout/config.mk.example" ]; then
+        echo "ERROR: $checkout/config.mk.example is missing; run this script from a NodalArc checkout," >&2
+        echo "       or pass --published-images to build a cluster for NodalArc's published images." >&2
+        exit 1
+    fi
+
+    # make reads KUBECONFIG and REGISTRY_HOST from the environment before config.mk,
+    # so a value exported in this shell would point make somewhere else.
+    for var in KUBECONFIG REGISTRY_HOST; do
+        if [ -n "${!var:-}" ]; then
+            echo "ERROR: $var is set in your environment (${!var}); make would use it instead of the" >&2
+            echo "       value this script writes to config.mk. Unset it and run this script again." >&2
+            exit 1
+        fi
+    done
+
+    for tool in ssh scp jq curl kubectl docker; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "ERROR: $tool is not installed; run sudo scripts/bootstrap-dev-machine.sh first." >&2
+            exit 1
+        fi
+    done
+    if ! docker info >/dev/null 2>&1; then
+        echo "ERROR: Docker does not answer for your account. Check that its daemon runs and that your" >&2
+        echo "       account is in the docker group (after joining it, log out and back in)." >&2
+        exit 1
+    fi
 fi
 
 # One ssh connection per server carries every command and copy, so a password
@@ -232,30 +262,42 @@ run_builder() {
 
 first="${servers[0]}"
 first_address="$(server_address "$first")"
-registry="$first_address:$REGISTRY_PORT"
+registry=""
+if [ "$PUBLISHED" -eq 0 ]; then
+    registry="$first_address:$REGISTRY_PORT"
+fi
 
 daemon_change=0
 daemon_current='{}'
-if [ -f "$daemon_json" ]; then
+if [ "$PUBLISHED" -eq 1 ]; then
+    :
+elif [ -f "$daemon_json" ]; then
     daemon_current="$(cat "$daemon_json")"
     if ! jq -e 'type == "object"' <<<"$daemon_current" >/dev/null 2>&1; then
         echo "ERROR: $daemon_json is not a JSON object; fix it before adding the registry to it." >&2
         exit 1
     fi
 fi
-if ! jq -e --arg r "$registry" '(.["insecure-registries"] // []) | index($r)' <<<"$daemon_current" >/dev/null; then
+if [ "$PUBLISHED" -eq 0 ] \
+    && ! jq -e --arg r "$registry" '(.["insecure-registries"] // []) | index($r)' <<<"$daemon_current" >/dev/null; then
     daemon_change=1
 fi
 
 echo "=== NodalArc cluster builder ==="
 echo "Servers, each built with scripts/build-k3s-node.sh, which lists its own changes:"
-echo "  - $first: starts the cluster at https://$first_address:6443 and runs the image registry $registry"
+if [ "$PUBLISHED" -eq 1 ]; then
+    echo "  - $first: starts the cluster at https://$first_address:6443"
+else
+    echo "  - $first: starts the cluster at https://$first_address:6443 and runs the image registry $registry"
+fi
 for server in "${servers[@]:1}"; do
     echo "  - $server: joins the cluster"
 done
 echo "On this machine:"
 echo "  - write $kubeconfig"
-if [ -f "$config_mk" ]; then
+if [ "$PUBLISHED" -eq 1 ]; then
+    :
+elif [ -f "$config_mk" ]; then
     echo "  - set KUBECONFIG and REGISTRY_HOST in $config_mk"
 else
     echo "  - create $config_mk from config.mk.example with KUBECONFIG and REGISTRY_HOST set"
@@ -285,14 +327,20 @@ case "$remote_token_file" in
     /tmp/nodalarc-token.*) ;;
     *) echo "ERROR: could not create a file on $first" >&2; exit 1 ;;
 esac
-run_builder "$first" "" "--registry $registry --serve-registry $builder_yes" "$remote_token_file"
+first_args="--registry $registry --serve-registry $builder_yes"
+join_args="--registry $registry $builder_yes"
+if [ "$PUBLISHED" -eq 1 ]; then
+    first_args="$builder_yes"
+    join_args="$builder_yes"
+fi
+run_builder "$first" "" "$first_args" "$remote_token_file"
 token="$(ssh "${ssh_opts[@]}" "$first" "cat $remote_token_file; rm -f -- $remote_token_file")"
 case "$token" in
     ''|*[[:space:]]*) echo "ERROR: could not read the join token from $first" >&2; exit 1 ;;
 esac
 
 for server in "${servers[@]:1}"; do
-    run_builder "$server" "K3S_URL=https://$first_address:6443 K3S_TOKEN=$token" "--registry $registry $builder_yes"
+    run_builder "$server" "K3S_URL=https://$first_address:6443 K3S_TOKEN=$token" "$join_args"
 done
 
 # ---------------------------------------------------------------------------
@@ -312,9 +360,6 @@ fi
 install -m 600 "$work/kubeconfig" "$kubeconfig"
 echo "  wrote $kubeconfig"
 
-if [ ! -f "$config_mk" ]; then
-    cp "$checkout/config.mk.example" "$config_mk"
-fi
 set_setting() {
     awk -v key="$1" -v value="$2" '
         $0 ~ "^" key "[[:space:]]*[:?]?=" { if (!done) print key " ?= " value; done = 1; next }
@@ -323,9 +368,14 @@ set_setting() {
     ' "$config_mk" > "$work/config.mk"
     cp "$work/config.mk" "$config_mk"
 }
-set_setting KUBECONFIG "$kubeconfig"
-set_setting REGISTRY_HOST "$registry"
-echo "  set KUBECONFIG and REGISTRY_HOST in $config_mk"
+if [ "$PUBLISHED" -eq 0 ]; then
+    if [ ! -f "$config_mk" ]; then
+        cp "$checkout/config.mk.example" "$config_mk"
+    fi
+    set_setting KUBECONFIG "$kubeconfig"
+    set_setting REGISTRY_HOST "$registry"
+    echo "  set KUBECONFIG and REGISTRY_HOST in $config_mk"
+fi
 
 if [ "$daemon_change" -eq 1 ]; then
     jq --arg r "$registry" '.["insecure-registries"] = ((.["insecure-registries"] // []) + [$r])' \
@@ -353,6 +403,14 @@ for server in "${servers[@]}"; do
         exit 1
     fi
 done
+if [ "$PUBLISHED" -eq 1 ]; then
+    echo ""
+    echo "=== Done ==="
+    echo "${#servers[@]} server(s) Ready. Next, install a NodalArc release:"
+    echo "  KUBECONFIG=$kubeconfig helm install nodalarc oci://ghcr.io/dotchance/charts/nodalarc \\"
+    echo "    --version <release> --namespace nodalarc --create-namespace"
+    exit 0
+fi
 if ! curl -sf -o /dev/null "http://$registry/v2/"; then
     echo "ERROR: the registry at $registry does not answer from this machine" >&2
     exit 1

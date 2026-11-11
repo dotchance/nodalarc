@@ -201,7 +201,13 @@ helm install nodalarc oci://ghcr.io/dotchance/nodalarc --version $RELEASE \
 helm test nodalarc -n nodalarc --logs
 ```
 
-When the install finishes, Helm prints where the browser interface is: port 3000 on the server that runs VS-API. Open it and deploy a session from the Sessions window.
+The browser interface runs on port 3000 of the server that runs VS-API. When the install finishes, Helm prints how to find that server (`helm status nodalarc -n nodalarc` prints it again); this command gives its address:
+
+```bash
+kubectl -n nodalarc get pod -l app=nodalarc-vf -o jsonpath='{.items[0].status.hostIP}'
+```
+
+Open `http://<that address>:3000` and deploy a session from the Sessions window.
 
 `helm uninstall nodalarc -n nodalarc` removes the session, the platform and NodalArc's network devices on every server. `kubectl delete namespace nodalarc` and `kubectl delete crd constellationspecs.nodalarc.io` then remove the saved session data and the ConstellationSpec definition.
 

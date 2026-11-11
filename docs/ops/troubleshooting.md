@@ -168,7 +168,7 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get namespace nodalarc -o json
 
 **Check:** `make teardown` runs the Node Agent's cleaner on every host that runs a Node Agent pod, judges each host by the cleaner's report and refuses to uninstall while any host is unverified. Its output names the host and the devices that remain. For a read-only look at one host:
 ```bash
-ssh node02 "ip -o link show"
+ssh <server> "ip -o link show"
 ```
 Every host device NodalArc creates is in its device group, 0x4E415243 (1312903747): `ip -o link show group 1312903747` lists them. Emulated LAN bridges (site LANs), their ports and their VXLAN ports are in the `emulated_lan` network namespace instead: `sudo ip netns exec emulated_lan ip -o link` lists them.
 

@@ -12,7 +12,7 @@
 #
 # Idempotent: safe to run more than once. Requires root (or sudo).
 #
-# After this script completes: cd nodal && make all
+# After this script completes: cd nodalarc && make all
 
 set -euo pipefail
 
@@ -110,6 +110,6 @@ echo "as root on that server, and put its kubeconfig where make reads it"
 echo "(KUBECONFIG in config.mk, /etc/rancher/k3s/k3s.yaml by default)."
 echo ""
 echo "Next steps:"
-echo "  cd nodal"
+echo "  cd nodalarc"
 echo "  make all"
 echo ""

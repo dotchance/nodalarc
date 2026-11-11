@@ -7,10 +7,16 @@
 # the way K3s's own installer is run: the first machine alone, every further
 # machine with the join command the first one prints.
 #
-#   build-k3s-node.sh [--link-mtu BYTES] [--agent] [--yes]
+#   build-k3s-node.sh [--registry HOST:PORT [--serve-registry]] [--link-mtu BYTES] [--agent] [--yes]
 #
-#   First machine:     build-k3s-node.sh
-#   Further machines:  K3S_URL=https://<first>:6443 K3S_TOKEN=<token> build-k3s-node.sh
+#   First machine:     build-k3s-node.sh --registry HOST:PORT --serve-registry
+#   Further machines:  K3S_URL=https://<first>:6443 K3S_TOKEN=<token> build-k3s-node.sh --registry HOST:PORT
+#
+# A cluster of several servers takes NodalArc's images from one registry: the
+# build machine pushes them there and every server pulls them. --registry names
+# it (a host name or address every server and the build machine reach, and its
+# port); --serve-registry runs it on this machine. A single machine that builds
+# and runs NodalArc needs neither.
 #
 # What it changes, listed once and applied after one answer:
 #   1. /etc/sysctl.d/60-nodalarc-inotify.conf, only for an inotify limit that
@@ -27,8 +33,14 @@
 #      cluster-init on the first machine. Your own K3s settings stay in
 #      /etc/rancher/k3s/config.yaml, which this script never touches; K3s
 #      merges the two.
-#   4. K3s's official installer (get.k3s.io) when K3s is absent; when K3s is
-#      already installed and the drop-in changed, a restart of its unit.
+#   4. With --registry: /etc/rancher/k3s/registries.yaml, so K3s pulls from
+#      that registry over plain HTTP. A registries.yaml this script did not
+#      write is left alone and the script stops.
+#   5. With --serve-registry: the docker-registry package (apt), configured to
+#      listen on the --registry port with no credentials and with deletion
+#      enabled (make nuke removes NodalArc's images from it).
+#   6. K3s's official installer (get.k3s.io) when K3s is absent; when K3s is
+#      already installed and its settings changed, a restart of its unit.
 #
 # It checks nothing about the kernel: once NodalArc is installed, the Node
 # Agent's readiness probe judges each server and names what it lacks.
@@ -47,18 +59,37 @@ K3S_INSTALLER_URL="https://get.k3s.io"
 LINK_MTU=8800
 ROLE=server
 ASSUME_YES=0
+REGISTRY=""
+SERVE_REGISTRY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --link-mtu) LINK_MTU="$2"; shift 2 ;;
+        --registry) REGISTRY="$2"; shift 2 ;;
+        --serve-registry) SERVE_REGISTRY=1; shift ;;
         --agent) ROLE=agent; shift ;;
         --yes) ASSUME_YES=1; shift ;;
-        -h|--help) sed -n '5,32p' "$0"; exit 0 ;;
+        -h|--help) sed -n '/^# Build one K3s server/,/^# Idempotent/p' "$0"; exit 0 ;;
         *) echo "ERROR: unknown argument $1" >&2; exit 2 ;;
     esac
 done
 case "$LINK_MTU" in
     ''|*[!0-9]*) echo "ERROR: --link-mtu takes a number of bytes" >&2; exit 2 ;;
 esac
+registry_port=""
+if [ -n "$REGISTRY" ]; then
+    registry_port="${REGISTRY##*:}"
+    if [ "$registry_port" = "$REGISTRY" ] || [ -z "${REGISTRY%:*}" ]; then
+        echo "ERROR: --registry takes HOST:PORT" >&2
+        exit 2
+    fi
+    case "$registry_port" in
+        ''|*[!0-9]*) echo "ERROR: --registry takes HOST:PORT; the port is a number" >&2; exit 2 ;;
+    esac
+fi
+if [ "$SERVE_REGISTRY" -eq 1 ] && [ -z "$REGISTRY" ]; then
+    echo "ERROR: --serve-registry needs --registry HOST:PORT (the port it listens on)" >&2
+    exit 2
+fi
 if [ "$(id -u)" -ne 0 ]; then
     echo "ERROR: run as root" >&2
     exit 1
@@ -95,10 +126,12 @@ fi
 
 # MTU: the interface of the default route carries the node's traffic. The
 # VXLAN overhead is 50 bytes over IPv4 node addresses and 70 over IPv6.
-cluster_interface="$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\) .*/\1/p')"
+route_probe=(ip -o route get 1.1.1.1)
+cluster_interface="$("${route_probe[@]}" 2>/dev/null | sed -n 's/.* dev \([^ ]*\) .*/\1/p')"
 overhead=50
 if [ -z "$cluster_interface" ]; then
-    cluster_interface="$(ip -o -6 route get 2606:4700:4700::1111 2>/dev/null | sed -n 's/.* dev \([^ ]*\) .*/\1/p')"
+    route_probe=(ip -o -6 route get 2606:4700:4700::1111)
+    cluster_interface="$("${route_probe[@]}" 2>/dev/null | sed -n 's/.* dev \([^ ]*\) .*/\1/p')"
     overhead=70
 fi
 if [ -z "$cluster_interface" ]; then
@@ -155,6 +188,56 @@ if [ ! -f "$dropin" ] || [ "$(cat "$dropin")" != "$desired_dropin" ]; then
     changes+=("write $dropin (max-pods=$MAX_PODS, no kubelet image pull limit, a /$POD_RANGE_MASK_IPV4 pod range per server, readable kubeconfig$init_note)")
 fi
 
+# The registry K3s pulls from.
+registries_file=/etc/rancher/k3s/registries.yaml
+registries_marker="# Written by NodalArc's build-k3s-node.sh"
+registries_change=0
+if [ -n "$REGISTRY" ]; then
+    desired_registries="$registries_marker: pull from the image registry
+# over plain HTTP.
+mirrors:
+  \"$REGISTRY\":
+    endpoint:
+      - \"http://$REGISTRY\""
+    if [ -f "$registries_file" ] && ! grep -qF "$registries_marker" "$registries_file"; then
+        echo "ERROR: $registries_file exists and this script did not write it; add a mirror for $REGISTRY" >&2
+        echo "       (endpoint http://$REGISTRY) to it yourself, or move it aside and run this script again." >&2
+        exit 1
+    fi
+    if [ ! -f "$registries_file" ] || [ "$(cat "$registries_file")" != "$desired_registries" ]; then
+        registries_change=1
+        changes+=("write $registries_file (pull from $REGISTRY over plain HTTP)")
+    fi
+fi
+
+# The registry this machine serves.
+registry_config=/etc/docker/registry/config.yml
+registry_serve_change=0
+if [ "$SERVE_REGISTRY" -eq 1 ]; then
+    desired_registry_config="# Written by NodalArc's build-k3s-node.sh: no credentials (NodalArc sends
+# none) and deletion enabled (make nuke removes NodalArc's images).
+version: 0.1
+storage:
+  filesystem:
+    rootdirectory: /var/lib/docker-registry
+  delete:
+    enabled: true
+http:
+  addr: \":$registry_port\""
+    if ! dpkg -s docker-registry >/dev/null 2>&1; then
+        if ! command -v apt-get >/dev/null 2>&1; then
+            echo "ERROR: --serve-registry installs the docker-registry package with apt-get, which this machine lacks." >&2
+            echo "       Run a registry on port $registry_port another way and leave out --serve-registry." >&2
+            exit 1
+        fi
+        registry_serve_change=1
+        changes+=("install the docker-registry package and serve it on port $registry_port")
+    elif [ "$(cat "$registry_config" 2>/dev/null)" != "$desired_registry_config" ]; then
+        registry_serve_change=1
+        changes+=("configure the docker-registry service on port $registry_port")
+    fi
+fi
+
 # K3s itself.
 k3s_present=0
 k3s_unit=""
@@ -166,8 +249,8 @@ if command -v k3s >/dev/null 2>&1; then
             break
         fi
     done
-    if [ "$dropin_change" -eq 1 ]; then
-        changes+=("restart $k3s_unit so the drop-in takes effect (an API outage on a single-server cluster)")
+    if [ "$dropin_change" -eq 1 ] || [ "$registries_change" -eq 1 ]; then
+        changes+=("restart $k3s_unit so its new settings take effect (an API outage on a single-server cluster)")
     fi
 else
     if [ -n "${K3S_URL:-}" ]; then
@@ -234,6 +317,22 @@ NETPLAN
         echo "ERROR: $cluster_interface is not up at an MTU of $needed_mtu after applying the configuration." >&2
         exit 1
     fi
+    # Applying the MTU resets the link, and a DHCP address comes back only after the
+    # lease is renewed, seconds after the link is up again. Nothing that needs the
+    # network runs before the default route is back on this interface with an address.
+    route_ready() {
+        local route
+        route="$("${route_probe[@]}" 2>/dev/null)" || return 1
+        [[ "$route" == *" dev $cluster_interface "*"src "* ]]
+    }
+    for _ in $(seq 1 60); do
+        route_ready && break
+        sleep 1
+    done
+    if ! route_ready; then
+        echo "ERROR: $cluster_interface has no address and default route 60 s after the MTU change." >&2
+        exit 1
+    fi
     echo "  $cluster_interface: MTU $needed_mtu"
 fi
 
@@ -245,15 +344,51 @@ if [ "$dropin_change" -eq 1 ]; then
     echo "  wrote $dropin"
 fi
 
+if [ "$registry_serve_change" -eq 1 ]; then
+    if ! dpkg -s docker-registry >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-registry >/dev/null
+    fi
+    printf '%s\n' "$desired_registry_config" > "$registry_config"
+    systemctl enable --now docker-registry >/dev/null 2>&1
+    systemctl restart docker-registry
+    for _ in $(seq 1 30); do
+        curl -sf -o /dev/null "http://127.0.0.1:$registry_port/v2/" && break
+        sleep 1
+    done
+    if ! curl -sf -o /dev/null "http://127.0.0.1:$registry_port/v2/"; then
+        echo "ERROR: the registry does not answer on port $registry_port; see: journalctl -u docker-registry" >&2
+        exit 1
+    fi
+    echo "  registry: serving on port $registry_port"
+fi
+
+if [ "$registries_change" -eq 1 ]; then
+    mkdir -p "$(dirname "$registries_file")"
+    printf '%s\n' "$desired_registries" > "$registries_file.tmp"
+    mv "$registries_file.tmp" "$registries_file"
+    echo "  wrote $registries_file"
+fi
+
 if [ "$k3s_present" -eq 0 ]; then
     echo "  installing K3s..."
-    if [ -n "${K3S_URL:-}" ]; then
-        INSTALL_K3S_EXEC="$ROLE" K3S_URL="$K3S_URL" K3S_TOKEN="$K3S_TOKEN" \
-            sh -c "$(curl -sfL "$K3S_INSTALLER_URL")"
-    else
-        sh -c "$(curl -sfL "$K3S_INSTALLER_URL")"
+    # The installer is downloaded to a file first, so a failed download stops here.
+    installer="$(mktemp)"
+    if [ -z "$installer" ] || [ ! -f "$installer" ]; then
+        echo "ERROR: could not create a file for the K3s installer" >&2
+        exit 1
     fi
-elif [ "$dropin_change" -eq 1 ]; then
+    if ! curl -sfL -o "$installer" "$K3S_INSTALLER_URL"; then
+        rm -f -- "$installer"
+        echo "ERROR: could not download the K3s installer from $K3S_INSTALLER_URL" >&2
+        exit 1
+    fi
+    if [ -n "${K3S_URL:-}" ]; then
+        INSTALL_K3S_EXEC="$ROLE" K3S_URL="$K3S_URL" K3S_TOKEN="$K3S_TOKEN" sh "$installer"
+    else
+        sh "$installer"
+    fi
+    rm -f -- "$installer"
+elif [ "$dropin_change" -eq 1 ] || [ "$registries_change" -eq 1 ]; then
     echo "  restarting $k3s_unit..."
     systemctl restart "$k3s_unit"
 fi
@@ -284,10 +419,20 @@ if [ "$ROLE" = server ]; then
         node_ip="$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([^ ]*\) .*/\1/p')"
         token="$(cat /var/lib/rancher/k3s/server/node-token)"
         echo "To add another server, run on it as root:"
-        echo "  K3S_URL=https://${node_ip}:6443 K3S_TOKEN=${token} $(basename "$0")"
+        echo "  K3S_URL=https://${node_ip}:6443 K3S_TOKEN=${token} $(basename "$0")${REGISTRY:+ --registry $REGISTRY}"
         echo "To add a worker instead, add --agent to that command."
         echo ""
-        echo "The kubeconfig is /etc/rancher/k3s/k3s.yaml. Next: install NodalArc with helm; see the getting-started page."
+        echo "Then, on the build machine, in the NodalArc checkout:"
+        echo "  mkdir -p ~/.kube"
+        echo "  ssh <you>@${node_ip} cat /etc/rancher/k3s/k3s.yaml | sed 's/127.0.0.1/${node_ip}/' > ~/.kube/nodalarc.yaml"
+        echo "  cp config.mk.example config.mk, and set in it:"
+        echo "    KUBECONFIG ?= \$(HOME)/.kube/nodalarc.yaml"
+        if [ -n "$REGISTRY" ]; then
+            echo "    REGISTRY_HOST ?= $REGISTRY"
+            echo "  let Docker push to the registry: \"insecure-registries\": [\"$REGISTRY\"] in"
+            echo "  /etc/docker/daemon.json, then sudo systemctl restart docker"
+        fi
+        echo "  make all"
     fi
 else
     echo ""

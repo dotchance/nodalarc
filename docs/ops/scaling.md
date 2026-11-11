@@ -106,5 +106,5 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | \
 
 # NodalArc VXLAN tunnel count per node (tunnel devices are named vx plus six
 # hex digits by lib/nodalarc/runtime_naming.py)
-ssh node02 "ip -o link show type vxlan | grep -c ': vx'"
+ssh <server> "ip -o link show type vxlan | grep -c ': vx'"
 ```

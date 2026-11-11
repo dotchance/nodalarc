@@ -5,7 +5,7 @@
 # detect-registry.sh — Best-effort discovery of the K3s container registry
 # hostname on this build host.
 #
-# Output: hostname:port (e.g. "node01:5000") on success; empty on any failure.
+# Output: hostname:port (e.g. "registry.example:5000") on success; empty on any failure.
 # Exit code is always 0 — callers treat empty output as "single-node mode".
 #
 # Source of truth: /etc/rancher/k3s/registries.yaml on the build host. That
@@ -37,9 +37,9 @@ fi
 # Fallback: awk parser. Finds the first quoted key indented under `mirrors:`.
 # Matches shapes like:
 #   mirrors:
-#     "node01:5000":
+#     "registry.example:5000":
 #       endpoint:
-#         - "http://node01:5000"
+#         - "http://registry.example:5000"
 awk '
     /^mirrors:[[:space:]]*$/       { in_mirrors = 1; next }
     /^[^[:space:]]/                { in_mirrors = 0 }

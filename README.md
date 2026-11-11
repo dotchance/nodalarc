@@ -174,7 +174,7 @@ NodalArc will soon be published as ready-to-run runtime containers and a Helm ch
 
 ### Build From Source (Developers)
 
-Until the runtime containers are published, NodalArc is built and installed from a source checkout. This path is for developers, and the [Developer Guide](docs/dev/getting-started.md) has the full setup. `scripts/bootstrap-dev-machine.sh` installs the build tools (Docker, kubectl, Helm, Node.js and uv) on the build machine:
+Until the runtime containers are published, NodalArc is built and installed from a source checkout. This path is for developers, and the [Developer Guide](docs/dev/getting-started.md) has the full setup. `scripts/bootstrap-dev-machine.sh` installs the build tools (Docker, kubectl, Helm, Node.js and uv) on the build machine; skip it if they are installed. For a cluster of several servers, build each one with `scripts/build-k3s-node.sh` first, as the [Developer Guide](docs/dev/getting-started.md) describes:
 
 ```bash
 git clone https://github.com/dotchance/nodalarc.git

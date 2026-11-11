@@ -1,6 +1,6 @@
 # Multi-Node Deployment
 
-For constellations larger than ~200 satellites, or when you need to test multi-node networking behavior (VXLAN tunnels, substrate latency compensation), deploy across multiple Kubernetes nodes.
+Deploy across several Kubernetes nodes to run larger sessions and to exercise the links that cross between servers (VXLAN tunnels, substrate latency compensation).
 
 ## Requirements
 
@@ -11,26 +11,46 @@ For constellations larger than ~200 satellites, or when you need to test multi-n
 
 ## Container Registry Setup
 
-Single-node deployments import images directly into the local container runtime. Multi-node deployments need a registry so all nodes can pull images.
+Single-node deployments import images directly into the local container runtime. A cluster of several servers takes NodalArc's images from one registry: the build machine pushes them there and every server pulls them.
 
-### 1. Create config.mk
+### 1. Run the registry and point every server at it
+
+`scripts/build-k3s-node.sh` does both. On the server that runs the registry:
+
+```bash
+sudo ./build-k3s-node.sh --registry <registry host>:<port> --serve-registry
+```
+
+and on every other server `--registry <registry host>:<port>` alone (the join command the first server prints carries it). `--serve-registry` installs Ubuntu's `docker-registry` package, configured with no credentials (NodalArc sends none) and with deletion enabled (`make nuke` removes NodalArc's images); `--registry` writes `/etc/rancher/k3s/registries.yaml` so K3s pulls from the registry over plain HTTP. Any other OCI registry works too: leave out `--serve-registry`.
+
+### 2. Let the build machine push to it
+
+Docker pushes over HTTPS unless told otherwise. On the build machine, name the registry in `/etc/docker/daemon.json`:
+
+```json
+{ "insecure-registries": ["<registry host>:<port>"] }
+```
+
+then restart Docker with `sudo systemctl restart docker`.
+
+### 3. Point the build at it
+
+In the source checkout on the build machine:
 
 ```bash
 cp config.mk.example config.mk
 ```
 
-### 2. Configure the registry
-
 Edit `config.mk`:
 
 ```makefile
 # Hostname:port that every K3s node can pull from.
-REGISTRY_HOST ?= myregistry.local:5000
+REGISTRY_HOST ?= <registry host>:<port>
 ```
 
 With `REGISTRY_HOST` set, `make load` pushes NodalArc runtime images to the registry instead of importing locally. Helm image values are generated from the shared runtime image inventory; the installer accepts no other Helm arguments.
 
-### 3. Build and deploy
+### 4. Build and deploy
 
 ```bash
 make all
@@ -172,7 +192,7 @@ Initial tunnel creation on cold start takes about 30 seconds for 176 tunnels. Th
 ```bash
 # Count NodalArc VXLAN tunnels on a specific node (tunnel devices are named
 # vx plus six hex digits by lib/nodalarc/runtime_naming.py)
-ssh node02 "ip -o link show type vxlan | grep -c ': vx'"
+ssh <server> "ip -o link show type vxlan | grep -c ': vx'"
 
 # Check substrate latency measurements
 sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-node-agent -n nodalarc | grep substrate

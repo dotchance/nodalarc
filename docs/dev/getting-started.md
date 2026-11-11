@@ -11,22 +11,38 @@
 
 ## First-Time Setup
 
+On the build machine:
+
 ```bash
-# Clone the repository
 git clone https://github.com/dotchance/nodalarc.git
 cd nodalarc
-
-# Bootstrap this development machine (Docker, kubectl, Helm, Node.js, uv)
-# Skip if you already have these
+# Docker, kubectl, Helm, Node.js and uv; skip it if they are installed
 sudo scripts/bootstrap-dev-machine.sh
-
-# Build each K3s server, as root on that server; the first one prints the
-# join command for the others. Skip if you already have a cluster.
-sudo scripts/build-k3s-node.sh
-
-# Install dependencies and build everything
-make all
 ```
+
+### A single machine
+
+When the build machine is also the only K3s server, build it with
+`sudo scripts/build-k3s-node.sh` and run `make all`.
+
+### A cluster of several servers
+
+Copy `scripts/build-k3s-node.sh` to each server and run it there as root. Choose
+the registry the cluster takes its images from: a host name or address that every
+server and the build machine reach, and a port. The first server runs it:
+
+```bash
+sudo ./build-k3s-node.sh --registry <registry host>:<port> --serve-registry
+```
+
+It prints the command that joins each further server (with the same
+`--registry`), and the steps for the build machine with this cluster's values
+filled in: fetch the kubeconfig, write `config.mk`, let Docker push to the
+registry. Do those, then run `make all` in the checkout.
+
+The registry can also run elsewhere (any OCI registry that serves plain HTTP on
+the private network); leave out `--serve-registry` and give every server
+`--registry` with its address.
 
 `make all` is the clean-state bring-up path. It installs Python/Node.js dependencies, builds all Docker images, loads them into the selected image destination, deploys the platform via Helm, starts a default session, and prints status. ~3-5 minutes from scratch.
 

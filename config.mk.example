@@ -34,4 +34,4 @@ DEFAULT_SESSION ?= catalog/nodalarc/sessions/earth-leo-simple.yaml
 #
 # Example:
 #
-# REGISTRY_HOST ?= node01:5000
+# REGISTRY_HOST ?= registry.example:5000

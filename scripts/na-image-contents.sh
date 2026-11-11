@@ -69,7 +69,7 @@ for image in "${images[@]}"; do
     files="$(printf '%s\n' "$listing" | grep -E "$APP_ROOTS" | grep -v '/$' || true)"
     scanner="$(printf '%s\n' "$listing" | grep -E "$SCANNER" || true)"
     # The component is the last path element of the reference, without its
-    # tag or digest: node01:5000/nodalarc/ome@sha256:... -> ome. The path is
+    # tag or digest: registry.example:5000/nodalarc/ome@sha256:... -> ome. The path is
     # cut first, since a registry address can hold a colon of its own.
     component="${image##*/}"; component="${component%%@*}"; component="${component%%:*}"
     labelled="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")"

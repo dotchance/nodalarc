@@ -121,15 +121,14 @@ if ! image_args_text="$(bash "$ROOT_DIR/scripts/na-images.sh" helm-image-args)";
 fi
 mapfile -t image_args <<< "$image_args_text"
 
-# Development workload image overrides map the exact placeholder references
-# of the shipped profiles to this tree's images, matching the Make-owned
-# image resolution of every other runtime image. The value is a JSON
-# object; helm --set parsing would read its braces and commas as list
-# syntax, so it travels as a generated values file. The chart default
-# stays empty outside this installation path.
-workload_values_file="$(mktemp /tmp/nodalarc-workload-overrides.XXXXXX.yaml)"
+# The workload image map names this tree's build for each logical image the
+# shipped profiles name, matching the Make-owned image resolution of every
+# other runtime image. The value is a JSON object; helm --set parsing would
+# read its braces and commas as list syntax, so it travels as a generated
+# values file.
+workload_values_file="$(mktemp /tmp/nodalarc-workload-images.XXXXXX.yaml)"
 trap 'rm -f "$workload_values_file"' EXIT
-bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides-values > "$workload_values_file"
+bash "$ROOT_DIR/scripts/na-images.sh" workload-images-values > "$workload_values_file"
 image_args+=("--values=$workload_values_file")
 
 helm_args=(

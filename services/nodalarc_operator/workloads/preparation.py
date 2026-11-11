@@ -13,7 +13,6 @@ terminal, never a fallback.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import dataclass
@@ -27,11 +26,16 @@ from nodalarc.workloads.plan import WorkloadPlan
 
 from adapters.registry import adapter_named
 from nodalarc_operator.workloads.compose import ComposedWorkload, compose_workload
+from nodalarc_operator.workloads.images import (
+    WORKLOAD_IMAGES_ENV,
+    WorkloadImageMap,
+    WorkloadImageMapError,
+    is_logical_reference,
+    load_workload_image_map,
+)
 from nodalarc_operator.workloads.materializer import image_pull_policy_for
 
 log = logging.getLogger("nodalarc.operator.workloads")
-
-DEV_IMAGE_OVERRIDES_ENV = "WORKLOAD_DEV_IMAGE_OVERRIDES"
 
 
 class WorkloadPreparationError(ValueError):
@@ -49,61 +53,49 @@ class PreparedWorkloads:
     identity: str
 
 
-def _dev_image_overrides() -> dict[str, str]:
-    raw = os.environ.get(DEV_IMAGE_OVERRIDES_ENV, "").strip()
-    if not raw:
-        return {}
-    try:
-        overrides = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise WorkloadPreparationError(
-            f"{DEV_IMAGE_OVERRIDES_ENV} is not valid JSON: {error}"
-        ) from error
-    if not isinstance(overrides, dict) or not all(
-        isinstance(key, str) and isinstance(value, str) for key, value in overrides.items()
-    ):
-        raise WorkloadPreparationError(
-            f"{DEV_IMAGE_OVERRIDES_ENV} must map image references to image references"
-        )
-    return overrides
+def _image_map_pull_policy() -> str:
+    """The configured pull policy, mandatory once the map resolves images.
 
-
-def _dev_override_pull_policy() -> str:
-    """The configured pull policy, mandatory once overrides substitute images.
-
-    Substituted references are mutable development tags; leaving Kubernetes'
-    tag-derived default in place would silently pin a stale cached image.
+    A developer build is named by a mutable tag; leaving Kubernetes'
+    tag-derived default in place would silently run a stale cached image.
     """
     pull_policy = os.environ.get("IMAGE_PULL_POLICY", "").strip()
     if not pull_policy:
         raise WorkloadPreparationError(
-            f"IMAGE_PULL_POLICY must be set when {DEV_IMAGE_OVERRIDES_ENV} is active"
+            f"IMAGE_PULL_POLICY must be set when {WORKLOAD_IMAGES_ENV} names images"
         )
     return pull_policy
 
 
-def _apply_dev_image_overrides(
-    composed: ComposedWorkload, overrides: dict[str, str], pull_policy: str
-) -> dict[tuple[str, str], int]:
-    """Explicit, visibly non-reproducible development substitution.
+def _resolve_logical_images(
+    composed: ComposedWorkload,
+    image_map: WorkloadImageMap,
+    pull_policy: str,
+    *,
+    node_id: str,
+    profile_ref: str,
+) -> list[str]:
+    """Replace every logical image with the image the map names.
 
-    Applied to composed Kubernetes containers only — admission and the
-    profile identity are untouched, so production digest policy is never
-    weakened globally. Returns how many containers each (image, replacement)
-    pair substituted, for the preparation's one summary warning.
+    A logical image the map does not name is refused. Returns the image of
+    every container, in order, for the workload identity.
     """
-    applied: dict[tuple[str, str], int] = {}
+    images: list[str] = []
     for container in (
         *composed.composition.init_containers,
         *composed.composition.containers,
     ):
-        replacement = overrides.get(container.image)
-        if replacement:
-            key = (container.image, replacement)
-            applied[key] = applied.get(key, 0) + 1
-            container.image = replacement
-            container.image_pull_policy = image_pull_policy_for(replacement, pull_policy)
-    return applied
+        if is_logical_reference(container.image):
+            actual = image_map.images.get(container.image)
+            if actual is None:
+                raise WorkloadPreparationError(
+                    f"node {node_id!r}: profile {profile_ref} names {container.image}, which "
+                    f"the workload image map ({WORKLOAD_IMAGES_ENV}) does not resolve"
+                )
+            container.image = actual
+            container.image_pull_policy = image_pull_policy_for(actual, pull_policy)
+        images.append(container.image)
+    return images
 
 
 def _resolved_env(entries, nodes) -> dict[str, str]:
@@ -178,11 +170,13 @@ def prepare_session_workloads(
         )
 
     context = SessionContext(resolved=resolved)
-    overrides = _dev_image_overrides()
-    pull_policy = _dev_override_pull_policy() if overrides else ""
+    try:
+        image_map = load_workload_image_map()
+    except WorkloadImageMapError as error:
+        raise WorkloadPreparationError(str(error)) from error
+    pull_policy = _image_map_pull_policy() if image_map.images else ""
     composed: dict[str, ComposedWorkload] = {}
     identity_payload: dict[str, dict] = {}
-    substituted: dict[tuple[str, str], int] = {}
     for node in resolved.nodes:
         profile = admitted.get(node.profile)
         if profile is None:
@@ -222,9 +216,9 @@ def prepare_session_workloads(
             sidecar_env=sidecar_env,
         )
         workload = compose_workload(plan, profile, namespace=namespace, owner_ref=owner_ref)
-        if overrides:
-            for key, count in _apply_dev_image_overrides(workload, overrides, pull_policy).items():
-                substituted[key] = substituted.get(key, 0) + count
+        images = _resolve_logical_images(
+            workload, image_map, pull_policy, node_id=node.node_id, profile_ref=node.profile
+        )
         composed[node.node_id] = workload
         identity_payload[node.node_id] = {
             "profile": node.profile,
@@ -236,17 +230,12 @@ def prepare_session_workloads(
                 },
             },
             "rendered": {name: sha256_digest(data) for name, data in sorted(rendered.items())},
+            # The images that run: a new image under an unchanged profile is a
+            # different workload, and its pods are replaced.
+            "images": images,
         }
 
     identity = f"profiles@{sha256_digest(canonical_json_bytes(identity_payload))}"
-    if substituted:
-        log.warning(
-            "DEV IMAGE OVERRIDE: this deployment is not reproducible; %s",
-            "; ".join(
-                f"{image} replaced by {replacement} in {count} container(s)"
-                for (image, replacement), count in sorted(substituted.items())
-            ),
-        )
     log.info(
         "Session workloads prepared: profiles=%d nodes=%d identity=%s",
         len(admitted),

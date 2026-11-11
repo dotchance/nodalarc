@@ -48,12 +48,9 @@ spec:
               value: {{ include "nodalarc.nats-url" . | quote }}
             - name: WIRING_GATE_IMAGE
               value: {{ required "images.base is required" .Values.images.base | quote }}
-{{- if .Values.workloadDevImageOverrides }}
-            # Explicit, visibly non-reproducible development substitution of
-            # workload profile images. Never set in production installs.
-            - name: WORKLOAD_DEV_IMAGE_OVERRIDES
-              value: {{ .Values.workloadDevImageOverrides | quote }}
-{{- end }}
+            # Logical profile image -> the image that runs (values.yaml).
+            - name: WORKLOAD_IMAGES
+              value: {{ .Values.workloadImages | quote }}
             - name: IMAGE_PULL_POLICY
               value: {{ .Values.imagePullPolicy | quote }}
             # The tolerations every session pod carries: the same list the

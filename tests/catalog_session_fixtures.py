@@ -29,6 +29,19 @@ VANGUARD_TLE_LINE_1 = "1 00005U 58002B   00179.78495062  .00000023  00000-0  280
 VANGUARD_TLE_LINE_2 = "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667"
 
 
+SHIPPED_LOGICAL_IMAGES = ("base", "frr", "hdtn", "ion", "picoquic", "ud3tn-tools")
+
+
+def shipped_workload_images(registry: str = "registry.test") -> dict[str, str]:
+    """A workload image map for every logical image the shipped profiles name."""
+
+    zeros = "0" * 64
+    return {
+        f"registry.example/nodalarc/{name}@sha256:{zeros}": f"{registry}/nodalarc/{name}:test"
+        for name in SHIPPED_LOGICAL_IMAGES
+    }
+
+
 def shipped_read_view() -> FilesystemCatalogReadView:
     """Read view over the shipped catalog checked into this tree."""
 

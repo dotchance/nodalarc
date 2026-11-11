@@ -110,6 +110,47 @@ resource_for() {
     printf '%s\n' "$resource"
 }
 
+# The directory holding each component's VERSION file: the version the owner
+# last set for it. A build appends the commit it built from as SemVer build
+# metadata, so a component's full version reads 0.8.1+<content tag>.
+component_dir() {
+    case "$1" in
+        ome|scheduler|measurement) printf 'services/%s\n' "$1" ;;
+        node-agent) printf 'services/node_agent\n' ;;
+        vs-api) printf 'services/vs_api\n' ;;
+        operator) printf 'services/nodalarc_operator\n' ;;
+        vf) printf 'frontend\n' ;;
+        base|frr|probe|hdtn|ion|picoquic|ud3tn-tools) printf 'images/%s\n' "$1" ;;
+        chart) printf 'deploy/helm\n' ;;
+        catalog) printf 'catalog\n' ;;
+        grammar) printf 'lib/nodalarc/models\n' ;;
+        *) echo "na-images: '$1' is not a versioned component" >&2; exit 2 ;;
+    esac
+}
+
+component_base_version() {
+    local dir file version
+    dir="$(component_dir "$1")" || exit 2
+    file="$ROOT_DIR/$dir/VERSION"
+    if [ ! -f "$file" ]; then
+        echo "na-images: $file is missing" >&2
+        exit 1
+    fi
+    version="$(tr -d '[:space:]' < "$file")"
+    if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+        echo "na-images: $file holds '$version', not a SemVer version without build metadata" >&2
+        exit 1
+    fi
+    printf '%s\n' "$version"
+}
+
+component_version() {
+    # Command substitutions run without errexit: the failure is checked.
+    local base
+    base="$(component_base_version "$1")" || exit 1
+    printf '%s+%s\n' "$base" "$TAG"
+}
+
 emit_record() {
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6"
 }
@@ -192,15 +233,13 @@ session_image_ref() {
     fi
 }
 
-workload_dev_overrides() {
-    # Map the shipped workload profiles' placeholder image references to the
-    # tree's real images. Development only: the value reaches the Operator
-    # as WORKLOAD_DEV_IMAGE_OVERRIDES and every substitution is logged as
-    # non-reproducible. Raw JSON: it must NEVER pass through helm --set
-    # parsing, where braces and commas are list syntax. It travels as a
-    # generated values file (workload-dev-overrides-values).
-    # Every shipped profile names a tree-built image as
-    # registry.example/nodalarc/NAME@sha256:<zeros>.
+workload_images() {
+    # The workload image map for this tree's builds: each logical image the
+    # shipped profiles name (registry.example/nodalarc/NAME@sha256:<zeros>)
+    # mapped to the tree's real image. It reaches the Operator as
+    # WORKLOAD_IMAGES (the chart value workloadImages). Raw JSON: it must NEVER
+    # pass through helm --set parsing, where braces and commas are list
+    # syntax. It travels as a generated values file (workload-images-values).
     local zeros="0000000000000000000000000000000000000000000000000000000000000000"
     local name ref entries=()
     for name in frr base hdtn ion picoquic ud3tn-tools; do
@@ -212,11 +251,11 @@ workload_dev_overrides() {
     printf '{%s}' "${entries[*]}"
 }
 
-workload_dev_overrides_values() {
+workload_images_values() {
     # YAML values fragment carrying the JSON verbatim as one string scalar.
-    local overrides
-    overrides="$(workload_dev_overrides)" || exit 1
-    printf "workloadDevImageOverrides: '%s'\n" "$overrides"
+    local map
+    map="$(workload_images)" || exit 1
+    printf "workloadImages: '%s'\n" "$map"
 }
 
 helm_image_args() {
@@ -260,8 +299,9 @@ Commands:
   resource-for NAME
   list-platform-resources
   helm-image-args
-  workload-dev-overrides
-  workload-dev-overrides-values
+  component-version NAME
+  workload-images
+  workload-images-values
 EOF
 }
 
@@ -274,7 +314,7 @@ fi
 # Static lookups answer from the table alone; only image references need the
 # transport mode (registry host, prefix), which may consult the cluster.
 case "$command" in
-    helm-key-for|resource-for|list-platform-resources|-h|--help|help) ;;
+    helm-key-for|resource-for|list-platform-resources|component-version|-h|--help|help) ;;
     *) resolve_mode ;;
 esac
 
@@ -323,8 +363,15 @@ case "$command" in
         ;;
     list-platform-resources) list_platform_resources ;;
     helm-image-args) helm_image_args ;;
-    workload-dev-overrides) workload_dev_overrides ;;
-    workload-dev-overrides-values) workload_dev_overrides_values ;;
+    component-version)
+        if [ -z "${2:-}" ]; then
+            echo "na-images: component-version requires a component name" >&2
+            exit 2
+        fi
+        component_version "$2"
+        ;;
+    workload-images) workload_images ;;
+    workload-images-values) workload_images_values ;;
     -h|--help|help) usage ;;
     *)
         echo "na-images: unknown command '$command'" >&2

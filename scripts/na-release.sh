@@ -79,7 +79,8 @@ release_images() {
     fi
     local tag
     tag="$(bash scripts/na-tag.sh)"
-    [ "$tag" = "$(git rev-parse --short HEAD)" ] || fail "content tag $tag is not the commit"
+    # The same abbreviation na-tag.sh uses: a clean tree's tag is the commit alone.
+    [ "$tag" = "$(git rev-parse --short=8 HEAD)" ] || fail "content tag $tag is not the commit"
 
     echo "[release] Building every image at $tag..."
     make build REGISTRY_HOST= TAG="$tag"

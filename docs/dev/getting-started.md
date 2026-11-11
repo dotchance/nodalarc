@@ -123,6 +123,58 @@ For final verification, build and deploy the full image:
 make deploy-vf
 ```
 
+## Make Target Reference
+
+### Primary Targets
+
+| Target | Requires sudo | Description |
+|--------|:---:|-------------|
+| `make all` | no | Clean-state pipeline: deps -> build -> load -> install -> session -> status |
+| `make deps` | no | Install Python dependencies |
+| `make build` | no | Build all Docker images |
+| `make load` | no | Import images to K3s or push to registry |
+| `make install` | no | Helm install the platform chart; refuses existing platform state |
+| `make upgrade` | no | In-place Helm upgrade for an existing platform |
+| `make reinstall` | no | Destructive platform reinstall through official teardown |
+| `make session` | no | Deploy a constellation session |
+| `make status` | no | Show cluster status |
+| `make teardown` | no | Full teardown |
+| `make nuke` | no | Square-one reset; K3s remains |
+
+### Valid Lifecycle Sequences
+
+| Current state | Command |
+|---------------|---------|
+| Clean checkout/K3s state | `make all` |
+| Prove full square-one recovery | `make nuke && make all` |
+| Existing platform, update images/chart | `make build && make load && make upgrade` |
+| Existing platform, destructive refresh | `make build && make load && make reinstall && make session` |
+| Existing platform, switch session | `make session DEFAULT_SESSION=catalog/nodalarc/sessions/<name>.yaml` |
+
+### Build Targets
+
+| Target | What it builds |
+|--------|---------------|
+| `make build-frontends` | VF React app |
+| `make build-images` | All service Docker images |
+| `make build-base-images` | Session images (base, FRR, probe, HDTN, ION, picoquic, the uD3TN tools) |
+| `make build-ome` | OME image |
+| `make build-scheduler` | Scheduler image |
+| `make build-node-agent` | Node Agent image |
+| `make build-vs-api` | VS-API image |
+| `make build-operator` | Operator image |
+| `make build-vf` | VF (frontend + nginx) image |
+
+### Cleanup Targets
+
+| Target | What it removes |
+|--------|----------------|
+| `make clean` | Build artifacts (dist/, caches) |
+| `make clean-images` | All nodalarc Docker images |
+| `make clean-deps` | Python .venv and node_modules |
+| `make clean-registry` | Images from registry |
+| `make purge-containerd` | NodalArc images from K3s containerd cache |
+
 ## Project Structure
 
 ```

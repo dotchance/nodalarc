@@ -14,23 +14,21 @@ Each satellite pod uses approximately 18 MB RAM and 2-5 millicores CPU at steady
 
 ### Software
 
-- Linux: Ubuntu 22.04+ or Debian 12+
-- Root access (sudo)
-- A Kubernetes cluster (any conformant distribution: K3s, K8s, EKS, GKE, etc.)
-
-If you don't already have Kubernetes, the cluster builder (Step 1) builds K3s on your machines.
+- A Kubernetes cluster whose nodes admit privileged pods, or Ubuntu or Debian machines with root
+  access (sudo) to build K3s on (Step 1)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/) and [Helm](https://helm.sh/docs/intro/install/)
+  on the machine you work from
 
 ### Network
 
-- Port 3000: Visualization frontend (VF)
-- Port 8080: VS-API (REST/WebSocket)
+- Port 3000: Visualization frontend (VF), on the server that runs VS-API
+- Port 8080: VS-API (REST/WebSocket), on the same server
 - Ports 22 (per pod IP): SSH terminal access (internal cluster network)
 - Inter-node: UDP 14789 (NodalArc's VXLAN, chart value `network.vxlanPort`) for multi-node deployments
 - Host MTU: the emulated link MTU plus 50 bytes (70 over IPv6 node
   addresses) on the interface that carries cluster traffic and across the
   network between the hosts. The emulated link MTU is the chart value
-  `network.linkMtu`, 8800 by default, so hosts carry 8850-byte packets; the
-  development cluster's 9100-byte host MTU covers it. Every emulated
+  `network.linkMtu`, 8800 by default, so hosts carry 8850-byte packets. Every emulated
   interface has that MTU wherever its pods run: between hosts the packets
   travel inside VXLAN, and the hosts carry the overhead. When a session
   deploys, the Node Agent sends unfragmentable packets of the full wrapped
@@ -39,15 +37,37 @@ If you don't already have Kubernetes, the cluster builder (Step 1) builds K3s on
 
 ## Step 1: Machines
 
-For machines without Kubernetes, the cluster builder builds a K3s server on each one. Run it as root on a single machine:
+Each NodalArc release on the [Releases](https://github.com/dotchance/nodalarc/releases) page
+names its number and carries two scripts that build K3s for NodalArc. Pick the release once:
 
 ```bash
-sudo scripts/build-k3s-node.sh
+RELEASE=0.8.1
+curl -fsSLO https://github.com/dotchance/nodalarc/releases/download/$RELEASE/build-k3s-cluster.sh
+curl -fsSLO https://github.com/dotchance/nodalarc/releases/download/$RELEASE/build-k3s-node.sh
+chmod +x build-k3s-cluster.sh build-k3s-node.sh
 ```
 
-For several machines, run `scripts/build-k3s-cluster.sh` from a NodalArc checkout with every machine's ssh address, the first one first. It runs the builder on each machine over ssh and joins them into one cluster. It runs unattended when the machine you run it from logs in to each machine with an ssh key and sudo there needs no password; otherwise it asks for each password, under an INPUT NEEDED notice, and waits for you.
+For a single machine, run the node builder on it as root. Its kubeconfig is K3s's own:
 
-It lists the changes it will make and asks once: the inotify limits NodalArc needs (raised only when a limit is below the minimum), the MTU of the interface that carries the node's traffic (raised only when it is below the emulated link MTU plus the VXLAN overhead, persistent through netplan), a K3s drop-in with the pods a server may hold (1000), no kubelet image pull limit and a /22 pod range per server, and K3s from its official installer. Your own K3s settings belong in `/etc/rancher/k3s/config.yaml`, which the builder never touches. It writes no kernel setting: the Node Agent loads the MPLS kernel modules when a session needs them, and forwarding and MPLS settings are written inside each session pod. It is idempotent.
+```bash
+sudo ./build-k3s-node.sh
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+```
+
+For several machines, run the cluster builder from the machine you work from, with every
+machine's ssh address, the first one first. It runs the node builder on each machine over ssh,
+joins them into one cluster and writes the cluster's kubeconfig:
+
+```bash
+./build-k3s-cluster.sh --published-images <first server> <server> ...
+export KUBECONFIG=~/.kube/nodalarc.yaml
+```
+
+It runs unattended when your machine logs in to each machine with an ssh key and sudo there
+needs no password; otherwise it asks for each password, under an INPUT NEEDED notice, and waits
+for you.
+
+The node builder lists the changes it will make and asks once: the inotify limits NodalArc needs (raised only when a limit is below the minimum), the MTU of the interface that carries the node's traffic (raised only when it is below the emulated link MTU plus the VXLAN overhead, persistent through netplan), a K3s drop-in with the pods a server may hold (1000), no kubelet image pull limit and a /22 pod range per server, and K3s from its official installer. Your own K3s settings belong in `/etc/rancher/k3s/config.yaml`, which the builder never touches. It writes no kernel setting: the Node Agent loads the MPLS kernel modules when a session needs them, and forwarding and MPLS settings are written inside each session pod. It is idempotent.
 
 If you already have Kubernetes, skip this step: the Node Agent's readiness probe reports what a node lacks once NodalArc is installed.
 
@@ -60,191 +80,112 @@ kubectl label namespace nodalarc pod-security.kubernetes.io/enforce=privileged
 
 K3s enforces nothing by default, so on K3s the label changes nothing.
 
-Until the first release publishes the chart and the images, NodalArc is installed from a source checkout on a developer's machine; that machine's setup is in the [Developer Guide](../dev/getting-started.md).
+## Step 2: Install
 
-## Step 2: Build and Deploy
-
-```bash
-make all
-```
-
-Use `make all` from a clean NodalArc state: no existing `nodalarc` namespace or Helm release. To prove a full from-scratch lifecycle on a machine that already has K3s installed, run:
+Install the release's chart from ghcr.io. Every image it runs is published with the release and
+pinned by digest; nothing is built.
 
 ```bash
-make nuke && make all
+helm install nodalarc oci://ghcr.io/dotchance/nodalarc --version $RELEASE \
+  --namespace nodalarc --create-namespace --wait
 ```
 
-`make all` executes the full bring-up pipeline:
+On a cluster that enforces Pod Security admission, leave out `--create-namespace` and install
+into the namespace labelled in Step 1.
 
-1. Install the Python dependencies the lifecycle scripts use
-2. Compile the visualization frontend inside its image build
-3. Build all Docker images (6 services + base images)
-4. Load images into the cluster (K3s import or registry push)
-5. Install the Helm chart
-6. Deploy the default session (`earth-leo-simple.yaml`: 36 LEO satellites,
-   OSPF, and MBB-capable Earth ground nodes)
-7. Print status
-
-Total time: 3-5 minutes from a fresh checkout on a single machine.
-
-If the platform is already installed, `make all` is the wrong transition because `make install` refuses existing platform state. Use `make build && make load && make upgrade` for an in-place platform update, or `make build && make load && make reinstall && make session` for a destructive platform refresh through the official teardown path.
-
-### What "make all" Creates
+### What the Install Creates
 
 - Kubernetes namespace: `nodalarc`
 - ConstellationSpec CRD (cluster-scoped)
 - Platform services: OME, Scheduler, Node Agent (DaemonSet), VS-API, Operator, NATS
 - Frontend: VF (nginx serving the React app)
-- Session: 36 satellite pods + 7 Earth ground-node pods
-- ConfigMaps: rendered workload configs, topology wiring manifest, platform config
-- Secrets: SSH terminal keys
-- PVC: NATS JetStream file storage
+- ConfigMaps: platform config and the NATS stream inventory
+- PVCs: NATS JetStream file storage, and VS-API's saved session data
+- The service account the chart's test and its uninstall hook run under
+
+No session runs until you deploy one (Step 4). A session adds one pod per satellite, relay,
+ground node or carried host, its ConfigMaps (rendered workload configs, the topology wiring
+manifest) and the Secret with its SSH terminal keys.
 
 ## Step 3: Verify
 
 ```bash
-make status
+helm test nodalarc -n nodalarc --logs
 ```
 
-This shows:
-- Pod counts and states
-- Session phase (Creating -> Wiring -> Ready)
-- Active link count
+The test checks that every platform Deployment is available, that the Node Agent runs and is
+ready on at least one server, and that every platform container runs the exact image digest the
+chart names. It ends with `OK`.
 
-When the session phase shows "Ready" and links are active, the system is fully operational.
+The browser interface runs on port 3000 of the server that runs VS-API. When the install
+finishes, Helm prints how to find that server (`helm status nodalarc -n nodalarc` prints it
+again); this command gives its address:
 
-Open http://localhost:3000 to see the visualization. If deploying on a remote machine, forward or expose port 3000.
+```bash
+kubectl -n nodalarc get pod -l app=nodalarc-vf -o jsonpath='{.items[0].status.hostIP}'
+```
+
+Open `http://<that address>:3000`.
+
+## Step 4: Deploy a Session
+
+Deploy a session from the Sessions window of the browser interface: pick one of the sessions
+NodalArc ships, or one you built in the Session Builder. The page shows the session's phase while
+its pods start, then the satellites and links.
 
 ### Verifying Routing
 
-```bash
-# Quick check: do satellites have routing neighbors?
-NODE=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
-  -o name | sed 's#pod/##' | grep '^space-sat-' | head -1)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr-router -- \
-  vtysh -c "show ip ospf neighbor"
-```
-
-You should see adjacent satellites listed as FULL neighbors. If running IS-IS instead of OSPF, use `show isis neighbor`.
-
-## Step 4: Deploy a Different Session
+With `earth-leo-simple` running, a ground station forms an IS-IS adjacency with the satellite it
+is linked to:
 
 ```bash
-# Switch to a 176-satellite IS-IS constellation
-make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
+kubectl exec -n nodalarc earth-de-frankfurt-gw1 -c frr-router -- vtysh -c "show isis neighbor"
 ```
 
-Or users can deploy sessions from the browser's Sessions window at
-http://localhost:3000.
+The satellite is listed with state `Up` on the station's terminal interface, `term0`. A
+terminal on any router, opened from the browser interface, gives the same router CLI.
 
-Available session configs:
+Sessions NodalArc ships:
 
-| Session | Space Nodes | Description |
-|---------|------------:|-------------|
-| `earth-leo-simple.yaml` | 36 | Default. MBB-capable single-shell LEO starter |
-| `earth-leo-walker.yaml` | 176 | Walker-delta LEO starter |
-| `earth-leo-polar.yaml` | 36 | Polar LEO starter with high-latitude gateway sites |
-| `earth-leo-polar-seam.yaml` | 36 | Polar seam experiment: range-driven seam link transitions |
-| `earth-leo-polar-seam-tracking.yaml` | 36 | Polar seam experiment: tracking-limit exceedance and recovery |
-| `earth-meo-gps.yaml` | 24 | GPS-altitude MEO starter with long-range RF gateways |
-| `earth-geo-inmarsat.yaml` | 4 | Representative GEO commercial-relay-style starter |
-| `earth-geo-tdrs.yaml` | 6 | Representative GEO relay/TDRS-style starter |
-| `earth-leo-heo-geo-luna-reachability.yaml` | - | Multi-regime LEO, HEO, GEO, lunar relay, and lunar ground reachability |
+| Session | Nodes | Description |
+|---------|------:|-------------|
+| `earth-leo-simple` | 41 | Single 36-satellite LEO ring with MBB-capable Starlink-style gateway sites |
+| `earth-leo-walker` | 181 | Walker-delta LEO shell |
+| `earth-leo-polar` | 45 | Polar LEO shell with high-latitude gateway sites |
+| `earth-leo-polar-seam` | 45 | Polar seam experiment: range-driven seam link transitions |
+| `earth-leo-polar-seam-tracking` | 45 | Polar seam experiment: tracking-limit exceedance and recovery |
+| `earth-meo-gps` | 31 | GPS-altitude MEO shell with long-range RF gateways |
+| `earth-geo-inmarsat` | 8 | GEO commercial-relay-style constellation |
+| `earth-geo-tdrs` | 10 | GEO relay, TDRS-style |
+| `earth-leo-heo-geo-luna-reachability` | 132 | LEO, HEO, GEO, a lunar relay constellation and lunar ground sites |
+| `earth-luna-quic` | 81 | A QUIC client on Earth reaches a QUIC server on the lunar surface |
+| `earth-luna-dtn` | 86 | The same sky with a uD3TN DTN relay vehicle carrying bundles to the Moon |
+| `earth-luna-dtn-custody` | 86 | The DTN relay with bundle custody: bundles held while a peer is occluded |
+| `earth-mars-hdtn-relay` | 18 | Three Mars bases reach Earth through Mars relays and an optical trunk, running NASA HDTN over LTP |
+| `mars-ion-relay-network` | 12 | Three Mars bases exchange bundles through the Mars relays, running NASA JPL ION |
+| `earth-luna-mars-dtn` | 104 | The Earth-Moon DTN sky and the Earth-Mars HDTN chain in one session |
 
-These examples run IS-IS (the default). OSPF is also supported, selected per
-routing domain - see the [Configuration Guide](configuration.md).
+Every routing domain in these sessions runs IS-IS. OSPF is also supported, selected per routing
+domain; see the [Configuration Guide](configuration.md).
 
-## Step 5: Teardown
+## Step 5: Remove
 
 ```bash
-make teardown
+helm uninstall nodalarc -n nodalarc
 ```
 
-Cleanly stops the session, removes all pods, and cleans kernel state. Wait for "Teardown complete" before deploying again.
-
-Next valid transition:
+Before Helm removes anything, the chart's uninstall hook stops the running session and has the
+Node Agent on every server remove NodalArc's network devices and prove the server clean. Helm
+then removes the platform. It keeps VS-API's saved session data and the ConstellationSpec
+definition; these remove them:
 
 ```bash
-make install && make session
+kubectl delete namespace nodalarc
+kubectl delete crd constellationspecs.nodalarc.io
 ```
 
-To remove everything (images, dependencies, K3s image cache):
-
-```bash
-make nuke
-```
-
-Next valid transition:
-
-```bash
-make all
-```
-
-## Makefile Target Reference
-
-### Primary Targets
-
-| Target | Requires sudo | Description |
-|--------|:---:|-------------|
-| `make all` | no | Clean-state pipeline: deps -> build -> load -> install -> session -> status |
-| `make deps` | no | Install Python dependencies |
-| `make build` | no | Build all Docker images |
-| `make load` | no | Import images to K3s or push to registry |
-| `make install` | no | Helm install the platform chart; refuses existing platform state |
-| `make upgrade` | no | In-place Helm upgrade for an existing platform |
-| `make reinstall` | no | Destructive platform reinstall through official teardown |
-| `make session` | no | Deploy a constellation session |
-| `make status` | no | Show cluster status |
-| `make teardown` | no | Full teardown |
-| `make nuke` | no | Square-one reset; K3s remains |
-
-### Valid Lifecycle Sequences
-
-| Current state | Command |
-|---------------|---------|
-| Clean checkout/K3s state | `make all` |
-| Prove full square-one recovery | `make nuke && make all` |
-| Existing platform, update images/chart | `make build && make load && make upgrade` |
-| Existing platform, destructive refresh | `make build && make load && make reinstall && make session` |
-| Existing platform, switch session | `make session DEFAULT_SESSION=catalog/nodalarc/sessions/<name>.yaml` |
-
-### Build Targets
-
-| Target | What it builds |
-|--------|---------------|
-| `make build-frontends` | VF React app |
-| `make build-images` | All service Docker images |
-| `make build-base-images` | Infrastructure images (FRR, probe, fwd) |
-| `make build-ome` | OME image |
-| `make build-scheduler` | Scheduler image |
-| `make build-node-agent` | Node Agent image |
-| `make build-vs-api` | VS-API image |
-| `make build-operator` | Operator image |
-| `make build-vf` | VF (frontend + nginx) image |
-
-### Service Deploy Targets
-
-These build, load, and restart a single service without tearing down the session:
-
-| Target | What it restarts |
-|--------|-----------------|
-| `make deploy-ome` | OME |
-| `make deploy-scheduler` | Scheduler |
-| `make deploy-node-agent` | Node Agent |
-| `make deploy-vs-api` | VS-API |
-| `make deploy-operator` | Operator |
-| `make deploy-vf` | VF frontend |
-| `make deploy-all` | All core services |
-
-### Cleanup Targets
-
-| Target | What it removes |
-|--------|----------------|
-| `make clean` | Build artifacts (dist/, caches) |
-| `make clean-images` | All nodalarc Docker images |
-| `make clean-deps` | Python .venv and node_modules |
-| `make clean-registry` | Images from registry |
-| `make purge-containerd` | NodalArc images from K3s containerd cache |
+Developers who build NodalArc from source install it with `make` instead; the
+[Developer Guide](../dev/getting-started.md) lists the targets.
 
 ## Next Steps
 

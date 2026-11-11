@@ -93,8 +93,12 @@ release_images() {
             bash scripts/na-images.sh image-for "$name")"
         remote="$registry/nodalarc/$name:$(semver_tag "$version")"
         echo "[release] $name $version -> $remote"
-        docker tag "$local_ref" "$remote"
-        docker push "$remote"
+        # crane uploads every layer. docker push mounts a layer it already pushed
+        # to another repository, and ghcr.io refuses the manifest of a new
+        # package whose layers were mounted from another package.
+        docker save "$local_ref" -o "$work/image.tar"
+        crane push "${crane_flags[@]}" "$work/image.tar" "$remote"
+        rm -f -- "$work/image.tar"
         digest="$(crane digest "${crane_flags[@]}" "$remote")"
         [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "$remote has no digest in the registry"
         printf '%s\t%s\t%s@%s\n' "$name" "$version" "$remote" "$digest" >> "$work/components.tsv"

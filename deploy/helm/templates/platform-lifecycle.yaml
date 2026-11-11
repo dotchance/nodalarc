@@ -24,9 +24,10 @@ rules:
   - apiGroups: ["nodalarc.io"]
     resources: ["constellationspecs"]
     verbs: ["get", "list", "delete"]
+  # delete: the uninstall hook removes the helm test pod.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "delete"]
   # The Node Agent's cleaner runs inside each Node Agent pod, as make teardown runs it.
   - apiGroups: [""]
     resources: ["pods/exec"]
@@ -56,9 +57,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   annotations:
     helm.sh/hook: test
-    # A passing test leaves no pod behind (Helm never deletes hook pods on
-    # uninstall); a failing one stays for its log.
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    # The pod stays after the test so helm test --logs can read it. Helm never
+    # deletes hook pods on uninstall; the pre-delete hook below removes it.
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   serviceAccountName: nodalarc-lifecycle
   restartPolicy: Never

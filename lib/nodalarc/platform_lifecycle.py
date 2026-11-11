@@ -32,6 +32,9 @@ NODE_AGENT_DAEMONSET = "nodalarc-node-agent"
 NODE_AGENT_POD_LABEL = "app=nodalarc-node-agent"
 NODE_AGENT_CONTAINER = "node-agent"
 SESSION_POD_LABEL = "nodalarc.io/node-id"
+# The helm test pod (templates/platform-lifecycle.yaml). Helm never deletes a
+# hook pod on uninstall, so the uninstall hook does.
+TEST_POD = "nodalarc-verify"
 CLEANER = ["python", "-m", "node_agent.reconcile", "--clean"]
 SESSION_UNWIND_TIMEOUT_S = 600.0
 POLL_S = 2.0
@@ -155,6 +158,13 @@ def uninstall(namespace: str) -> list[str]:
             problems.append(
                 f"server {server} is not clean (cleaner exit {code}): {report} {errors}"
             )
+
+    try:
+        core.delete_namespaced_pod(TEST_POD, namespace)
+        print(f"deleted the helm test pod {TEST_POD}")
+    except kubernetes.client.rest.ApiException as error:
+        if error.status != 404:
+            problems.append(f"could not delete the helm test pod {TEST_POD}: {error.reason}")
     return problems
 
 

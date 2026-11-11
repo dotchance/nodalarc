@@ -123,7 +123,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' build/release/record.json)"
+          # The release is tagged at the commit it is assembled from: the chart,
+          # the builder scripts and the docs. Each image's version names the
+          # commit it was built at, and the release list records it.
+          commit="$GITHUB_SHA"
           previous="$(git describe --tags --abbrev=0 "$commit^" 2>/dev/null || true)"
           {
             echo "NodalArc $RELEASE: every component's version and image is in the attached release list, $RELEASE.yaml."

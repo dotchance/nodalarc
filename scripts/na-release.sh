@@ -10,7 +10,7 @@
 #   na-release.sh images REGISTRY RECORD
 #       Build every release image from a clean checkout (make build, the same
 #       build the development path runs), push each one as
-#       REGISTRY/nodalarc/<component>:<version, + written as _>, copy the
+#       REGISTRY/nodalarc-<component>:<version, + written as _>, copy the
 #       third-party images there by digest, and write RECORD (JSON): each
 #       component's version and its image pinned by digest.
 #
@@ -91,7 +91,7 @@ release_images() {
         version="$(TAG="$tag" bash scripts/na-images.sh component-version "$name")"
         local_ref="$(MODE=single-node REGISTRY_HOST= TAG="$tag" NA_IMAGES_NO_CLUSTER=1 \
             bash scripts/na-images.sh image-for "$name")"
-        remote="$registry/nodalarc/$name:$(semver_tag "$version")"
+        remote="$registry/nodalarc-$name:$(semver_tag "$version")"
         echo "[release] $name $version -> $remote"
         # crane uploads every layer. docker push mounts a layer it already pushed
         # to another repository, and ghcr.io refuses the manifest of a new
@@ -115,7 +115,7 @@ release_images() {
     for name in nats nats-box; do
         upstream="$(NA_IMAGES_NO_CLUSTER=1 bash scripts/na-images.sh image-for "$name")"
         repo_tag="${upstream%@*}"
-        remote="$registry/nodalarc/${repo_tag##*/}"
+        remote="$registry/nodalarc-${repo_tag##*/}"
         echo "[release] $name $upstream -> $remote"
         crane copy "${crane_flags[@]}" "$upstream" "$remote" >/dev/null
         digest="$(crane digest "${crane_flags[@]}" "$remote")"

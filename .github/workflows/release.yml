@@ -40,7 +40,7 @@ jobs:
     env:
       RELEASE: ${{ inputs.release }}
       REGISTRY: ghcr.io/${{ github.repository_owner }}
-      CHARTS: oci://ghcr.io/${{ github.repository_owner }}/charts
+      CHARTS: oci://ghcr.io/${{ github.repository_owner }}
     steps:
       - name: Check the inputs
         run: |
@@ -99,8 +99,8 @@ jobs:
           while read -r image; do
             cosign sign --yes "${image%%:*}@${image##*@}"
           done < build/release/images.txt
-          chart_digest="$(crane digest "ghcr.io/${{ github.repository_owner }}/charts/nodalarc:$RELEASE")"
-          cosign sign --yes "ghcr.io/${{ github.repository_owner }}/charts/nodalarc@$chart_digest"
+          chart_digest="$(crane digest "ghcr.io/${{ github.repository_owner }}/nodalarc:$RELEASE")"
+          cosign sign --yes "ghcr.io/${{ github.repository_owner }}/nodalarc@$chart_digest"
 
       - name: Write the source list
         run: python3 scripts/na-source-list.py "$RELEASE" build/release/record.json "build/release/out/sources-$RELEASE.md"

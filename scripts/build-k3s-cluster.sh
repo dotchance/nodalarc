@@ -407,7 +407,7 @@ if [ "$PUBLISHED" -eq 1 ]; then
     echo ""
     echo "=== Done ==="
     echo "${#servers[@]} server(s) Ready. Next, install a NodalArc release:"
-    echo "  KUBECONFIG=$kubeconfig helm install nodalarc oci://ghcr.io/dotchance/charts/nodalarc \\"
+    echo "  KUBECONFIG=$kubeconfig helm install nodalarc oci://ghcr.io/dotchance/nodalarc \\"
     echo "    --version <release> --namespace nodalarc --create-namespace"
     exit 0
 fi

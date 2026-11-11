@@ -22,7 +22,7 @@ ZEROS = "0" * 64
 
 def _record() -> dict:
     def image(name: str, digit: str) -> str:
-        return f"ghcr.io/owner/nodalarc/{name}:0.8.1_abc@sha256:{digit * 64}"
+        return f"ghcr.io/owner/nodalarc-{name}:0.8.1_abc@sha256:{digit * 64}"
 
     return {
         "release": "0.8.1",
@@ -33,8 +33,8 @@ def _record() -> dict:
             for index, name in enumerate(SESSION + PLATFORM)
         },
         "third_party": {
-            "nats": {"image": f"ghcr.io/owner/nodalarc/nats:2.11-alpine@sha256:{'a' * 64}"},
-            "nats-box": {"image": f"ghcr.io/owner/nodalarc/nats-box:0.19.3@sha256:{'b' * 64}"},
+            "nats": {"image": f"ghcr.io/owner/nodalarc-nats:2.11-alpine@sha256:{'a' * 64}"},
+            "nats-box": {"image": f"ghcr.io/owner/nodalarc-nats-box:0.19.3@sha256:{'b' * 64}"},
         },
     }
 

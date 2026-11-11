@@ -286,8 +286,10 @@ fi
 
 # Step 4: Helm uninstall — removes all Helm-managed resources including DaemonSet
 echo "[4/8] Helm uninstall..."
+# --no-hooks: this script has already unwound the session and proved every
+# server clean (steps 1 to 3), which is what the chart's pre-delete hook does.
 helm uninstall "$HELM_RELEASE_NAME" -n "$NAMESPACE" \
-    --ignore-not-found --timeout=120s 2>/dev/null || true
+    --no-hooks --ignore-not-found --timeout=120s 2>/dev/null || true
 
 # Step 5: Wait for DaemonSet pod to actually terminate
 # The namespace controller re-examines a namespace that still holds

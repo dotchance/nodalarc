@@ -26,6 +26,18 @@ spec:
       nodeSelector:
         kubernetes.io/hostname: {{ .Values.controlPlaneNode }}
 {{- end }}
+{{- if not .Values.vf.vsApiUrl }}
+      # The page calls VS-API on its own server at port 8080
+      # (frontend/src/config.ts), so the page runs on the server that runs
+      # VS-API, on a cluster of any size.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: nodalarc-vs-api
+              topologyKey: kubernetes.io/hostname
+{{- end }}
       containers:
         - name: vf
           image: {{ required "images.vf is required" .Values.images.vf | quote }}

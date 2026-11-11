@@ -5,13 +5,21 @@ Deploy across several Kubernetes nodes to run larger sessions and to exercise th
 ## Requirements
 
 - 2+ Kubernetes nodes that pass node qualification (the Node Agent's readiness probe reports what a node lacks)
-- A container registry accessible from all nodes
+- For a NodalArc release: every node reaches ghcr.io, where the release's images are published
+- For images built from source: a container registry every node and the build machine reach
 - UDP 14789 (NodalArc's VXLAN; chart value `network.vxlanPort`) open between nodes
 - Recommended: low-latency network between nodes (GbE or better)
 
-## Container Registry Setup
+## Building the Cluster
 
-Single-node deployments import images directly into the local container runtime. A cluster of several servers takes NodalArc's images from one registry: the build machine pushes them there and every server pulls them.
+`build-k3s-cluster.sh --published-images`, attached to every release, builds K3s on each server
+over ssh, joins them into one cluster and writes the kubeconfig; [Getting
+Started](getting-started.md#step-1-machines) has the commands. Then install the release with Helm
+as on a single machine. Every server pulls the release's images from ghcr.io.
+
+## Container Registry Setup (Building From Source)
+
+A developer who builds NodalArc's images from source needs a registry for them. Single-node deployments import images directly into the local container runtime. A cluster of several servers takes the images from one registry: the build machine pushes them there and every server pulls them.
 
 `scripts/build-k3s-cluster.sh`, run on the build machine, does steps 1 to 3 for the cluster it builds: it runs the registry on the first server. The steps below are what it does, for a cluster built another way or a registry you already run.
 
@@ -82,7 +90,7 @@ placement:
       effect: NoSchedule
 ```
 
-`nodeSelector` limits the Node Agent, and with it session pods, to the nodes that carry the label. `tolerations` are needed only when the pool is tainted; the Node Agent and every session pod carry the same list. Control-plane nodes that carry the usual `node-role.kubernetes.io/control-plane` taint get no Node Agent unless the list tolerates it.
+Pass them at install with `helm install ... --values placement.yaml`. `nodeSelector` limits the Node Agent, and with it session pods, to the nodes that carry the label. `tolerations` are needed only when the pool is tainted; the Node Agent and every session pod carry the same list. Control-plane nodes that carry the usual `node-role.kubernetes.io/control-plane` taint get no Node Agent unless the list tolerates it.
 
 ## Placement Policies
 
@@ -115,11 +123,12 @@ Groups of adjacent orbital planes share a node. Reduces the number of VXLAN tunn
 When two pods are on different K8s nodes, the Node Agent creates a VXLAN tunnel between them:
 
 ```
-Node A                                    Node B
-+-----------------+                      +-----------------+
-| space-sat-p00s03 pod  |                      | space-sat-p01s03 pod  |
-|   isl2 <------- veth -- vxlan -------- veth -------> isl3 |
-+-----------------+      UDP 14789       +-----------------+
+Node A                                      Node B
++----------------------+                    +----------------------+
+| leo-sat-p00s03 pod   |                    | leo-sat-p01s03 pod   |
+|   isl2               |                    |               isl3   |
++-----|----------------+                    +----------------|-----+
+      veth -- vxlan ------- UDP 14789 ------- vxlan -- veth
 ```
 
 The VXLAN tunnel encapsulates Ethernet frames in UDP, carrying them across the physical network between nodes. From the perspective of the FRR routing daemon inside each pod, `isl2`/`isl3` look like normal network interfaces - FRR doesn't know or care that the physical path goes through a VXLAN tunnel.
@@ -197,10 +206,10 @@ Initial tunnel creation on cold start takes about 30 seconds for 176 tunnels. Th
 ssh <server> "ip -o link show type vxlan | grep -c ': vx'"
 
 # Check substrate latency measurements
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-node-agent -n nodalarc | grep substrate
+kubectl logs -l app=nodalarc-node-agent -n nodalarc | grep substrate
 
 # Verify cross-plane adjacencies form
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s05 -n nodalarc -c frr -- vtysh -c "show isis neighbor" | grep isl2
+kubectl exec leo-sat-p00s05 -n nodalarc -c frr-router -- vtysh -c "show isis neighbor" | grep isl2
 ```
 
 ## Network Requirements

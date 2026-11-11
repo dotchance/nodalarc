@@ -91,17 +91,18 @@ For constellations above 500 satellites, spatial indexing (octree/KD-tree) would
 
 ```bash
 # Node-level resource usage
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl top nodes
+kubectl top nodes
 
 # Per-pod resource usage (sorted by memory)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl top pods -n nodalarc --sort-by=memory
+kubectl top pods -n nodalarc --sort-by=memory
 
 # OME computation timing
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -n nodalarc -l app=nodalarc-ome | grep -E 'computing|pacing|window'
+kubectl logs -n nodalarc -l app=nodalarc-ome | grep -E 'computing|pacing|window'
 
 # Active link count via API
-TOKEN=$(curl -s http://localhost:8080/api/v1/auth/token | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
-curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | \
+VS_API=$(kubectl -n nodalarc get pod -l app=nodalarc-vs-api -o jsonpath='{.items[0].status.hostIP}'):8080
+TOKEN=$(curl -s http://$VS_API/api/v1/auth/token | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
+curl -s -H "Authorization: Bearer $TOKEN" http://$VS_API/api/v1/state | \
   python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{len(d[\"links\"])} active links')"
 
 # NodalArc VXLAN tunnel count per node (tunnel devices are named vx plus six

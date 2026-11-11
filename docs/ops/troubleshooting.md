@@ -12,7 +12,7 @@ Diagnosis and resolution for common deployment issues.
 
 **Diagnose:**
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl describe pod <stuck-pod> -n nodalarc | tail -20
+kubectl describe pod <stuck-pod> -n nodalarc | tail -20
 ```
 
 Look for events like `Insufficient memory` or `node(s) didn't match Pod's node affinity`.
@@ -27,14 +27,15 @@ Look for events like `Insufficient memory` or `node(s) didn't match Pod's node a
 
 **Symptom:** Pods show `ImagePullBackOff` or `ErrImagePull`.
 
-**Cause:** Images aren't available on the target node.
+**Cause:** The server cannot pull the image. A release pulls every image from ghcr.io, and
+the uD3TN profiles pull D3TN's own image from registry.gitlab.com.
 
 **Fix:**
-- Run `make status` first; it checks whether images are missing locally, missing from the registry, or present but not pullable.
-- If images are built but not distributed, run `make load`.
-- If source changed and the platform is already installed, run `make build && make load && make upgrade`.
-- Multi-node: verify the registry is accessible from all nodes and check `config.mk` registry settings.
-- Check: `sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl describe pod <pod> -n nodalarc | grep -A3 Events`
+- Check the pull error: `kubectl describe pod <pod> -n nodalarc | grep -A3 Events`
+- Check that every server reaches ghcr.io (and registry.gitlab.com for the uD3TN sessions).
+- On a cluster built from source, see the
+  [Developer Guide](../dev/getting-started.md): `make status` reports images missing from the
+  registry.
 
 ### Session Stuck in "Creating" Phase
 
@@ -44,7 +45,7 @@ Look for events like `Insufficient memory` or `node(s) didn't match Pod's node a
 
 **Diagnose:**
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-operator -n nodalarc --tail=100
+kubectl logs -l app=nodalarc-operator -n nodalarc --tail=100
 ```
 
 Look for errors in pod creation or ConfigMap operations.
@@ -57,7 +58,7 @@ Look for errors in pod creation or ConfigMap operations.
 
 **Diagnose:**
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-node-agent -n nodalarc --tail=100
+kubectl logs -l app=nodalarc-node-agent -n nodalarc --tail=100
 ```
 
 Common causes:
@@ -78,9 +79,9 @@ sudo modprobe mpls_router mpls_iptunnel
 
 Check the typed wiring gate and Node Agent evidence:
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc -l nodalarc.io/node-id \
+kubectl get pods -n nodalarc -l nodalarc.io/node-id \
   -o custom-columns='POD:.metadata.name,PROOF:.metadata.annotations.nodalarc\.io/wiring-status'
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec -n nodalarc -l app=nodalarc-node-agent -- \
+kubectl exec -n nodalarc -l app=nodalarc-node-agent -- \
   tail -100 /var/lib/nodalarc/node-agent/ops-events.jsonl
 ```
 
@@ -100,9 +101,9 @@ on the pod's host, and it must hold the same text as the annotation.
 ### Check Interface State
 
 ```bash
-NODE=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
-  -o name | sed 's#pod/##' | grep -E -- '-sat-|-gs-' | head -1)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- \
+NODE=$(kubectl get pods -n nodalarc \
+  -o name | sed 's#pod/##' | grep -E -- '-sat-|-gw[0-9]+$' | head -1)
+kubectl exec "$NODE" -n nodalarc -c frr-router -- \
   ip -br link show
 ```
 
@@ -116,14 +117,14 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c fr
 ### Check FRR is Running
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- \
+kubectl exec "$NODE" -n nodalarc -c frr-router -- \
   vtysh -c "show daemons"
 ```
 
 Should list `zebra`, `isisd` (or `ospfd`), and possibly `staticd`. If daemons aren't running, check the FRR config delivery:
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c frr -- \
+kubectl exec "$NODE" -n nodalarc -c frr-router -- \
   cat /etc/frr/frr.conf
 ```
 
@@ -131,48 +132,53 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$NODE" -n nodalarc -c fr
 
 Routing convergence takes 10-60 seconds depending on constellation size. IS-IS hello interval is 1 second; hold time is 3 seconds. A new adjacency forms in 3-4 seconds after interfaces are UP. Full SPF convergence for the entire constellation takes longer.
 
-## Teardown Issues
+## Removal Issues
 
-### Teardown Hung
+### Uninstall Fails in Its Hook
 
-**Symptom:** `make teardown` appears stuck.
+**Symptom:** `helm uninstall` reports that the `nodalarc-uninstall` hook failed.
 
-The teardown script has built-in timeouts and force-delete logic for every failure mode. If it's taking more than 5 minutes, something unexpected is happening.
+**Cause:** The hook stops the session and requires every server to report itself clean. It
+fails when the session does not unwind within ten minutes, or when a server's cleaner reports a
+device it could not remove; its log names the server and the device:
 
-**Emergency reset:**
 ```bash
-make nuke
+kubectl logs -n nodalarc job/nodalarc-uninstall
 ```
 
-This is the square-one reset - it removes NodalArc state, images, build artifacts, and dependencies while leaving K3s installed. Run `make all` afterward.
-
-`make force-teardown` is a break-glass target only. It removes Kubernetes resources without deterministic host cleanup, so run `make nuke` before redeploying if you use it.
+**Fix:** Address what the log names and run `helm uninstall` again; the platform stays installed
+until the hook succeeds, so the hook can run again. Do not delete devices by hand: the cleaner is
+the one implementation that deletes NodalArc's device group and verifies its absence.
 
 ### Namespace Stuck in Terminating
 
 **Symptom:** `kubectl get namespace nodalarc` shows `Terminating` indefinitely.
 
-**Cause:** Finalizers blocking deletion.
+**Cause:** The namespace was deleted while NodalArc was installed. The ConstellationSpec's
+finalizer waits for the Operator to unwind the session, and the Operator is gone with the
+namespace.
 
-The teardown script handles this automatically by patching finalizers. If running manually:
+**Fix:** Remove the ConstellationSpec's finalizer so the namespace can go:
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get namespace nodalarc -o json | \
-  python3 -c "import json,sys; ns=json.load(sys.stdin); ns['spec']['finalizers']=[]; print(json.dumps(ns))" | \
-  sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl replace --raw "/api/v1/namespaces/nodalarc/finalize" -f -
+kubectl patch constellationspec current-session -n nodalarc --type=merge \
+  -p '{"metadata":{"finalizers":[]}}'
 ```
 
-### Kernel State Left Behind After Teardown
+The session's network devices stay on the servers until the next install's `helm uninstall`,
+whose hook cleans every server.
+
+### Kernel State Left Behind
 
 **Symptom:** VXLAN tunnels or veth pairs from a previous session interfere with a new deployment.
 
-**Check:** `make teardown` runs the Node Agent's cleaner on every host that runs a Node Agent pod, judges each host by the cleaner's report and refuses to uninstall while any host is unverified. Its output names the host and the devices that remain. For a read-only look at one host:
-```bash
-ssh <server> "ip -o link show"
-```
-Every host device NodalArc creates is in its device group, 0x4E415243 (1312903747): `ip -o link show group 1312903747` lists them. Emulated LAN bridges (site LANs), their ports and their VXLAN ports are in the `emulated_lan` network namespace instead: `sudo ip netns exec emulated_lan ip -o link` lists them.
+Every host device NodalArc creates is in its device group, 0x4E415243 (1312903747): on a server,
+`ip -o link show group 1312903747` lists them. Emulated LAN bridges (site LANs), their ports and
+their VXLAN ports are in the `emulated_lan` network namespace instead:
+`sudo ip netns exec emulated_lan ip -o link` lists them.
 
-**Fix:** Rerun `make teardown` once the cause it reported is addressed. Do not delete devices by hand: the cleaner is the one implementation that deletes the device group's members and verifies their absence, and the teardown's report is the record. If the namespace is already gone, `make teardown` can verify only the workstation and says so; `make install` restores the Node Agents, and the next `make teardown` verifies every host.
+**Fix:** `helm uninstall` removes them on every server and reports each server clean. Do not
+delete devices by hand.
 
 ## Performance Issues
 
@@ -182,7 +188,7 @@ Every host device NodalArc creates is in its device group, 0x4E415243 (131290374
 
 **Concern:** If CPU stays high continuously, check for crash-restart loops:
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pod -l app=nodalarc-ome -n nodalarc
+kubectl get pod -l app=nodalarc-ome -n nodalarc
 ```
 
 Look at RESTARTS count. If > 0, check logs for the crash reason.
@@ -193,7 +199,7 @@ Look at RESTARTS count. If > 0, check logs for the crash reason.
 
 **Check:**
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-scheduler -n nodalarc | \
+kubectl logs -l app=nodalarc-scheduler -n nodalarc | \
   grep -i "timeout\|slow\|backlog"
 ```
 
@@ -224,24 +230,24 @@ If the browser UI is slow:
 
 **Fix:**
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-ome -n nodalarc -c init
+kubectl logs -l app=nodalarc-ome -n nodalarc -c ensure-nats-streams
 ```
 
 Check the init container logs for stream creation errors. Common cause: NATS pod not ready when OME init ran.
 
 ```bash
 # Restart OME to retry stream creation
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl rollout restart deployment/nodalarc-ome -n nodalarc
+kubectl rollout restart deployment/ome -n nodalarc
 ```
 
 ## Getting More Help
 
 1. Check service logs (see commands above)
-2. Check `make status` output
+2. Run `helm test nodalarc -n nodalarc --logs`
 3. Verify kernel modules are loaded: `lsmod | grep mpls`
 4. Verify sysctls are set: `sysctl net.ipv4.ip_forward` (should be 1)
 5. File an issue on the GitHub repository with:
-   - `make status` output
+   - The output of `helm test nodalarc -n nodalarc --logs`
    - Relevant service logs (last 100 lines)
    - Constellation size and session config being deployed
    - Number of nodes and placement policy

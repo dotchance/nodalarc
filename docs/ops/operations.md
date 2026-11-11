@@ -11,109 +11,78 @@ session and deploy it, or author one in the Session Builder. The platform handle
 transition automatically: it tears down the old session and brings up the new
 one.
 
-### From the Command Line
+### Through the API
+
+The Sessions window switches sessions through VS-API's REST API, and scripts can make the same
+request; see the [API guide](../user/api.md). No manual teardown is needed: the platform stops
+the old session before it starts the new one.
+
+## Removing NodalArc
 
 ```bash
-make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
+helm uninstall nodalarc -n nodalarc
 ```
 
-No manual teardown needed. The system switches sessions automatically.
+Before Helm removes anything, the chart's uninstall hook:
 
-## Teardown
+1. Deletes the ConstellationSpec, so the Operator stops the running session and removes its pods
+2. Waits until no session pod remains
+3. Runs the Node Agent's cleaner on every server, which removes NodalArc's network devices and
+   its emulated-LAN namespace and reports the server clean; a server that does not report clean
+   fails the uninstall and is named
 
-When you need to fully stop the platform:
+Helm then removes the platform: its Deployments, the Node Agent DaemonSet, services, ConfigMaps
+and the NATS volume. It keeps VS-API's saved session data and the ConstellationSpec definition.
+To remove those too:
 
 ```bash
-make teardown
+kubectl delete namespace nodalarc
+kubectl delete crd constellationspecs.nodalarc.io
 ```
 
-This runs `scripts/na-teardown.sh`, an eight-step sequence:
+Delete the namespace only after `helm uninstall`: deleting it while NodalArc runs leaves the
+session's kernel state on the servers.
 
-1. Strip the finalizers from the ConstellationSpec resources and delete them (the Operator may not be running)
-2. Delete every session pod in one request
-3. Run the Node Agent's host cleaner on every labelled host and on this workstation, and judge each host by the cleaner's report; the teardown refuses to go further while any host is unverified, so the next run keeps its means of retrying
-4. Helm uninstall (removes the platform pods, services and ConfigMaps)
-5. Wait for every pod in the namespace to terminate
-6. Delete the namespace and wait for it to go; a namespace that does not finish is reported with what it still holds, and its finalizers are never stripped
-7. Delete the cluster-scoped resources (CRD, ClusterRoles, ClusterRoleBindings)
-8. Verify that no pod, namespace or CRD remains
+## Moving to Another Release
 
-No pod is force-deleted. If the script prints "Teardown complete" the cluster and every verified host are clean; if it exits non-zero, it names what remains.
-
-**Never use `kubectl delete namespace nodalarc` directly.** It will hang on finalizers and leave kernel state behind.
-
-### After Teardown
-
-To bring the platform back up:
+Remove the installed release, then install the other one:
 
 ```bash
-make install && make session
+helm uninstall nodalarc -n nodalarc
+helm install nodalarc oci://ghcr.io/dotchance/nodalarc --version <release> \
+  --namespace nodalarc --create-namespace --wait
 ```
 
-This assumes the required runtime images are already loaded into the selected image destination. If images were removed, run `make build && make load && make install && make session` instead.
-
-## Upgrades
-
-### Image Update (No Config Change)
-
-After rebuilding images from new source code:
-
-```bash
-make build && make load && make upgrade
-```
-
-This does a Helm upgrade with the new image tags. Platform services restart with new images. The running session is preserved if the upgrade is backward-compatible.
-
-### Full Redeploy
-
-If Helm chart templates or configuration changed:
-
-```bash
-make build && make load && make reinstall && make session
-```
-
-`make reinstall` uses the official teardown path before installing. Do not replace it with `kubectl delete namespace`.
-
-For a full square-one validation, including dependency/image/artifact cleanup while leaving K3s installed:
-
-```bash
-make nuke && make all
-```
-
-### Single Service Update
-
-To rebuild and restart one service without affecting others:
-
-```bash
-make deploy-scheduler    # or deploy-ome, deploy-vs-api, etc.
-```
+VS-API's saved session data survives the move as long as the namespace stays.
 
 ## Health Monitoring
 
 ### Quick Status
 
 ```bash
-make status
+helm status nodalarc -n nodalarc
+helm test nodalarc -n nodalarc --logs
 ```
 
-Shows pod counts, session phase, and active links.
+The test checks every platform Deployment, the Node Agent on every server, and that every
+platform container runs the image digest the chart names.
 
 ### Pod Health
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc -o wide
+kubectl get pods -n nodalarc -o wide
 ```
 
 All session pods should be `Running` with every container ready (`2/2` for a typical router pod). Platform pods should be `Running`. If pods are in `CrashLoopBackOff` or `ImagePullBackOff`, check logs:
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs <pod-name> -n nodalarc
+kubectl logs <pod-name> -n nodalarc
 ```
 
 ### Session Phase
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get constellationspec -n nodalarc \
+kubectl get constellationspec -n nodalarc \
   -o jsonpath='{.items[0].status.phase}'
 ```
 
@@ -123,38 +92,38 @@ Phases: `Creating` -> `Wiring` -> `Ready`. If stuck in `Creating` for more than 
 
 ```bash
 # Operator (session lifecycle, pod creation)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-operator -n nodalarc --tail=50
+kubectl logs -l app=nodalarc-operator -n nodalarc --tail=50
 
 # OME (orbital computation, event publishing)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-ome -n nodalarc --tail=50
+kubectl logs -l app=nodalarc-ome -n nodalarc --tail=50
 
 # Scheduler (link dispatch, reconciliation)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-scheduler -n nodalarc --tail=50
+kubectl logs -l app=nodalarc-scheduler -n nodalarc --tail=50
 
 # Node Agent (kernel operations, VXLAN)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-node-agent -n nodalarc --tail=50
+kubectl logs -l app=nodalarc-node-agent -n nodalarc --tail=50
 
 # VS-API (WebSocket, REST API)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-vs-api -n nodalarc --tail=50
+kubectl logs -l app=nodalarc-vs-api -n nodalarc --tail=50
 ```
 
 ### Routing Verification
 
 ```bash
 # Check IS-IS adjacencies on a satellite in the current session
-SAT=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
+SAT=$(kubectl get pods -n nodalarc \
   -o name | sed 's#pod/##' | grep -- '-sat-' | head -1)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$SAT" -n nodalarc -c frr-router -- \
+kubectl exec "$SAT" -n nodalarc -c frr-router -- \
   vtysh -c "show isis neighbor"
 
 # Check a ground node has adjacencies
-GS=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
-  -o name | sed 's#pod/##' | grep -- '-gs-' | head -1)
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$GS" -n nodalarc -c frr-router -- \
+GS=$(kubectl get pods -n nodalarc \
+  -o name | sed 's#pod/##' | grep -E -- '-gw[0-9]+$' | head -1)
+kubectl exec "$GS" -n nodalarc -c frr-router -- \
   vtysh -c "show isis neighbor"
 
 # End-to-end ping through the current routing table
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec "$GS" -n nodalarc -c frr-router -- \
+kubectl exec "$GS" -n nodalarc -c frr-router -- \
   ping -c 3 -W 5 <destination-loopback-or-prefix>
 ```
 
@@ -174,7 +143,7 @@ Keys are regenerated on every new session deployment. No manual key management n
 If users need to SSH directly (not through the browser):
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get secret nodalarc-terminal-keys -n nodalarc \
+kubectl get secret nodalarc-terminal-keys -n nodalarc \
   -o jsonpath='{.data.id_ed25519}' | base64 -d > nodalarc-ssh-key
 chmod 600 nodalarc-ssh-key
 ```
@@ -182,35 +151,23 @@ chmod 600 nodalarc-ssh-key
 Then SSH to any pod:
 
 ```bash
-NODE=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc \
+NODE=$(kubectl get pods -n nodalarc \
   -o name | sed 's#pod/##' | grep -- '-sat-' | head -1)
-POD_IP=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pod "$NODE" -n nodalarc \
+POD_IP=$(kubectl get pod "$NODE" -n nodalarc \
   -o jsonpath='{.status.podIP}')
 ssh -i nodalarc-ssh-key -o StrictHostKeyChecking=no operator@$POD_IP
 ```
 
 ## Cleanup Levels
 
-| Command | What It Removes | When to Use |
-|---------|----------------|-------------|
-| `make teardown` | Session + platform (namespace, pods, CRD) | Normal shutdown |
-| `make clean` | Frontend dist, Python caches | Force frontend rebuild |
-| `make clean-images` | All nodalarc Docker images + build cache | Force full image rebuild |
-| `make clean-deps` | Python .venv, node_modules | Force dependency reinstall |
-| `make clean-registry` | Images from registry | Purge stale registry images |
-| `make purge-containerd` | NodalArc images from K3s containerd cache | Purge node image caches |
-| `make nuke` | All of the above | Square-one reset: K3s remains |
+| Command | What It Removes |
+|---------|----------------|
+| `helm uninstall nodalarc -n nodalarc` | The session, the platform, and NodalArc's network devices on every server |
+| `kubectl delete namespace nodalarc` | VS-API's saved session data, after the uninstall |
+| `kubectl delete crd constellationspecs.nodalarc.io` | The ConstellationSpec definition, after the uninstall |
 
-## Lifecycle State Transitions
-
-| Current state | Correct transition |
-|---------------|--------------------|
-| Clean K3s or freshly nuked state | `make all` |
-| Running platform, same session | `make build && make load && make upgrade` |
-| Running platform, destructive refresh | `make build && make load && make reinstall && make session` |
-| Running platform, switch session only | `make session DEFAULT_SESSION=catalog/nodalarc/sessions/<name>.yaml` |
-| Unknown or polluted NodalArc state | `make nuke && make all` |
-| Tooling broken and namespace must be removed | `make force-teardown`, then `make nuke` before redeploying |
+Developers who build NodalArc from source manage their install with `make`; the
+[Developer Guide](../dev/getting-started.md) lists the targets.
 
 ## Backup and Recovery
 
@@ -220,4 +177,4 @@ User data lives in one place: the VS-API volume (PVC `nodalarc-session-data`), w
 - NATS JetStream stores recent messages in a PVC, and recovery does not depend on it
 - Workload configs are rendered by the profile's adapter from the resolved session at deploy time
 
-`make teardown` deletes the namespace and with it both volumes; copy the VS-API volume first if the user data matters.
+`helm uninstall` keeps the VS-API volume; deleting the namespace deletes it, so copy it first if the user data matters.

@@ -27,7 +27,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Paths given on the command line are the caller's; the script works from the root.
+CALLER_DIR="$PWD"
 cd "$ROOT_DIR"
+
+absolute() {
+    case "$1" in
+        /*) printf '%s\n' "$1" ;;
+        *) printf '%s/%s\n' "$CALLER_DIR" "$1" ;;
+    esac
+}
 
 # The images a release publishes: the session images the shipped profiles name
 # through the workload image map, and the platform services. The probe and
@@ -208,11 +217,13 @@ trap 'rm -rf -- "$work"' EXIT
 case "${1:-}" in
     images)
         [ $# -eq 3 ] || fail "usage: na-release.sh images REGISTRY RECORD"
-        release_images "$2" "$3" "$work"
+        record="$(absolute "$3")"
+        mkdir -p "$(dirname "$record")"
+        release_images "$2" "$record" "$work"
         ;;
     chart)
         [ $# -eq 4 ] || [ $# -eq 5 ] || fail "usage: na-release.sh chart RELEASE RECORD OUT [CHART_REPOSITORY]"
-        release_chart "$2" "$3" "$4" "${5:-}" "$work"
+        release_chart "$2" "$(absolute "$3")" "$(absolute "$4")" "${5:-}" "$work"
         ;;
     *)
         sed -n '/^# Build and publish/,/^# REGISTRY is/p' "$0" >&2

@@ -38,7 +38,7 @@ mkdir -p "$output_dir"
 
 (
     cd "$source_dir"
-    tar --exclude='./Chart.yaml' --exclude='./Chart.yaml.in' -cf - .
+    tar --exclude='./Chart.yaml' --exclude='./Chart.yaml.in' --exclude='./VERSION' -cf - .
 ) | (
     cd "$output_dir"
     tar -xf -
@@ -68,6 +68,17 @@ messaging="$output_dir/files/nats-messaging.yaml"
 if [[ ! -s "$messaging" ]]; then
     echo "[helm-chart] ERROR: the NATS messaging inventory rendered empty" >&2
     exit 2
+fi
+
+# A release chart's values: every image reference, the workload image map and
+# the release number, written by scripts/na-release-values.py from the release
+# record. Applied before the digest below, so the digest covers them.
+if [[ -n "${RELEASE_VALUES:-}" ]]; then
+    if [[ ! -s "$RELEASE_VALUES" ]]; then
+        echo "[helm-chart] ERROR: RELEASE_VALUES names a missing or empty file: $RELEASE_VALUES" >&2
+        exit 2
+    fi
+    cp "$RELEASE_VALUES" "$output_dir/values.yaml"
 fi
 
 # The chart's identity: a digest of the content the release will carry

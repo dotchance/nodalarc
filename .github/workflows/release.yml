@@ -1,0 +1,157 @@
+# Copyright 2024-2026 .chance (dotchance)
+# SPDX-License-Identifier: AGPL-3.0-only
+# Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
+name: Release
+
+# Publishes a NodalArc release to ghcr.io: the images, the Helm chart that
+# installs them, and for a final release the GitHub Release with the release
+# list. It runs only when someone starts it.
+#
+# A candidate (0.8.1-rc.1) builds every image from the chosen commit, pushes
+# it, and pushes the chart as that candidate. A final release (0.8.1) builds
+# nothing: it takes the image record of the candidate run named in
+# candidate_run, after that candidate was qualified, and publishes the chart
+# with exactly those images.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release number: a candidate such as 0.8.1-rc.1, or a final release such as 0.8.1"
+        required: true
+      candidate_run:
+        description: "Final release only: the run ID of the qualified candidate whose images it publishes"
+        required: false
+      prerelease:
+        description: "Final release only: mark the GitHub Release as a pre-release"
+        type: boolean
+        default: true
+
+permissions:
+  # actions: read lets a final release take a candidate run's image record.
+  actions: read
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  release:
+    name: Release ${{ inputs.release }}
+    runs-on: ubuntu-latest
+    env:
+      RELEASE: ${{ inputs.release }}
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+      CHARTS: oci://ghcr.io/${{ github.repository_owner }}/charts
+    steps:
+      - name: Check the inputs
+        run: |
+          case "$RELEASE" in
+            *-*) [ -z "${{ inputs.candidate_run }}" ] || { echo "a candidate builds its own images; leave candidate_run empty"; exit 1; } ;;
+            *) [ -n "${{ inputs.candidate_run }}" ] || { echo "a final release publishes a qualified candidate's images; set candidate_run"; exit 1; } ;;
+          esac
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Set up crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Set up cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to ghcr.io
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push the images (candidate)
+        if: ${{ inputs.candidate_run == '' }}
+        run: scripts/na-release.sh images "$REGISTRY" build/release/record.json
+
+      - name: Take the candidate's image record (final release)
+        if: ${{ inputs.candidate_run != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: image-record
+          path: build/release
+          run-id: ${{ inputs.candidate_run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package and push the chart
+        run: scripts/na-release.sh chart "$RELEASE" build/release/record.json build/release/out "$CHARTS"
+
+      - name: Sign the images and the chart
+        run: |
+          python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print("\n".join(c["image"] for c in r["components"].values() if "image" in c))' \
+            build/release/record.json > build/release/images.txt
+          while read -r image; do
+            cosign sign --yes "${image%%:*}@${image##*@}"
+          done < build/release/images.txt
+          chart_digest="$(crane digest "ghcr.io/${{ github.repository_owner }}/charts/nodalarc:$RELEASE")"
+          cosign sign --yes "ghcr.io/${{ github.repository_owner }}/charts/nodalarc@$chart_digest"
+
+      - name: Write the source list
+        run: python3 scripts/na-source-list.py "$RELEASE" build/release/record.json "build/release/out/sources-$RELEASE.md"
+
+      - name: Keep the image record for promotion
+        if: ${{ inputs.candidate_run == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-record
+          path: build/release/record.json
+
+      - name: Keep the chart and the release list
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ inputs.release }}
+          path: build/release/out/
+
+      - name: Create the GitHub Release (final release)
+        if: ${{ inputs.candidate_run != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' build/release/record.json)"
+          previous="$(git describe --tags --abbrev=0 "$commit^" 2>/dev/null || true)"
+          {
+            echo "NodalArc $RELEASE: every component's version and image is in the attached release list, $RELEASE.yaml."
+            echo ""
+            echo "## Install"
+            echo ""
+            echo '```bash'
+            echo "helm install nodalarc $CHARTS/nodalarc --version $RELEASE \\"
+            echo "  --namespace nodalarc --create-namespace"
+            echo '```'
+            echo ""
+            echo "To build K3s servers for it, download build-k3s-cluster.sh and build-k3s-node.sh below, keep them in one directory, and run \`./build-k3s-cluster.sh --published-images <first server> <server> ...\`, or \`sudo ./build-k3s-node.sh\` on a single machine."
+            echo ""
+            echo "The source of every GPL, LGPL and AGPL package in these images is listed in the attached sources-$RELEASE.md, under the offer in THIRD_PARTY_NOTICES.md."
+            echo ""
+            echo "## Changes"
+            echo ""
+            if [ -n "$previous" ]; then
+              git log --format='- %s' "$previous..$commit"
+            else
+              git log --format='- %s' -n 50 "$commit"
+            fi
+          } > build/release/notes.md
+          prerelease_flag=""
+          if [ "${{ inputs.prerelease }}" = "true" ]; then prerelease_flag="--prerelease"; fi
+          gh release create "$RELEASE" --target "$commit" --title "NodalArc $RELEASE" $prerelease_flag \
+            --notes-file build/release/notes.md \
+            "build/release/out/$RELEASE.yaml" \
+            "build/release/out/sources-$RELEASE.md" \
+            "build/release/out/nodalarc-$RELEASE.tgz" \
+            scripts/build-k3s-cluster.sh scripts/build-k3s-node.sh

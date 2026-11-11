@@ -30,7 +30,7 @@ APP_ROOTS='^(app|usr/share/nginx/html)/'
 # The one document an image serves: the VS-API hands the grammar reference to
 # the session builder.
 ALLOWED_DOCS='^app/docs/ops/configuration-grammar\.md$'
-REFUSED='(^|/)(README[^/]*|Dockerfile)$|(^|/)(__pycache__|tests|\.git)(/|$)|\.(md|pyc|proto|map|ts|tsx)$'
+REFUSED='(^|/)(README[^/]*|Dockerfile|VERSION)$|(^|/)(__pycache__|tests|\.git)(/|$)|\.(md|pyc|proto|map|ts|tsx)$'
 # Where every image keeps its SBOM, and the build tool that must not ship.
 SBOM_PATH='nodalarc/sbom.spdx.json'
 LEGAL_DIR='usr/share/doc/nodalarc'

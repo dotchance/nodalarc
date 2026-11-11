@@ -341,7 +341,9 @@ fi
 if [ "$dropin_change" -eq 1 ]; then
     mkdir -p "$dropin_dir"
     printf '%s\n' "$desired_dropin" > "$dropin.tmp"
-    chmod 600 "$dropin.tmp"
+    # Readable by every account: kubectl on a K3s machine is the k3s binary, which
+    # reads this directory, and the drop-in holds no secret.
+    chmod 644 "$dropin.tmp"
     mv "$dropin.tmp" "$dropin"
     echo "  wrote $dropin"
 fi

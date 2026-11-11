@@ -16,15 +16,20 @@
 # Build choices, each with its reason:
 # - The release is fetched by tag and checked against its commit, so the
 #   image is the published v3.0.0 and nothing else.
-# - Every option is HDTN's default. The web interface stays built (with
-#   Boost Beast, which downloads nothing): bpfiletransfer includes its
-#   WebsocketServer header unconditionally, and v3.0.0 does not compile with
-#   USE_WEB_INTERFACE=OFF. A consuming profile turns the interface off at run
-#   time (userInterfaceOn: false). The default x86 build uses the
-#   RDSEED, BMI1/BMI2, SSE4.2 and AVX2 instructions (LTP random numbers and
-#   bundle codecs); a CPU without them stops the process with an illegal
-#   instruction. The 13th-generation Intel servers this image was built for
-#   have all of them.
+# - Every option is HDTN's default except USE_X86_HARDWARE_ACCELERATION and
+#   LTP_RNG_USE_RDSEED, which are off. With them on, HDTN's configure step
+#   tests the build machine's CPU and compiles for what it finds (RDSEED,
+#   BMI1/BMI2, SSE4.2, AVX2): the image then stops with an illegal
+#   instruction on a server whose CPU lacks one of them, and the build fails
+#   on a machine where the one RDSEED call of the test returns no entropy,
+#   which the instruction is allowed to do and did on a 13th-generation Intel
+#   build machine. With them off, the image is built for the x86-64 baseline
+#   and runs on any server; the bundle codecs and CRC use HDTN's portable
+#   code. The web interface stays built (with Boost Beast, which downloads
+#   nothing): bpfiletransfer includes its WebsocketServer header
+#   unconditionally, and v3.0.0 does not compile with USE_WEB_INTERFACE=OFF.
+#   A consuming profile turns the interface off at run time
+#   (userInterfaceOn: false).
 # - The Debian base is pinned by digest, the same one images/base uses, so a
 #   rebuild starts from the same packages.
 # - The runtime image adds bash (profiles write configs with it), iproute2
@@ -51,6 +56,8 @@ RUN git clone --depth 1 --branch "${HDTN_TAG}" https://github.com/nasa/HDTN.git 
 RUN cmake -S /opt/hdtn-src -B /opt/hdtn-build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/hdtn \
+        -DUSE_X86_HARDWARE_ACCELERATION=OFF \
+        -DLTP_RNG_USE_RDSEED=OFF \
     && cmake --build /opt/hdtn-build -j "${CORES}" \
     && cmake --install /opt/hdtn-build \
     && install -D -m 0644 /opt/hdtn-src/LICENSE.md /opt/hdtn/share/doc/hdtn/LICENSE.md \

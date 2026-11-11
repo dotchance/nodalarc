@@ -37,6 +37,20 @@ import_image() {
     docker save "$image" | "${SUDO_CTR_CMD[@]}" k3s ctr images import -
 }
 
+# Third-party images are pinned by digest. Docker's containerd image store keeps
+# a digest-pinned image without a name, so docker save | ctr import left them
+# nameless in K3s and the kubelet could not find them. K3s's own runtime pulls
+# them instead, under the name the kubelet asks for, and only when it lacks them.
+pull_into_k3s() {
+    local image="$1"
+    if "${SUDO_CTR_CMD[@]}" k3s crictl inspecti -q "$image" >/dev/null 2>&1; then
+        echo "  present in K3s: $image"
+        return
+    fi
+    echo "  pull into K3s: $image"
+    "${SUDO_CTR_CMD[@]}" k3s crictl pull "$image" >/dev/null
+}
+
 push_image() {
     local image="$1"
     echo "  push $image"
@@ -59,10 +73,10 @@ if [ "$MODE_RESOLVED" = "single-node" ]; then
         [ "$required" = "required" ] || continue
         if [ "$kind" = "nodalarc" ]; then
             ensure_local_image "$image"
+            import_image "$image"
         else
-            docker image inspect "$image" >/dev/null 2>&1 || docker pull "$image"
+            pull_into_k3s "$image"
         fi
-        import_image "$image"
     done < <(bash "$ROOT_DIR/scripts/na-images.sh" list-all-runtime-images)
 else
     echo "[load] Pushing NodalArc runtime images to $REGISTRY_HOST_RESOLVED..."

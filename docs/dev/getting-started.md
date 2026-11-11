@@ -3,8 +3,9 @@
 ## Prerequisites
 
 - Linux (Ubuntu 22.04+ or Debian 12+)
+- git, to clone the repository (`sudo apt-get install git`)
 - Python 3.14+
-- Node.js 22+
+- Node.js 22+, for work on the page (`make test`, `make test-frontend`, `npm run dev`); the bootstrap does not install it
 - Docker
 - Kubernetes cluster (K3s recommended for development)
 - uv (Python package manager)
@@ -16,9 +17,12 @@ On the build machine:
 ```bash
 git clone https://github.com/dotchance/nodalarc.git
 cd nodalarc
-# Docker, kubectl, Helm, Node.js and uv; skip it if they are installed
+# make, Docker, kubectl, Helm, uv and crane; skip it if they are installed
 sudo scripts/bootstrap-dev-machine.sh
 ```
+
+When the bootstrap adds your account to the docker group, it says so: log out
+and back in so your account can use Docker.
 
 ### A single machine
 
@@ -27,24 +31,30 @@ When the build machine is also the only K3s server, build it with
 
 ### A cluster of several servers
 
-Copy `scripts/build-k3s-node.sh` to each server and run it there as root. Choose
-the registry the cluster takes its images from: a host name or address that every
-server and the build machine reach, and a port. The first server runs it:
+From the checkout on the build machine, name every server by its ssh address,
+the first one first. Your account on each server needs sudo. The script runs
+unattended when the build machine logs in to every server with an ssh key and
+sudo there asks for no password. Without that, it asks for each password and
+waits: the ssh logins at the start, the sudo password as each server is built.
+An INPUT NEEDED notice marks every such prompt; ssh gives up on an unanswered
+login after 2 minutes and sudo after 5 (their default limits).
 
 ```bash
-sudo ./build-k3s-node.sh --registry <registry host>:<port> --serve-registry
+scripts/build-k3s-cluster.sh <first server> <server> ...
+make all
 ```
 
-It prints the command that joins each further server (with the same
-`--registry`), and the steps for the build machine with this cluster's values
-filled in: fetch the kubeconfig, write `config.mk`, let Docker push to the
-registry. Do those, then run `make all` in the checkout.
+The script runs `scripts/build-k3s-node.sh` on every server; the first one
+starts the cluster and runs the image registry on port 5000
+(`--registry-port` chooses another). It then connects the build machine: the
+kubeconfig in `~/.kube/nodalarc.yaml`, `KUBECONFIG` and `REGISTRY_HOST` in
+`config.mk`, and the registry in Docker's `insecure-registries`.
 
 The registry can also run elsewhere (any OCI registry that serves plain HTTP on
-the private network); leave out `--serve-registry` and give every server
-`--registry` with its address.
+the private network); see
+[Container Registry Setup](../ops/multi-node.md#container-registry-setup).
 
-`make all` is the clean-state bring-up path. It installs Python/Node.js dependencies, builds all Docker images, loads them into the selected image destination, deploys the platform via Helm, starts a default session, and prints status. ~3-5 minutes from scratch.
+`make all` is the clean-state bring-up path. It installs the Python dependencies, builds all Docker images (the page compiles inside its own image), loads them into the selected image destination, deploys the platform via Helm, starts a default session, and prints status. ~3-5 minutes from scratch.
 
 If a previous NodalArc deployment may still exist, validate from square one instead:
 
@@ -70,7 +80,7 @@ make test
 
 Unit tests should pass on a fresh checkout. If any fail, something is wrong with the setup or the code.
 
-Open http://localhost:3000 to verify the visualization loads and satellites are visible.
+Open the Visualization address `make status` prints (http://localhost:3000 on a single machine) to verify the visualization loads and satellites are visible.
 
 ## Development Loop
 

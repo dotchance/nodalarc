@@ -13,6 +13,8 @@ Deploy across several Kubernetes nodes to run larger sessions and to exercise th
 
 Single-node deployments import images directly into the local container runtime. A cluster of several servers takes NodalArc's images from one registry: the build machine pushes them there and every server pulls them.
 
+`scripts/build-k3s-cluster.sh`, run on the build machine, does steps 1 to 3 for the cluster it builds: it runs the registry on the first server. The steps below are what it does, for a cluster built another way or a registry you already run.
+
 ### 1. Run the registry and point every server at it
 
 `scripts/build-k3s-node.sh` does both. On the server that runs the registry:
@@ -21,7 +23,7 @@ Single-node deployments import images directly into the local container runtime.
 sudo ./build-k3s-node.sh --registry <registry host>:<port> --serve-registry
 ```
 
-and on every other server `--registry <registry host>:<port>` alone (the join command the first server prints carries it). `--serve-registry` installs Ubuntu's `docker-registry` package, configured with no credentials (NodalArc sends none) and with deletion enabled (`make nuke` removes NodalArc's images); `--registry` writes `/etc/rancher/k3s/registries.yaml` so K3s pulls from the registry over plain HTTP. Any other OCI registry works too: leave out `--serve-registry`.
+and on every other server `--registry <registry host>:<port>` alone. `--serve-registry` installs Ubuntu's `docker-registry` package, configured with no credentials (NodalArc sends none) and with deletion enabled (`make nuke` removes NodalArc's images); `--registry` writes `/etc/rancher/k3s/registries.yaml` so K3s pulls from the registry over plain HTTP. Any other OCI registry works too: leave out `--serve-registry`.
 
 ### 2. Let the build machine push to it
 

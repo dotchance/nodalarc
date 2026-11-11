@@ -144,16 +144,15 @@ all: deps build ## Clean-state pipeline: deps → build → load → install →
 # Dependencies
 # ---------------------------------------------------------------------------
 #
-# deps is idempotent setup for the local development machine. It installs
-# Python and frontend dependencies, but it does not build images or touch K3s.
+# deps is idempotent setup for the build machine. It installs the Python
+# dependencies the lifecycle scripts use, but it does not build images or touch
+# K3s. The page compiles inside the VF image's own build stage, so building and
+# installing NodalArc needs no Node.js here; the frontend targets for page work
+# (test, test-frontend, build-frontends) install the frontend dependencies.
 
-deps: check-deps ## Install Python + Node.js dependencies (idempotent)
+deps: check-deps ## Install Python dependencies (idempotent)
 	@echo "[deps] Installing Python dependencies..."
 	uv sync
-	@echo "[deps] Installing VF frontend dependencies..."
-	cd frontend && npm ci
-	@echo "[deps] Checking for high-severity vulnerabilities..."
-	@node scripts/check-npm-audit.mjs frontend
 	@echo "[deps] Done."
 
 check-deps:
@@ -161,7 +160,6 @@ check-deps:
 	@command -v docker >/dev/null 2>&1 || { echo "ERROR: docker not found. Run: sudo scripts/bootstrap-dev-machine.sh"; exit 1; }
 	@command -v kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found. Run: sudo scripts/bootstrap-dev-machine.sh"; exit 1; }
 	@command -v helm >/dev/null 2>&1   || { echo "ERROR: helm not found. Run: sudo scripts/bootstrap-dev-machine.sh"; exit 1; }
-	@command -v node >/dev/null 2>&1   || { echo "ERROR: node not found. Run: sudo scripts/bootstrap-dev-machine.sh"; exit 1; }
 
 # ---------------------------------------------------------------------------
 # Registry diagnostics
@@ -206,7 +204,7 @@ build: deps build-images ## Build all Docker images
 	@echo "[build] All images built with tag $(TAG)."
 	@echo "[build] Next: make load"
 
-build-frontends: ## Build VF frontend
+build-frontends: ensure-frontend-deps ## Build VF frontend
 	@echo "[build] Building VF frontend..."
 	cd frontend && VITE_BUILD_HASH='$(GIT_SHA)' npm run build
 
@@ -533,6 +531,8 @@ ensure-frontend-deps: frontend/node_modules/.bin/vitest
 frontend/node_modules/.bin/vitest: frontend/package.json frontend/package-lock.json
 	@echo "[deps] Installing VF frontend dependencies..."
 	cd frontend && npm ci
+	@echo "[deps] Checking for high-severity vulnerabilities..."
+	@node scripts/check-npm-audit.mjs frontend
 
 test: ensure-frontend-deps ## Run all unit tests (no sudo needed)
 	@backend=0; frontend=0; \

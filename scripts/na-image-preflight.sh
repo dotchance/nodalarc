@@ -19,13 +19,10 @@ fi
 LIB_PREFIX="preflight"
 mode_record_load "$(bash "$ROOT_DIR/scripts/na-mode.sh")"
 
+# The kubelet asks K3s's runtime for each image by its reference; this asks the
+# same question, so the answer holds for a tag and for a digest-pinned image.
 image_available_in_containerd() {
-    local image="$1"
-    local suffix="${image#docker.io/}"
-    "${SUDO_CTR_CMD[@]}" k3s ctr images ls -q 2>/dev/null | awk -v img="$suffix" '
-        $0 == img || $0 == "docker.io/" img || index($0, "/" img) { found = 1 }
-        END { exit found ? 0 : 1 }
-    '
+    "${SUDO_CTR_CMD[@]}" k3s crictl inspecti -q "$1" >/dev/null 2>&1
 }
 
 image_available_in_registry() {

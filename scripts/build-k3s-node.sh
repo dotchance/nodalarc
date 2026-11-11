@@ -3,14 +3,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 #
-# Build one K3s server (or agent) for NodalArc. Run as root on each machine,
-# the way K3s's own installer is run: the first machine alone, every further
-# machine with the join command the first one prints.
+# Build one K3s server (or agent) for NodalArc. Run as root on the machine.
+# A single machine that builds and runs NodalArc needs only this script. For a
+# cluster of several servers, scripts/build-k3s-cluster.sh, run on the build
+# machine, runs this script on every server and connects the build machine.
 #
 #   build-k3s-node.sh [--registry HOST:PORT [--serve-registry]] [--link-mtu BYTES] [--agent] [--yes]
 #
 #   First machine:     build-k3s-node.sh --registry HOST:PORT --serve-registry
 #   Further machines:  K3S_URL=https://<first>:6443 K3S_TOKEN=<token> build-k3s-node.sh --registry HOST:PORT
+#   (the token is in /var/lib/rancher/k3s/server/node-token on the first machine)
 #
 # A cluster of several servers takes NodalArc's images from one registry: the
 # build machine pushes them there and every server pulls them. --registry names
@@ -415,25 +417,6 @@ if [ "$ROLE" = server ]; then
     echo "  $node_name is Ready; pods allowed: $(k3s kubectl get node "$node_name" -o jsonpath='{.status.allocatable.pods}')"
     echo ""
     echo "=== Done ==="
-    if [ "$first_server" -eq 1 ]; then
-        node_ip="$(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([^ ]*\) .*/\1/p')"
-        token="$(cat /var/lib/rancher/k3s/server/node-token)"
-        echo "To add another server, run on it as root:"
-        echo "  K3S_URL=https://${node_ip}:6443 K3S_TOKEN=${token} $(basename "$0")${REGISTRY:+ --registry $REGISTRY}"
-        echo "To add a worker instead, add --agent to that command."
-        echo ""
-        echo "Then, on the build machine, in the NodalArc checkout:"
-        echo "  mkdir -p ~/.kube"
-        echo "  ssh <you>@${node_ip} cat /etc/rancher/k3s/k3s.yaml | sed 's/127.0.0.1/${node_ip}/' > ~/.kube/nodalarc.yaml"
-        echo "  cp config.mk.example config.mk, and set in it:"
-        echo "    KUBECONFIG ?= \$(HOME)/.kube/nodalarc.yaml"
-        if [ -n "$REGISTRY" ]; then
-            echo "    REGISTRY_HOST ?= $REGISTRY"
-            echo "  let Docker push to the registry: \"insecure-registries\": [\"$REGISTRY\"] in"
-            echo "  /etc/docker/daemon.json, then sudo systemctl restart docker"
-        fi
-        echo "  make all"
-    fi
 else
     echo ""
     echo "=== Done: this machine joined $K3S_URL as an agent ==="

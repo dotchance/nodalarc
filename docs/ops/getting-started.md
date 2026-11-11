@@ -39,11 +39,13 @@ If you don't already have Kubernetes, the cluster builder (Step 1) builds K3s on
 
 ## Step 1: Machines
 
-For machines without Kubernetes, the cluster builder builds a K3s server on each one. Run it as root on the first machine; it prints the command that joins every further machine:
+For machines without Kubernetes, the cluster builder builds a K3s server on each one. Run it as root on a single machine:
 
 ```bash
 sudo scripts/build-k3s-node.sh
 ```
+
+For several machines, run `scripts/build-k3s-cluster.sh` from a NodalArc checkout with every machine's ssh address, the first one first. It runs the builder on each machine over ssh and joins them into one cluster. It runs unattended when the machine you run it from logs in to each machine with an ssh key and sudo there needs no password; otherwise it asks for each password, under an INPUT NEEDED notice, and waits for you.
 
 It lists the changes it will make and asks once: the inotify limits NodalArc needs (raised only when a limit is below the minimum), the MTU of the interface that carries the node's traffic (raised only when it is below the emulated link MTU plus the VXLAN overhead, persistent through netplan), a K3s drop-in with the pods a server may hold (1000), no kubelet image pull limit and a /22 pod range per server, and K3s from its official installer. Your own K3s settings belong in `/etc/rancher/k3s/config.yaml`, which the builder never touches. It writes no kernel setting: the Node Agent loads the MPLS kernel modules when a session needs them, and forwarding and MPLS settings are written inside each session pod. It is idempotent.
 
@@ -74,8 +76,8 @@ make nuke && make all
 
 `make all` executes the full bring-up pipeline:
 
-1. Install Python and Node.js dependencies
-2. Build the visualization frontend
+1. Install the Python dependencies the lifecycle scripts use
+2. Compile the visualization frontend inside its image build
 3. Build all Docker images (6 services + base images)
 4. Load images into the cluster (K3s import or registry push)
 5. Install the Helm chart
@@ -185,7 +187,7 @@ make all
 | Target | Requires sudo | Description |
 |--------|:---:|-------------|
 | `make all` | no | Clean-state pipeline: deps -> build -> load -> install -> session -> status |
-| `make deps` | no | Install Python/Node.js dependencies |
+| `make deps` | no | Install Python dependencies |
 | `make build` | no | Build all Docker images |
 | `make load` | no | Import images to K3s or push to registry |
 | `make install` | no | Helm install the platform chart; refuses existing platform state |

@@ -170,22 +170,28 @@ NodalArc will soon be published as ready-to-run runtime containers and a Helm ch
 
 ### Machines Without Kubernetes
 
-`scripts/build-k3s-node.sh`, run as root on each machine, builds a K3s server for NodalArc and prints the command that joins the next machine. It lists the changes it will make and asks once. Skip it if you already have a cluster.
+`scripts/build-k3s-node.sh`, run as root, builds a K3s server for NodalArc on one machine. `scripts/build-k3s-cluster.sh` builds a cluster of several servers over ssh from the build machine and connects the build machine to it. It runs unattended when the build machine logs in to each server with an ssh key and sudo there needs no password; otherwise it asks for each password, under an INPUT NEEDED notice, and waits for you. Each lists the changes it will make and asks before applying them. Skip them if you already have a cluster.
 
-### Build From Source (Developers)
+### Build From Source
 
-Until the runtime containers are published, NodalArc is built and installed from a source checkout. This path is for developers, and the [Developer Guide](docs/dev/getting-started.md) has the full setup. `scripts/bootstrap-dev-machine.sh` installs the build tools (Docker, kubectl, Helm, Node.js and uv) on the build machine; skip it if they are installed. For a cluster of several servers, build each one with `scripts/build-k3s-node.sh` first, as the [Developer Guide](docs/dev/getting-started.md) describes:
+Until the runtime containers are published, NodalArc is built and installed from a source checkout; the [Developer Guide](docs/dev/getting-started.md) has more on each step. The build machine needs git to clone the repository (`sudo apt-get install git` on Ubuntu or Debian). `scripts/bootstrap-dev-machine.sh` installs the build tools (make, Docker, kubectl, Helm, uv and crane) on the build machine; skip it if they are installed. When it adds your account to the docker group, it says so: log out and back in before the next step so your account can use Docker. Then build K3s on this machine, or a cluster of several servers from it:
 
 ```bash
 git clone https://github.com/dotchance/nodalarc.git
 cd nodalarc
 sudo scripts/bootstrap-dev-machine.sh
+
+# NodalArc on this machine alone:
+sudo scripts/build-k3s-node.sh
+# or on a cluster: every server's ssh address, the first one first
+scripts/build-k3s-cluster.sh <first server> <server> ...
+
 make all
 ```
 
-`make all` installs the Python and Node.js dependencies, builds the images, imports them into K3s or pushes them to a registry, installs the Helm chart, deploys the default session and prints the status.
+`make all` installs the Python dependencies the build uses, builds the images, imports them into K3s or pushes them to a registry, installs the Helm chart, deploys the default session and prints the status.
 
-When the platform is ready, open:
+When the platform is ready, open the Visualization address that `make all` prints at its end (`make status` prints it again). On a single machine it is:
 
 ```text
 http://localhost:3000

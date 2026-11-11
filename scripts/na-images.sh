@@ -144,6 +144,45 @@ component_base_version() {
     printf '%s\n' "$version"
 }
 
+# The files a component's image is built from: what its Dockerfile copies from
+# its build context (the Dockerfile included), the license files every image
+# carries, and the SBOM step that adds the image's last layer. A release reuses
+# a published image only when these files are the same at the commit the
+# published version was built from and now (component-input-digest).
+# tests/unit/platform/test_component_inputs.py holds every Dockerfile's sources
+# inside these lists. Build arguments are not inputs: they set labels.
+component_inputs() {
+    local python=(pyproject.toml uv.lock .dockerignore lib adapters)
+    case "$1" in
+        ome|scheduler) printf '%s\n' "services/$1" catalog configs/ephemerides "${python[@]}" ;;
+        node-agent) printf '%s\n' services/node_agent "${python[@]}" ;;
+        vs-api) printf '%s\n' services/vs_api services/ome catalog configs \
+            docs/ops/configuration-grammar.md "${python[@]}" ;;
+        operator) printf '%s\n' services/nodalarc_operator catalog configs "${python[@]}" ;;
+        measurement) printf '%s\n' services/measurement catalog "${python[@]}" ;;
+        probe) printf '%s\n' images/probe services/measurement/probe_daemon.py \
+            pyproject.toml uv.lock .dockerignore ;;
+        vf) printf '%s\n' frontend ;;
+        base|frr|hdtn|ion|picoquic|ud3tn-tools) printf '%s\n' "images/$1" ;;
+        *) echo "na-images: '$1' has no image inputs" >&2; exit 2 ;;
+    esac
+    printf '%s\n' LICENSE NOTICE THIRD_PARTY_NOTICES.md LICENSES scripts/na-image-sbom.sh
+}
+
+component_input_digest() {
+    # component_input_digest NAME COMMIT -> sha256 of the input files' blob ids at COMMIT
+    local name="$1" commit="$2" listing
+    local -a paths
+    mapfile -t paths < <(component_inputs "$name") || exit 2
+    [ "${#paths[@]}" -gt 0 ] || exit 2
+    if ! git -C "$ROOT_DIR" rev-parse --verify --quiet "$commit^{commit}" >/dev/null; then
+        echo "na-images: commit $commit is not in this checkout" >&2
+        exit 1
+    fi
+    listing="$(git -C "$ROOT_DIR" ls-tree -r "$commit" -- "${paths[@]}")" || exit 1
+    printf '%s' "$listing" | sha256sum | cut -d' ' -f1
+}
+
 component_version() {
     # Command substitutions run without errexit: the failure is checked.
     local base
@@ -300,6 +339,9 @@ Commands:
   list-platform-resources
   helm-image-args
   component-version NAME
+  component-inputs NAME
+  component-version-file NAME
+  component-input-digest NAME COMMIT
   workload-images
   workload-images-values
 EOF
@@ -314,7 +356,7 @@ fi
 # Static lookups answer from the table alone; only image references need the
 # transport mode (registry host, prefix), which may consult the cluster.
 case "$command" in
-    helm-key-for|resource-for|list-platform-resources|component-version|-h|--help|help) ;;
+    helm-key-for|resource-for|list-platform-resources|component-version|component-inputs|component-input-digest|component-version-file|-h|--help|help) ;;
     *) resolve_mode ;;
 esac
 
@@ -363,6 +405,20 @@ case "$command" in
         ;;
     list-platform-resources) list_platform_resources ;;
     helm-image-args) helm_image_args ;;
+    component-inputs)
+        [ -n "${2:-}" ] || { echo "na-images: component-inputs requires a component name" >&2; exit 2; }
+        component_inputs "$2"
+        ;;
+    component-version-file)
+        [ -n "${2:-}" ] || { echo "na-images: component-version-file requires a component name" >&2; exit 2; }
+        dir="$(component_dir "$2")" || exit 2
+        printf '%s/VERSION\n' "$dir"
+        ;;
+    component-input-digest)
+        [ -n "${2:-}" ] && [ -n "${3:-}" ] \
+            || { echo "na-images: component-input-digest requires a component and a commit" >&2; exit 2; }
+        component_input_digest "$2" "$3"
+        ;;
     component-version)
         if [ -z "${2:-}" ]; then
             echo "na-images: component-version requires a component name" >&2

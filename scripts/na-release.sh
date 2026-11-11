@@ -7,9 +7,12 @@
 # that installs them. A release is a list of component versions and image
 # digests; this script produces that list and the chart from it.
 #
-#   na-release.sh images REGISTRY RECORD
-#       Build every release image from a clean checkout (make build, the same
-#       build the development path runs), push each one as
+#   na-release.sh images REGISTRY RECORD [PREVIOUS_LIST]
+#       Reuse each image the newest published release (PREVIOUS_LIST, its
+#       release list) has at the same version with the same files, and stop when
+#       a component's files changed under an unchanged version. Build the rest
+#       from a clean checkout (make build, the same build the development path
+#       runs), push each one as
 #       REGISTRY/nodalarc-<component>:<version, + written as _>, copy the
 #       third-party images there by digest, and write RECORD (JSON): each
 #       component's version and its image pinned by digest.
@@ -72,8 +75,8 @@ semver_tag() {
 }
 
 release_images() {
-    local registry="$1" record="$2" work="$3"
-    require docker crane git make
+    local registry="$1" record="$2" previous="$3" work="$4"
+    require docker crane git make uv
     if [ -n "$(git status --porcelain)" ]; then
         fail "the checkout has uncommitted changes; a release is built from a commit"
     fi
@@ -82,12 +85,35 @@ release_images() {
     # The same abbreviation na-tag.sh uses: a clean tree's tag is the commit alone.
     [ "$tag" = "$(git rev-parse --short=8 HEAD)" ] || fail "content tag $tag is not the commit"
 
-    echo "[release] Building every image at $tag..."
-    make build REGISTRY_HOST= TAG="$tag"
-
-    local name version local_ref remote digest
+    # Which images this release builds, and which it takes unchanged from the
+    # newest published release (scripts/na-release-plan.py).
+    echo "[release] Comparing with the published release list: ${previous:-none}"
+    if ! uv run --quiet python scripts/na-release-plan.py "$previous" \
+        "${SESSION_IMAGES[@]}" "${PLATFORM_IMAGES[@]}" > "$work/plan.tsv"; then
+        grep -P '\tstop\t' "$work/plan.tsv" | sed 's/^/[release] STOP: /' >&2 || true
+        fail "components changed under unchanged versions (above)"
+    fi
+    local to_build=()
+    local name action version image local_ref remote digest
     : > "$work/components.tsv"
-    for name in "${SESSION_IMAGES[@]}" "${PLATFORM_IMAGES[@]}"; do
+    while IFS=$'\t' read -r name action version image; do
+        case "$action" in
+            reuse)
+                echo "[release] $name $version: unchanged, reused ($image)"
+                printf '%s\t%s\t%s\n' "$name" "$version" "$image" >> "$work/components.tsv"
+                ;;
+            build) to_build+=("$name") ;;
+            *) fail "the release plan gave $name the action '$action'" ;;
+        esac
+    done < "$work/plan.tsv"
+
+    if [ "${#to_build[@]}" -gt 0 ]; then
+        echo "[release] Building every image at $tag; publishing ${to_build[*]}..."
+        make build REGISTRY_HOST= TAG="$tag"
+    else
+        echo "[release] Every image is unchanged; nothing is built."
+    fi
+    for name in "${to_build[@]}"; do
         version="$(TAG="$tag" bash scripts/na-images.sh component-version "$name")"
         local_ref="$(MODE=single-node REGISTRY_HOST= TAG="$tag" NA_IMAGES_NO_CLUSTER=1 \
             bash scripts/na-images.sh image-for "$name")"
@@ -221,10 +247,15 @@ trap 'rm -rf -- "$work"' EXIT
 
 case "${1:-}" in
     images)
-        [ $# -eq 3 ] || fail "usage: na-release.sh images REGISTRY RECORD"
+        [ $# -eq 3 ] || [ $# -eq 4 ] || fail "usage: na-release.sh images REGISTRY RECORD [PREVIOUS_LIST]"
         record="$(absolute "$3")"
+        previous=""
+        if [ -n "${4:-}" ]; then
+            previous="$(absolute "$4")"
+            [ -s "$previous" ] || fail "previous release list $previous is missing"
+        fi
         mkdir -p "$(dirname "$record")"
-        release_images "$2" "$record" "$work"
+        release_images "$2" "$record" "$previous" "$work"
         ;;
     chart)
         [ $# -eq 4 ] || [ $# -eq 5 ] || fail "usage: na-release.sh chart RELEASE RECORD OUT [CHART_REPOSITORY]"

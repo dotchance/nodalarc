@@ -76,9 +76,27 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
+      - name: Find the newest published release list (candidate)
+        if: ${{ inputs.candidate_run == '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A component whose version and files are unchanged since the newest
+          # published release is reused from it, not rebuilt.
+          previous="$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')"
+          if [ -z "$previous" ]; then
+            echo "No release is published: every image is built."
+          elif gh release view "$previous" --json assets --jq '.assets[].name' | grep -qx "$previous.yaml"; then
+            gh release download "$previous" --pattern "$previous.yaml" --dir build/release/previous
+            echo "PREVIOUS_LIST=build/release/previous/$previous.yaml" >> "$GITHUB_ENV"
+            echo "Newest published release: $previous"
+          else
+            echo "Release $previous carries no release list: every image is built."
+          fi
+
       - name: Build and push the images (candidate)
         if: ${{ inputs.candidate_run == '' }}
-        run: scripts/na-release.sh images "$REGISTRY" build/release/record.json
+        run: scripts/na-release.sh images "$REGISTRY" build/release/record.json "${PREVIOUS_LIST:-}"
 
       - name: Take the candidate's image record (final release)
         if: ${{ inputs.candidate_run != '' }}

@@ -1,0 +1,21 @@
+NodalArc {{ .Chart.AppVersion }} is installed in the namespace {{ .Release.Namespace }}.
+{{- if not .Values.vf.vsApiUrl }}
+
+The page runs on the server that runs VS-API, on port 3000; VS-API answers on
+port 8080 of the same server. The server's address:
+
+  kubectl -n {{ .Release.Namespace }} get pod -l app=nodalarc-vf -o jsonpath='{.items[0].status.hostIP}'
+
+Open http://<that address>:3000 when the platform is ready, and deploy a
+session from the Sessions window.
+{{- end }}
+
+Check the platform:  helm test {{ .Release.Name }} -n {{ .Release.Namespace }} --logs
+Remove it:           helm uninstall {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+Uninstalling removes the session, the platform and NodalArc's network devices on
+every server. It keeps the session data volume and the ConstellationSpec
+definition; remove those with:
+
+  kubectl delete namespace {{ .Release.Namespace }}
+  kubectl delete crd constellationspecs.nodalarc.io

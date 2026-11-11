@@ -1,0 +1,92 @@
+{{- /*
+Copyright 2024-2026 .chance (dotchance)
+SPDX-License-Identifier: AGPL-3.0-only
+Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
+
+The chart's own lifecycle checks (lib/nodalarc/platform_lifecycle.py), run
+from the Operator image:
+- helm test: the platform runs as this chart says.
+- helm uninstall: a pre-delete hook unwinds the session and proves every
+  server clean before Helm removes the Operator and the Node Agents.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nodalarc-lifecycle
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nodalarc-lifecycle
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: ["nodalarc.io"]
+    resources: ["constellationspecs"]
+    verbs: ["get", "list", "delete"]
+  # delete: the uninstall hook removes the helm test pod.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  # The Node Agent's cleaner runs inside each Node Agent pod, as make teardown runs it.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nodalarc-lifecycle
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nodalarc-lifecycle
+subjects:
+  - kind: ServiceAccount
+    name: nodalarc-lifecycle
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nodalarc-verify
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: test
+    # The pod stays after the test so helm test --logs can read it. Helm never
+    # deletes hook pods on uninstall; the pre-delete hook below removes it.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  serviceAccountName: nodalarc-lifecycle
+  restartPolicy: Never
+  containers:
+    - name: verify
+      image: {{ required "images.operator is required" .Values.images.operator | quote }}
+      imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.operator "policy" .Values.imagePullPolicy) }}
+      command: ["python", "-m", "nodalarc.platform_lifecycle", "verify"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nodalarc-uninstall
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  # The session unwind and every server's cleaner run inside this bound.
+  activeDeadlineSeconds: 900
+  template:
+    spec:
+      serviceAccountName: nodalarc-lifecycle
+      restartPolicy: Never
+      containers:
+        - name: uninstall
+          image: {{ required "images.operator is required" .Values.images.operator | quote }}
+          imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.operator "policy" .Values.imagePullPolicy) }}
+          command: ["python", "-m", "nodalarc.platform_lifecycle", "uninstall"]

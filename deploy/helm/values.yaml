@@ -3,10 +3,13 @@
 # Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 # Default values for Nodal Arc deployment
 
-# JSON map of profile image references to replacement references, applied to
-# composed workload containers with loud logging. Development only; empty in
-# production so digest admission is never weakened.
-workloadDevImageOverrides: ""
+# The workload image map, as one JSON string: each logical image a shipped
+# profile names (registry.example/nodalarc/<name>@sha256:<64 zeros>) mapped to
+# the image that runs. A release fills it with its published images, pinned by
+# digest; the development scripts fill it with the developer's builds. The
+# Operator refuses a session whose profile names a logical image the map lacks,
+# and stops at startup on a malformed map.
+workloadImages: ""
 
 images:
   base: nodalarc/base:dev
@@ -148,5 +151,6 @@ nats:
   storageClass: ""
   storageSize: "4Gi"
 
-# Node for platform pods (auto-detected if empty, or set to your node name).
+# Server for the platform pods; empty lets Kubernetes place them. The page
+# always runs on the server that runs VS-API.
 controlPlaneNode: ""

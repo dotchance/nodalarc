@@ -86,6 +86,7 @@ from nodalarc_operator.session_pods import (
     observe_session_pods,
     owned_session_run_ids,
 )
+from nodalarc_operator.workloads.images import WorkloadImageMapError, load_workload_image_map
 from nodalarc_operator.workloads.preparation import PreparedWorkloads, WorkloadPreparationError
 
 log = logging.getLogger(__name__)
@@ -115,6 +116,17 @@ async def on_startup(**_):
         log.info("Operator NATS logging connected")
     except Exception as exc:
         log.error("Operator NATS logging connection failed: %s", exc)
+
+
+@kopf.on.startup()
+async def check_workload_image_map(**_):
+    """Stop the Operator on a malformed workload image map, before any session."""
+    try:
+        image_map = load_workload_image_map()
+    except WorkloadImageMapError as error:
+        log.error("%s", error)
+        raise kopf.PermanentError(str(error)) from error
+    log.info("Workload image map: %d logical image(s)", len(image_map.images))
 
 
 @kopf.on.cleanup()

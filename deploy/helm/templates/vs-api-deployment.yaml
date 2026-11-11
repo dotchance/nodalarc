@@ -62,7 +62,7 @@ spec:
             - "/etc/nodalarc/platform.yaml"
           ports:
             - containerPort: 8080
-              hostPort: 8080    # VF dev server on host needs localhost:8080
+              hostPort: 8080    # the page calls VS-API at its own server's port 8080
               name: http
           env:
             - name: NODAL_BUILD

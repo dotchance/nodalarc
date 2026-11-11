@@ -24,6 +24,8 @@
 **/*.pyc
 **/README.md
 **/Dockerfile
+# A component's version reaches its image as a label and an environment value.
+**/VERSION
 **/*.proto
 
 # Ephemeris datasets converted on a developer machine. Each image converts its

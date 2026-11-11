@@ -214,16 +214,15 @@ Current package license families:
 | Unlicense | `robust-predicates` | `LICENSES/Unlicense.txt` |
 | BlueOak-1.0.0 | `lru-cache` | `LICENSES/BlueOak-1.0.0.txt` |
 
-Package-specific copyright notices remain in package metadata and should be
-carried into generated binary artifact reports. For GPL-licensed FRR packages,
-published container images should also provide or link to the corresponding
-source code in the way required by the package distributor and GPL terms.
+Package-specific copyright notices remain in package metadata and in the SPDX
+report each image carries at `/nodalarc/sbom.spdx.json`.
 
 ## Session Images Built From Upstream Programs
 
 NodalArc builds the following session images from the upstream source or
-package named, at the pinned release. None is published yet; the shipped
-profiles name them by placeholder references. The last column says where the
+package named, at the pinned release. The shipped profiles name them by logical
+references, which the workload image map of each install resolves to the
+images that run. The last column says where the
 upstream license text is. NodalArc changes nothing in the upstream programs; its
 own additions are the scripts named, which are AGPL-3.0-only. The recipes are in
 `images/`.
@@ -243,9 +242,24 @@ digest. uD3TN is licensed under AGPL-3.0.
 ## Container Base Images and System Packages
 
 Docker images built from this repository inherit third-party software and license
-terms from their base images and installed operating-system packages. Published
-container images should carry or link to an SBOM and generated license report for
-the exact image digest being published.
+terms from their base images and installed operating-system packages. Every image
+carries an SPDX report of every package in every layer at
+`/nodalarc/sbom.spdx.json`.
+
+## Source Code Offer
+
+Images published by NodalArc contain programs licensed under the GPL, the LGPL
+and the AGPL, among them FRRouting and packages of the Debian and Alpine
+distributions their base images come from. Each NodalArc release on GitHub
+attaches a source list naming every such package in its images, its exact
+version, and where its source is published.
+
+For three years after a NodalArc release, .chance (dotchance) will provide the
+complete corresponding source code of any program in its published images that
+is licensed under the GPL, the LGPL or the AGPL, to anyone who asks, for no more
+than the cost of providing it. Ask through an issue at
+<https://github.com/dotchance/nodalarc/issues>, naming the release and the
+package.
 
 ## Trademarks
 

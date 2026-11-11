@@ -5,14 +5,18 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.resolve_session import SessionResolutionError, resolve_session_with_assets
+from nodalarc_operator.workloads.images import WORKLOAD_IMAGES_ENV
 from nodalarc_operator.workloads.preparation import prepare_session_workloads
 
 from tests.catalog_session_fixtures import (
     build_catalog_session_fixture,
     resolve_catalog_session,
+    shipped_workload_images,
 )
 
 
@@ -107,7 +111,9 @@ def test_domain_matching_only_hosts_is_refused() -> None:
         )
 
 
-def test_one_path_composes_hosts_and_routers_from_their_profiles() -> None:
+def test_one_path_composes_hosts_and_routers_from_their_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Host nodes compose from the plain application profile — one
     zero-capability container, no rendered artifacts — while routed nodes
     compose FRR with rendered configuration, in ONE session under one sky."""
@@ -119,6 +125,8 @@ def test_one_path_composes_hosts_and_routers_from_their_profiles() -> None:
     resolution = resolve_session_with_assets(
         fixture, catalog=FilesystemCatalogReadView(fixture.roots)
     )
+    monkeypatch.setenv(WORKLOAD_IMAGES_ENV, json.dumps(shipped_workload_images()))
+    monkeypatch.setenv("IMAGE_PULL_POLICY", "Always")
     prepared = prepare_session_workloads(
         resolution,
         namespace="nodalarc",

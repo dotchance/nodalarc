@@ -157,10 +157,6 @@ A session spreads its nodes across every server in the cluster. [Scaling and Per
 
 NodalArc runs entirely in containers on Kubernetes: the platform services, a Node Agent on every server, and one container for every node in a session. The command line is for installing and operating the platform. Once it is running, you work in the browser or through the API.
 
-### Install the Runtime Containers
-
-NodalArc will soon be published as ready-to-run runtime containers and a Helm chart, so you can install it on your cluster without building anything. The install steps will appear here with the first release.
-
 ### Requirements
 
 - A Kubernetes cluster whose nodes admit privileged pods, or Ubuntu or Debian machines to build one on
@@ -168,13 +164,56 @@ NodalArc will soon be published as ready-to-run runtime containers and a Helm ch
 - 8 GB RAM for the 36-satellite default session and 32 GB for larger sessions; a session with an Earth-Mars link needs about 9.6 GiB of allocatable memory on the server that holds both ends of that link
 - On a cluster of several servers, a network between them that carries the emulated link MTU plus the VXLAN overhead: 8,850-byte packets at the default 8,800-byte link MTU
 
-### Machines Without Kubernetes
+### For Users
 
-`scripts/build-k3s-node.sh`, run as root, builds a K3s server for NodalArc on one machine. `scripts/build-k3s-cluster.sh` builds a cluster of several servers over ssh from the build machine and connects the build machine to it. It runs unattended when the build machine logs in to each server with an ssh key and sudo there needs no password; otherwise it asks for each password, under an INPUT NEEDED notice, and waits for you. Each lists the changes it will make and asks before applying them. Skip them if you already have a cluster.
+NodalArc is published as container images and a Helm chart. You install it on a Kubernetes cluster with Helm, and nothing is built. On the machine you work from, you need [kubectl](https://kubernetes.io/docs/tasks/tools/) and [Helm](https://helm.sh/docs/intro/install/).
 
-### Build From Source
+Pick the release you install, the newest on the [Releases](https://github.com/dotchance/nodalarc/releases) page:
 
-Until the runtime containers are published, NodalArc is built and installed from a source checkout; the [Developer Guide](docs/dev/getting-started.md) has more on each step. The build machine needs git to clone the repository (`sudo apt-get install git` on Ubuntu or Debian). `scripts/bootstrap-dev-machine.sh` installs the build tools (make, Docker, kubectl, Helm, uv and crane) on the build machine; skip it if they are installed. When it adds your account to the docker group, it says so: log out and back in before the next step so your account can use Docker. Then build K3s on this machine, or a cluster of several servers from it:
+```bash
+RELEASE=0.8.1
+```
+
+If you have no Kubernetes cluster yet, the release carries two scripts that build K3s for NodalArc on Ubuntu or Debian machines. Each lists the changes it will make and asks before applying them.
+
+```bash
+curl -fsSLO https://github.com/dotchance/nodalarc/releases/download/$RELEASE/build-k3s-cluster.sh
+curl -fsSLO https://github.com/dotchance/nodalarc/releases/download/$RELEASE/build-k3s-node.sh
+chmod +x build-k3s-cluster.sh build-k3s-node.sh
+
+# NodalArc on one machine: run this on that machine
+sudo ./build-k3s-node.sh
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+# or on several servers: run this on your own machine, naming each server's ssh
+# address, the first one first; it writes the cluster's kubeconfig for you
+./build-k3s-cluster.sh --published-images <first server> <server> ...
+export KUBECONFIG=~/.kube/nodalarc.yaml
+```
+
+`build-k3s-cluster.sh` builds every server over ssh. It runs unattended when your machine logs in to each server with an ssh key and sudo there needs no password; otherwise it asks for each password, under an INPUT NEEDED notice, and waits for you.
+
+Install NodalArc and check it:
+
+```bash
+helm install nodalarc oci://ghcr.io/dotchance/nodalarc --version $RELEASE \
+  --namespace nodalarc --create-namespace --wait
+helm test nodalarc -n nodalarc --logs
+```
+
+The browser interface runs on port 3000 of the server that runs VS-API. When the install finishes, Helm prints how to find that server (`helm status nodalarc -n nodalarc` prints it again); this command gives its address:
+
+```bash
+kubectl -n nodalarc get pod -l app=nodalarc-vf -o jsonpath='{.items[0].status.hostIP}'
+```
+
+Open `http://<that address>:3000` and deploy a session from the Sessions window.
+
+`helm uninstall nodalarc -n nodalarc` removes the session, the platform and NodalArc's network devices on every server. `kubectl delete namespace nodalarc` and `kubectl delete crd constellationspecs.nodalarc.io` then remove the saved session data and the ConstellationSpec definition.
+
+### For Developers
+
+Developers build NodalArc from a source checkout and run it on their own cluster; the [Developer Guide](docs/dev/getting-started.md) has more on each step. The build machine needs git to clone the repository (`sudo apt-get install git` on Ubuntu or Debian). `scripts/bootstrap-dev-machine.sh` installs the build tools (make, Docker, kubectl, Helm, uv and crane) on the build machine; skip it if they are installed. When it adds your account to the docker group, it says so: log out and back in before the next step so your account can use Docker. Then build K3s on this machine, or a cluster of several servers from it:
 
 ```bash
 git clone https://github.com/dotchance/nodalarc.git
@@ -189,15 +228,13 @@ scripts/build-k3s-cluster.sh <first server> <server> ...
 make all
 ```
 
-`make all` installs the Python dependencies the build uses, builds the images, imports them into K3s or pushes them to a registry, installs the Helm chart, deploys the default session and prints the status.
+`build-k3s-cluster.sh` without `--published-images` also runs an image registry on the first server and connects the build machine to it: the kubeconfig in `~/.kube/nodalarc.yaml`, `KUBECONFIG` and `REGISTRY_HOST` in `config.mk`, and the registry in Docker's `insecure-registries`.
 
-When the platform is ready, open the Visualization address that `make all` prints at its end (`make status` prints it again). On a single machine it is:
+`make all` installs the Python dependencies the build uses, builds the images, imports them into K3s or pushes them to the registry, installs the Helm chart, deploys the default session and prints the status. When the platform is ready, open the Visualization address that `make all` prints at its end (`make status` prints it again). On a single machine it is:
 
 ```text
 http://localhost:3000
 ```
-
-On a remote machine, expose or forward port `3000` for the browser interface and port `8080` for VS-API.
 
 ## Documentation
 

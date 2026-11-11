@@ -40,7 +40,7 @@ jobs:
     env:
       RELEASE: ${{ inputs.release }}
       REGISTRY: ghcr.io/${{ github.repository_owner }}
-      CHARTS: oci://ghcr.io/${{ github.repository_owner }}/charts
+      CHARTS: oci://ghcr.io/${{ github.repository_owner }}
     steps:
       - name: Check the inputs
         run: |
@@ -99,8 +99,8 @@ jobs:
           while read -r image; do
             cosign sign --yes "${image%%:*}@${image##*@}"
           done < build/release/images.txt
-          chart_digest="$(crane digest "ghcr.io/${{ github.repository_owner }}/charts/nodalarc:$RELEASE")"
-          cosign sign --yes "ghcr.io/${{ github.repository_owner }}/charts/nodalarc@$chart_digest"
+          chart_digest="$(crane digest "ghcr.io/${{ github.repository_owner }}/nodalarc:$RELEASE")"
+          cosign sign --yes "ghcr.io/${{ github.repository_owner }}/nodalarc@$chart_digest"
 
       - name: Write the source list
         run: python3 scripts/na-source-list.py "$RELEASE" build/release/record.json "build/release/out/sources-$RELEASE.md"
@@ -123,7 +123,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' build/release/record.json)"
+          # The release is tagged at the commit it is assembled from: the chart,
+          # the builder scripts and the docs. Each image's version names the
+          # commit it was built at, and the release list records it.
+          commit="$GITHUB_SHA"
           previous="$(git describe --tags --abbrev=0 "$commit^" 2>/dev/null || true)"
           {
             echo "NodalArc $RELEASE: every component's version and image is in the attached release list, $RELEASE.yaml."

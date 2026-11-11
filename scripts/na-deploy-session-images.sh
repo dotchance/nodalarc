@@ -7,9 +7,9 @@
 # then prove the Operator holds this tree's map.
 #
 # Session pods do not run the platform services' images. The shipped profiles
-# name FRR, base and the stack images by placeholder, and the Operator swaps
-# each placeholder for the image its map names (WORKLOAD_DEV_IMAGE_OVERRIDES,
-# written from the Helm value workloadDevImageOverrides). make deploy-all runs
+# name FRR, base and the stack images by logical reference, and the Operator
+# runs the image its workload image map names for each (WORKLOAD_IMAGES,
+# written from the Helm value workloadImages). make deploy-all runs
 # this after the platform services, so the next session starts from this
 # tree's session images.
 #
@@ -85,8 +85,8 @@ done <<< "$listing"
 # The map names each image by registry digest (by tag in single-node mode), so
 # it is computed after the push. It travels as a values file: helm --set would
 # read its braces and commas as list syntax.
-bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides > "$work/map.json"
-bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides-values > "$work/values.yaml"
+bash "$ROOT_DIR/scripts/na-images.sh" workload-images > "$work/map.json"
+bash "$ROOT_DIR/scripts/na-images.sh" workload-images-values > "$work/values.yaml"
 echo "[deploy:session-images] Setting the Operator's session image map..."
 helm upgrade "$HELM_RELEASE_NAME" "$HELM_CHART" --namespace "$NAMESPACE" \
     --reuse-values --values "$work/values.yaml" >/dev/null
@@ -103,7 +103,7 @@ fi
 
 # --- 4. Prove it -------------------------------------------------------------
 deployed_map="$(kubectl get "$OPERATOR" -n "$NAMESPACE" \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="operator")].env[?(@.name=="WORKLOAD_DEV_IMAGE_OVERRIDES")].value}')"
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="operator")].env[?(@.name=="WORKLOAD_IMAGES")].value}')"
 if ! python3 -c 'import json, sys; sys.exit(json.load(open(sys.argv[1])) != json.loads(sys.argv[2]))' \
     "$work/map.json" "$deployed_map"; then
     echo "[deploy:session-images] ERROR: the Operator's session image map is not this tree's." >&2

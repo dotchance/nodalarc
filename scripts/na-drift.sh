@@ -107,9 +107,9 @@ if [ -z "$tree_map_error" ] || [ ! -f "$tree_map_error" ]; then
     exit 1
 fi
 trap 'rm -f -- "$tree_map_error"' EXIT
-tree_map="$(bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides 2>"$tree_map_error" || true)"
+tree_map="$(bash "$ROOT_DIR/scripts/na-images.sh" workload-images 2>"$tree_map_error" || true)"
 deployed_map="$(kubectl get deployment/nodalarc-operator -n "$NAMESPACE" \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="operator")].env[?(@.name=="WORKLOAD_DEV_IMAGE_OVERRIDES")].value}' \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="operator")].env[?(@.name=="WORKLOAD_IMAGES")].value}' \
     2>/dev/null || true)"
 if ! session_rows="$(python3 - "$tree_map" "$deployed_map" "$(tr '\n' ' ' < "$tree_map_error")" <<'PY'
 import json

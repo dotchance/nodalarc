@@ -151,7 +151,7 @@ NATS         Carries events between the services
 
 Links between nodes are veth pairs on one server and VXLAN tunnels between servers. `tc` applies each link's delay and data rate. NodalArc measures the delay that the lab network itself adds and subtracts it, so a session spread across several servers keeps the delay that the orbits call for.
 
-A session spreads its nodes across every server in the cluster. [Scaling and Performance](docs/ops/scaling.md) has measured numbers and a sizing formula.
+A session spreads its nodes across every server in the cluster. [Scaling and Performance](docs/ops/scaling.md) has the measured numbers: four servers have run 1,413 routers in one session.
 
 ## Get Started
 

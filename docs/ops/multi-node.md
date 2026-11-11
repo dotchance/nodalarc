@@ -143,24 +143,7 @@ The physical network between nodes adds real latency to VXLAN-encapsulated packe
 
 The emulated latency is always accurate regardless of the physical network topology between your nodes. If nodes are 1ms apart, netem subtracts 1ms. If they're 10ms apart, netem subtracts 10ms. The user sees the orbital latency.
 
-## Capacity Planning
-
-Per-node capacity is primarily memory-limited:
-
-```
-Available satellites per node ~ (node_RAM - 2 GB platform) / 18 MB per satellite
-```
-
-| Node RAM | Approximate satellite capacity |
-|----------|-------------------------------|
-| 8 GB | ~330 satellites |
-| 16 GB | ~780 satellites |
-| 32 GB | ~1,660 satellites |
-| 64 GB | ~3,440 satellites |
-
-Platform services (OME, Scheduler, NATS, etc.) only run once regardless of cluster size. They consume approximately 2 GB total.
-
-### Long-delay queue capacity estimate
+## Queuing for DSN and Long-Delay Links
 
 A long-delay link is one whose one-way delay can exceed `network.longDelayBoundSeconds` (10 s by default), such as an Earth-Mars trunk. Its packets in flight wait in kernel queues on the servers of its two ends: each end has a receive queue that delays what its peer sends, and a transmit queue before its rate shaper. NodalArc sizes every delay queue, local or long-delay, from the session's terminals: the transmitting terminal's configured transmit rate times the delay, at 1,500-byte frames, plus 1,000 packets. A terminal changed to a different rate in its catalog file changes its queues. Traffic above a queue's limit is dropped and reported as substrate loss.
 

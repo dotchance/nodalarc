@@ -1,111 +1,63 @@
 # Scaling and Performance
 
-NodalArc runs real routing stacks on real network interfaces. Scaling depends on the same factors that matter in real networks: memory per node, CPU for route computation, and link count.
+![One running session on four servers: a 1,056-satellite Walker-delta constellation around Earth, with MEO, HEO and GEO satellites and links out to the Moon](../images/scaling-earth-regimes.png)
 
-## Measured Performance
+NodalArc scales with the cluster it runs on. Every node in a session is a real router in its own container, and NodalArc spreads those containers across every server in the cluster. On 11 November 2026, one session on four servers ran 1,413 FRR routers: a 1,408-satellite Walker-delta constellation and five ground gateways, joined by 2,829 links that orbital mechanics brought up and down as the satellites moved.
 
-**176 LEO satellites + 7 Earth ground nodes on a 4-node cluster:**
+## +1400 nodes, no problem
 
-| Metric | Value |
-|--------|-------|
-| Total pods | 192 (176 sats + 7 GS + 9 platform) |
-| Active ISL links | 352 |
-| Active ground links | 5-7 (varies with orbital geometry) |
-| CPU utilization per node | 2-5% at steady state |
-| Memory per satellite pod | ~18 MB |
-| Platform services overhead | ~2 GB total |
-| OME window computation | 46 seconds for one 95-minute orbital period |
-| Session deployment time | ~3 minutes (CRD apply to all pods wired) |
-| Initial VXLAN batch (cold start) | ~30 seconds for 176 tunnels |
-| Visualization draw calls | 47/frame (O(1) rendering architecture) |
+Every satellite in that session ran FRR with IS-IS over four optical inter-satellite links and a Ka-band ground terminal. Here is what the run showed:
 
-These numbers are for the LEO session family. MEO, GEO, and cislunar sessions
-have different event rates, larger link latencies, and larger visual scales.
-Measure the specific session family you plan to run.
+- **One converged network.** All 1,413 routers converged into one IS-IS network. The gateway in Denver held a route to every other router in the session.
+- **Clean paths across the sky.** Pings from the Denver and Ashburn gateways to a satellite on the far side of the constellation came back with no loss. From Denver the path crossed 22 hops, with a round trip of about 170 ms.
+- **Live handovers.** Ground handovers ran throughout, and IS-IS recomputed its routes after each one.
+- **Physics in real time.** OME computed the orbits, visibility and link delays for every one-second step in under half a second (468 ms at the 95th percentile), and simulated time kept pace with real time.
+- **Fast start.** The session went from upload to Ready in under four minutes. The Operator created 1,413 pods in about 10 seconds, the Node Agents wired every interface in about 70 seconds, and the Scheduler brought up 2,828 links in two and a half minutes.
 
-## Per-Satellite Footprint
+| Session | Routers | Links | Servers | Upload to Ready |
+|---|---|---|---|---|
+| 704-satellite Walker-delta constellation and 5 gateways | 709 | 1,417 | 4 | 88 seconds |
+| 1,408-satellite Walker-delta constellation and 5 gateways | 1,413 | 2,829 | 4 | 3.6 minutes |
+| Earth-Moon session with LEO, MEO, HEO and GEO satellites, Moon relays and a 1,056-satellite Walker-delta constellation | 1,188 | 2,219 | 4 | 175 seconds |
 
-| Resource | Per Satellite Pod |
-|----------|------------------|
-| Memory | ~18 MB (FRR with IS-IS/OSPF + zebra) |
-| CPU (steady state) | 2-5 millicores |
-| CPU (SPF reconvergence) | Brief spike, <1 second |
+## Many Orbits, Two Bodies, One Session
 
-## Capacity Planning
+The session in these pictures adds a 1,056-satellite Walker-delta constellation to the shipped Earth-Moon session, which carries satellites in LEO, MEO, HEO and GEO, relays around the Moon and ground sites on both bodies. That is 1,188 routers on the same four servers. It reached Ready 175 seconds after upload, OME computed each step in 180 ms at the 95th percentile, and every router in the constellation held a route to every other one.
 
-### Memory Formula
+![One running session: out from the 1,056-satellite constellation around Earth, around past the MEO, HEO and GEO satellites, and on to the Moon and its relays](../images/scaling-earth-to-luna.gif)
 
-```
-max_satellites_per_node = (available_RAM - 2 GB) / 18 MB
-```
+## The Cluster
 
-| Node RAM | Max Satellites (approx) |
-|----------|------------------------|
-| 8 GB | 330 |
-| 16 GB | 780 |
-| 32 GB | 1,660 |
-| 64 GB | 3,440 |
+The four servers each have a 14-core Intel Core i9-13900HK, 32 GB of memory, NVMe storage and 1 Gb/s Ethernet. The release's `build-k3s-cluster.sh` built K3s on them, and NodalArc 0.8.1 was installed from the published chart with its default values. The satellites are the shipped `starlink-v2-mesh` model at 550 km and 53 degrees, linked to their neighbours in the same plane and in the two adjacent planes. The sessions declared an IS-IS domain with per-plane areas and timers chosen for their size.
 
-Platform overhead (OME, Scheduler, NATS, VS-API, Operator, Node Agent) uses approximately 2 GB regardless of constellation size. This overhead runs on one node; other nodes dedicate nearly all memory to satellite pods.
+## Where the Capacity Goes
 
-### Multi-Node Linear Scaling
+**Memory.** A satellite router used about 35 MiB of server memory in the 704-satellite session and about 60 MiB in the 1,408-satellite session, because each router's IS-IS database holds the whole network. A 32 GB server carries about 350 routers of a 1,400-router session, and more of a smaller one. The platform services use about 2 GiB in the cluster, and the Node Agent about 0.4 GiB on each server.
 
-With `planePerNode` placement:
-- 4 nodes x 32 GB = up to ~6,000 satellites theoretically
-- Practical limit depends on OME computation time and Scheduler dispatch rate
+**CPU.** A router at rest uses about 15 millicores. The servers ran at 18% to 24% CPU with 704 satellites and 54% to 73% with 1,408, where every ground handover reaches all 1,413 routers.
 
-### OME Computation Scaling
+**Network and storage.** Traffic between servers peaked at 408 Mb/s on 1 Gb/s links, and disk writes peaked at about 50 MB/s while the pods started. Each server held up to 355 session pods.
 
-The OME computes visibility between all satellite pairs. Computation time scales with pair count:
-
-| Satellites | Pairs to Check | Computation Time |
-|-----------|---------------|-----------------|
-| 36 | 630 | < 1 second |
-| 176 | 15,400 | ~46 seconds |
-| 576 | 165,600 | ~5 minutes (estimated) |
-| 1,584 | 1,254,336 | Would benefit from spatial indexing |
-
-For constellations above 500 satellites, spatial indexing (octree/KD-tree) would significantly reduce computation time. This is an optimization opportunity, not a hard limit - the OME precomputes the full orbital window before pacing, so computation time adds to startup latency but doesn't affect runtime performance.
-
-## What Scales Well
-
-**FRR routing daemons.** IS-IS with per-plane areas keeps the LSDB per node bounded regardless of total constellation size. Each node only holds LSPs from its own area plus inter-area summaries. SPF recomputation completes in under 1 second even at 176 nodes.
-
-**NATS JetStream.** Handles thousands of messages per second with microsecond latency. The OME publishes ~12,000 events per orbital window, and the Scheduler consumes them in real time without backpressure.
-
-**Linux kernel networking.** Thousands of veth pairs and tc netem qdiscs run without measurable overhead. The Node Agent wires 183 pods (all interfaces, sysctls, MPLS config) in under 60 seconds.
-
-**Multi-node pod distribution.** Adding nodes scales linearly. Each node handles its own satellite pods, VXLAN tunnels to peers, and local kernel state. No shared state beyond NATS messages.
-
-**Frontend rendering.** O(1) draw call architecture - all links, trails, boundaries, and orbit paths are batched into shared geometries. Performance is constant regardless of constellation size (47 draw calls for 10 nodes or 10,000).
-
-## What to Watch
-
-**OME startup time.** Scales quadratically with satellite count. For very large constellations, the initial window computation takes minutes. Once computed, runtime performance is unaffected.
-
-**Routing protocol choice.** IS-IS handles large flat topologies better than OSPF due to simpler flooding mechanics. For 100+ satellites, IS-IS with per-plane areas is strongly recommended. OSPF with multi-area is also viable but IS-IS is the industry standard for carrier-scale networks.
-
-**VXLAN tunnel count.** Each cross-node ISL creates one tunnel. With planePerNode on 4 nodes and 16 planes, you get ~176 tunnels. Linux handles this easily, but initial creation takes ~30 seconds. For very large constellations on many nodes, this is a one-time startup cost.
+**More servers, more routers.** Each server runs its own Node Agent, its own share of the session's pods and its own VXLAN tunnels to the other servers. Packets travel through the servers' kernels from router to router, and no central service sits in the data path. A larger cluster holds a larger session.
 
 ## How to Measure
 
 ```bash
-# Node-level resource usage
+# Server CPU and memory
 kubectl top nodes
 
-# Per-pod resource usage (sorted by memory)
-kubectl top pods -n nodalarc --sort-by=memory
+# Session pods per server
+kubectl -n nodalarc get pods -l nodalarc.io/session=true -o wide --no-headers | awk '{print $7}' | sort | uniq -c
 
-# OME computation timing
-kubectl logs -n nodalarc -l app=nodalarc-ome | grep -E 'computing|pacing|window'
+# OME step time: one line a minute with the median, 95th percentile and overruns
+kubectl -n nodalarc logs deploy/ome | grep "OME pacing" | tail -1
 
-# Active link count via API
+# Pacing, session status and link count through the API
 VS_API=$(kubectl -n nodalarc get pod -l app=nodalarc-vs-api -o jsonpath='{.items[0].status.hostIP}'):8080
 TOKEN=$(curl -s http://$VS_API/api/v1/auth/token | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
 curl -s -H "Authorization: Bearer $TOKEN" http://$VS_API/api/v1/state | \
-  python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{len(d[\"links\"])} active links')"
+  python3 -c "import json,sys; d=json.load(sys.stdin); print(d['session_status'], d['playback_achieved'], len(d['links']), 'links')"
 
-# NodalArc VXLAN tunnel count per node (tunnel devices are named vx plus six
-# hex digits by lib/nodalarc/runtime_naming.py)
-ssh <server> "ip -o link show type vxlan | grep -c ': vx'"
+# IS-IS on one router: SPF runs and their duration
+kubectl -n nodalarc exec <pod> -c frr-router -- vtysh -c "show isis summary"
 ```

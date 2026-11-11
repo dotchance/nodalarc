@@ -10,7 +10,7 @@
 | Recommended | 32 GB | 8 cores | 80 GB | 200+ |
 | Multi-node | 32 GB per node | 8 cores per node | 80 GB per node | 1000+ |
 
-Each satellite pod uses approximately 18 MB RAM and 2-5 millicores CPU at steady state. Platform overhead (services + NATS) adds about 2 GB.
+In a 704-satellite session, a satellite router used about 35 MiB of server memory, and a router at rest uses about 15 millicores of CPU. The platform services use about 2 GiB, and the Node Agent about 0.4 GiB on each server. See the recent [scaling document](scaling.md) for more info.
 
 ### Software
 

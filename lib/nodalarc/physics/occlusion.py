@@ -17,6 +17,23 @@ barycentric positions instead rounds it by up to 3 cm (float64 resolution of kil
 which would put a site at zero altitude inside its own body. As in OME's line-of-sight test, a
 point on the surface is outside: the surface tolerance is 1e-12 of the radius (6 um for Earth).
 
+A body is its reference ellipsoid, and its terrain is not modelled. A site's altitude is its height
+above that ellipsoid, and a real site can be below it: Gale crater's floor is 4.9 km below the
+Mars ellipsoid, and a sea-level site where the geoid is low is below Earth's. Against the
+reference ellipsoid such a site is inside its own body and every path from it is blocked. So the
+occluder for a path is the smaller of the body's reference ellipsoid and the similar ellipsoid
+through any end of the path that lies inside it: a site below the reference surface sees its own
+body as a surface at its own level, and every other path is tested exactly as before. One rule
+holds for every body; no body, site or end kind is named.
+
+This is an approximation, not terrain. A real site's horizon is its terrain: a crater floor sees
+the sky only above the rim, which stands about 2 km above Gale's floor. The only horizon NodalArc
+models is the site's elevation mask, so a site below its reference surface sees down to its own
+level and its mask must stand for the terrain around it. That is more permissive than the real
+sky wherever the terrain rises above the mask. Rejected alternative: keep the reference ellipsoid,
+which blinds every site below it. The fix that removes this approximation is a horizon per site:
+an azimuth-dependent elevation profile from the body's terrain model (MOLA, LOLA, an Earth DEM).
+
 Every path and body is tested in one vectorized pass per body.
 """
 
@@ -137,5 +154,11 @@ def obstructions(
             )
         start, end = start * scale, end * scale
         nearest = start + _closest_fraction(start, end)[:, None] * (end - start)
-        blocked[rows, column] = np.einsum("ni,ni->n", nearest, nearest) < 1.0 - SURFACE_TOLERANCE
+        # The occluder's level in the unit-sphere frame: 1 for the reference ellipsoid, or the
+        # squared scaled radius of an end below it (a site under its reference surface; see the
+        # module docstring). A satellite is never inside its body and never lowers it.
+        level = np.minimum(
+            1.0, np.minimum(np.einsum("ni,ni->n", start, start), np.einsum("ni,ni->n", end, end))
+        )
+        blocked[rows, column] = np.einsum("ni,ni->n", nearest, nearest) < level - SURFACE_TOLERANCE
     return occulters, blocked

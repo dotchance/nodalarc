@@ -453,3 +453,39 @@ def test_the_moon_blocks_a_path_from_its_south_polar_site_to_its_north_pole(
     site = _site("luna", LUNAR_POLE_SITE)
     far_side = _site("luna", GeoPosition(89.4, 30.0, 100.0))
     assert _blocked_both_ways(physics_context, site, far_side, "luna") == [True, True]
+
+
+@pytest.mark.parametrize(
+    ("body", "site", "visible", "hidden"),
+    [
+        (
+            "earth",
+            GeoPosition(0.0, 0.0, -5.0),
+            GeoPosition(10.0, 0.0, 550.0),
+            GeoPosition(0.0, 180.0, 550.0),
+        ),
+        (
+            "luna",
+            GeoPosition(-89.4, 30.0, -2.0),
+            GeoPosition(-80.0, 30.0, 100.0),
+            GeoPosition(89.4, 30.0, 100.0),
+        ),
+    ],
+    ids=["earth-5km-below", "luna-2km-below"],
+)
+def test_a_site_below_its_reference_surface_sees_its_sky_and_not_through_its_body(
+    physics_context: PhysicsContext,
+    body: str,
+    site: GeoPosition,
+    visible: GeoPosition,
+    hidden: GeoPosition,
+) -> None:
+    """A site below its body's reference ellipsoid, as a crater floor is: a satellite above its
+    horizon is in view both ways, and one on the far side of the body stays blocked. Against the
+    reference ellipsoid alone the site was inside its body and saw nothing."""
+    station = _site(body, site)
+    assert _blocked_both_ways(physics_context, station, _site(body, visible), body) == [
+        False,
+        False,
+    ]
+    assert _blocked_both_ways(physics_context, station, _site(body, hidden), body) == [True, True]

@@ -423,7 +423,7 @@ class RuntimeSupport(BaseModel):
             supported_addressing_pools=frozenset({"loopbacks"}),
             supported_address_allocation_modes=frozenset({"by_node_order"}),
             supported_link_topologies=frozenset(
-                {"visible_candidates", "nearest_n", "explicit_pairs"}
+                {"visible_candidates", "nearest_start", "explicit_pairs"}
             ),
             supported_link_constraints=frozenset({"max_links_per_node"}),
             supported_ground_handover_concurrency=frozenset({"one_at_a_time"}),
@@ -451,7 +451,7 @@ class RuntimeSupport(BaseModel):
             supported_addressing_pools=frozenset({"loopbacks"}),
             supported_address_allocation_modes=frozenset({"by_node_order"}),
             supported_link_topologies=frozenset(
-                {"visible_candidates", "nearest_n", "explicit_pairs"}
+                {"visible_candidates", "nearest_start", "explicit_pairs"}
             ),
             supported_link_constraints=frozenset({"max_links_per_node"}),
             supported_ground_handover_concurrency=frozenset({"one_at_a_time"}),

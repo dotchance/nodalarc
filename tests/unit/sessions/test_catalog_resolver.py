@@ -151,7 +151,7 @@ SHIPPED_SESSION_SHAPES = {
     # router is an access candidate of every satellite.
     "earth-leo-simple.yaml": (51, 540),
     # 2816 = 2464 + 352: 14 site routers by 176 satellites, and the explicit 352-pair
-    # ISL grid (the rule moved from nearest_n, a disconnected graph).
+    # ISL grid (the rule moved from nearest_start, a disconnected graph).
     "earth-leo-walker.yaml": (191, 2816),
     "earth-meo-gps.yaml": (31, 120),
 }

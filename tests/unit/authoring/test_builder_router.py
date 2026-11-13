@@ -335,7 +335,7 @@ def test_compile_route_applies_pending_edits_to_the_draft_it_was_sent(
     draft = _session_save_request("router-session")["draft"]
     rules = draft["state"]["session"]["link_rules"]
     leo_isl = next(rule for rule in rules if rule["id"] == "leo_isl")
-    topology = {"mode": "nearest_n", "n": 3}
+    topology = {"mode": "nearest_start", "n": 3}
     edit = {
         "kind": "content",
         "address": {"kind": "member", "list_pointer": "/link_rules", "id": "leo_isl"},

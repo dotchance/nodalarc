@@ -3488,12 +3488,14 @@ def _enforce_declared_candidate_bounds(
         mode = rule.topology.mode
         if mode == "visible_candidates":
             bound = len(left.node_ids) * len(right.node_ids)
-        elif mode == "nearest_n":
+        elif mode == "nearest_start":
             bound = max(len(left.node_ids), len(right.node_ids)) * (rule.topology.n or 1)
         elif mode == "explicit_pairs":
             bound = len(rule.topology.pairs or ())
         else:
-            continue
+            raise SessionResolutionError(
+                f"link rule {rule.rule_id!r} has unknown topology mode {mode!r}"
+            )
         aggregate_bound += bound
         if bound > limits.max_pairs_per_rule:
             raise SessionResolutionError(

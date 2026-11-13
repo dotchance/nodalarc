@@ -22,7 +22,12 @@ from nodalarc.model_validation import (
     StrictInteger,
 )
 from nodalarc.models.catalog import Body, NodeTagRule, OrbitElements, PlaneParams, SiteLocation
-from nodalarc.models.link_rules import LinkRule, LinkRuleConstraints, NearestNTopology, NodeSelector
+from nodalarc.models.link_rules import (
+    LinkRule,
+    LinkRuleConstraints,
+    NearestStartTopology,
+    NodeSelector,
+)
 from nodalarc.models.segment_session import (
     AddressPoolAssignment,
     AreaMapping,
@@ -128,8 +133,8 @@ SCALAR_FIELD_CASES = (
     ),
     ScalarFieldCase(NodeSelector, "plane: 1\n", ("plane",), INTEGER_KIND_ERRORS),
     ScalarFieldCase(
-        NearestNTopology,
-        "mode: nearest_n\nn: 2\n",
+        NearestStartTopology,
+        "mode: nearest_start\nn: 2\n",
         ("n",),
         INTEGER_KIND_ERRORS,
     ),

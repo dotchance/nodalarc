@@ -410,7 +410,7 @@ def _isl_rule(**fields: Any) -> dict[str, Any]:
     }
     return {
         "id": "leo_isl",
-        "topology": {"mode": "nearest_n", "n": 2},
+        "topology": {"mode": "nearest_start", "n": 2},
         "endpoints": [endpoint, endpoint],
         **fields,
     }

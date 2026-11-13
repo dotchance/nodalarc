@@ -71,7 +71,7 @@ PHASING_MODE_LABELS: tuple[tuple[BuilderVisualPhasingMode, str], ...] = (
 )
 TOPOLOGY_MODE_LABELS: tuple[tuple[BuilderVisualTopologyMode, str], ...] = (
     ("visible_candidates", "all visible pairs"),
-    ("nearest_n", "nearest N"),
+    ("nearest_start", "nearest at start"),
 )
 
 SCHEDULING_PRESET_LABELS: tuple[tuple[BuilderVisualSchedulingPreset, str], ...] = (

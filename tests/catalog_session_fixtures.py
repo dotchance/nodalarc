@@ -288,7 +288,7 @@ def build_catalog_session_fixture(
                         "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
                     },
                 ],
-                "topology": {"mode": "nearest_n", "n": 1},
+                "topology": {"mode": "nearest_start", "n": 1},
             },
         ],
         "addressing": {

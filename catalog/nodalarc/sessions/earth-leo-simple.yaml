@@ -54,7 +54,7 @@ link_rules:
       - medium: rf
 - id: leo_isl
   topology:
-    mode: nearest_n
+    mode: nearest_start
     n: 2
   endpoints:
   - select:

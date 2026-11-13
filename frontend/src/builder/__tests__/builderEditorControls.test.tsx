@@ -375,7 +375,7 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
       enabled: true,
       a: endpoint,
       b: { ...endpoint },
-      topology_mode: "nearest_n",
+      topology_mode: "nearest_start",
       topology_n: 2,
       max_range_km: null,
     };

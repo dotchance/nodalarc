@@ -55,7 +55,7 @@ link_rules:
       - mount: access_ka
 - id: geo_isl
   topology:
-    mode: nearest_n
+    mode: nearest_start
     n: 2
   endpoints:
   - select:

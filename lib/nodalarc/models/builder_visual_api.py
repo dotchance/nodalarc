@@ -52,7 +52,7 @@ from nodalarc.models.segment_session import RoutingBoundaryAdapter, RoutingProto
 type BuilderVisualSchedulingPreset = Literal["leo-fast-handover", "geo-longest-pass"]
 type BuilderVisualPhasingMode = PhasingMode
 type BuilderVisualOrbitPropagator = Literal["two_body", "j2_mean_elements"]
-type BuilderVisualTopologyMode = Literal["visible_candidates", "nearest_n"]
+type BuilderVisualTopologyMode = Literal["visible_candidates", "nearest_start"]
 type BuilderVisualDraftCommandOperation = Literal[
     "place_space_reference",
     "place_ground_reference",

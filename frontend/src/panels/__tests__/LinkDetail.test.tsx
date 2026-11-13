@@ -29,7 +29,7 @@ function link(overrides: Partial<LinkState> = {}): LinkState {
     interface_a: "isl0",
     interface_b: "isl1",
     link_rule_id: "leo-to-meo-relay-candidates",
-    topology_mode: "nearest_n",
+    topology_mode: "nearest_start",
     endpoint_segments: ["leo", "meo"],
     ...overrides,
   };

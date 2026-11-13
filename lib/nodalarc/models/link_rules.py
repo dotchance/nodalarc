@@ -35,7 +35,7 @@ from nodalarc.models.catalog import MountRole
 # The class the resolver derives for a link rule (see _derive_link_label).
 type LinkLabel = Literal["access", "isl", "inter_body"]
 # The topology modes the grammar declares; each topology class discriminates on one.
-type TopologyMode = Literal["visible_candidates", "nearest_visible", "nearest_n", "explicit_pairs"]
+type TopologyMode = Literal["visible_candidates", "nearest_start", "explicit_pairs"]
 LinkRelation = Literal["intra_segment", "inter_segment", "inter_body"]
 LinkMedium = Literal["rf", "optical", "terrestrial", "mixed"]
 
@@ -120,16 +120,10 @@ class VisibleCandidatesTopology(BaseModel):
     mode: Literal["visible_candidates"]
 
 
-class NearestVisibleTopology(BaseModel):
+class NearestStartTopology(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    mode: Literal["nearest_visible"]
-
-
-class NearestNTopology(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    mode: Literal["nearest_n"]
+    mode: Literal["nearest_start"]
     n: PositiveInteger
 
 
@@ -164,7 +158,7 @@ class ExplicitPairsTopology(BaseModel):
 
 
 LinkTopology = Annotated[
-    VisibleCandidatesTopology | NearestVisibleTopology | NearestNTopology | ExplicitPairsTopology,
+    VisibleCandidatesTopology | NearestStartTopology | ExplicitPairsTopology,
     Field(discriminator="mode"),
 ]
 

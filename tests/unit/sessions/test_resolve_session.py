@@ -1209,20 +1209,6 @@ def test_tle_and_analytic_satellites_share_one_earth_fixed_frame() -> None:
         assert np.linalg.norm(fixed - rotation @ inertial) < 1e-6, state.node_id
 
 
-def test_nearest_visible_topology_fails_until_runtime_can_apply_it_per_tick() -> None:
-    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
-
-    raw = _raw_session()
-    raw["link_rules"][1]["topology"] = {"mode": "nearest_visible"}
-
-    with pytest.raises(UnsupportedFeatureError) as error:
-        resolve_session(raw)
-    assert any(
-        feature.category == FeatureCategory.LINK_TOPOLOGY and feature.value == "nearest_visible"
-        for feature in error.value.features
-    )
-
-
 def test_runtime_node_id_length_fails_before_kubernetes() -> None:
     raw = _raw_session()
     long_segment = "space-" + ("x" * 80)

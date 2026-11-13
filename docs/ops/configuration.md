@@ -119,7 +119,7 @@ link_rules:
       - medium: rf
 - id: leo_isl
   topology:
-    mode: nearest_n
+    mode: nearest_start
     n: 2
   endpoints:
   - select: {segment: leo}
@@ -213,11 +213,10 @@ The current runtime executes these topology modes:
 | Mode | Meaning |
 |---|---|
 | `visible_candidates` | All endpoint pairs declared as geometry-tested candidates. |
-| `nearest_n` | Greedy physical-distance ranking with degree capped at `n` per node; some nodes may receive fewer links. |
+| `nearest_start` | Greedy physical-distance ranking with degree capped at `n` per node; some nodes may receive fewer links. |
 | `explicit_pairs` | The exact undirected node pairs listed in the rule. |
 
-`nearest_visible` is part of the structural language but is not currently
-supported. Of the optional link constraints, the current runtime executes
+Of the optional link constraints, the current runtime executes
 `max_links_per_node`; `max_range_km` and `require_mutual_visibility` are
 currently support-gated.
 

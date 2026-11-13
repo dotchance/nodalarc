@@ -186,7 +186,7 @@
           ],
           "id": "earth_mars_trunk",
           "topology": {
-            "mode": "nearest_n",
+            "mode": "nearest_start",
             "n": 1
           }
         },
@@ -488,7 +488,7 @@
           "kind": "inter_body",
           "max_range_km": null,
           "rule_id": "earth_mars_trunk",
-          "topology_mode": "nearest_n",
+          "topology_mode": "nearest_start",
           "topology_n": 1
         },
         {

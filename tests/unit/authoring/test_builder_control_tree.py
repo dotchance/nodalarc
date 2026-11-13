@@ -16,7 +16,7 @@ from nodalarc.models.builder_controls_api import (
     BuilderScalarControl,
     BuilderSequenceControl,
 )
-from nodalarc.models.link_rules import Endpoint, NearestVisibleTopology
+from nodalarc.models.link_rules import Endpoint, NearestStartTopology
 from nodalarc.models.segment_session import RoutingBoundary, SegmentSessionConfig
 from nodalarc.models.segments import LagrangeSegment, SpaceSegment
 from vs_api.builder_control_tree import build_session_control_tree
@@ -130,11 +130,11 @@ def test_runtime_unsupported_grammar_branches_remain_graphically_bound() -> None
     }
 
     assert LagrangeSegment in branch_values
-    assert "nearest_visible" in branch_values
+    assert "nearest_start" in branch_values
     assert "dtn_bundle" in branch_values
 
     owners = {(binding.owner_model, binding.field_name) for binding in built.bindings.values()}
-    assert (NearestVisibleTopology, "mode") in owners
+    assert (NearestStartTopology, "mode") in owners
     assert (RoutingBoundary, "adapter") in owners
 
 

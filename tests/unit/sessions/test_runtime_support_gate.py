@@ -249,16 +249,6 @@ class TestUnconsumedGrammarClass:
             for f in err.value.features
         )
 
-    def test_nearest_visible_topology_rejected_typed(self) -> None:
-        raw = _session()
-        raw["link_rules"][1]["topology"] = {"mode": "nearest_visible"}
-        with pytest.raises(UnsupportedFeatureError) as err:
-            resolve_session(raw)
-        assert any(
-            feature.category == FeatureCategory.LINK_TOPOLOGY and feature.value == "nearest_visible"
-            for feature in err.value.features
-        )
-
     def test_affine_segment_clock_rejected_typed(self) -> None:
         raw = _session()
         raw["segments"][0]["clock"] = {"model": "affine", "rate": 2.0}
@@ -334,7 +324,7 @@ class TestUnconsumedGrammarClass:
 
     def test_max_links_per_node_is_enforced_at_resolve(self) -> None:
         raw = _session(constellation={"planes": {"count": 1, "sats_per_plane": 4}})
-        raw["link_rules"][1]["topology"] = {"mode": "nearest_n", "n": 2}
+        raw["link_rules"][1]["topology"] = {"mode": "nearest_start", "n": 2}
         raw["link_rules"][1]["constraints"] = {"max_links_per_node": 1}
         with pytest.raises(SessionResolutionError, match="exceeding max_links_per_node"):
             resolve_session(raw)

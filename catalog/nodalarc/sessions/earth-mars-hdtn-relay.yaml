@@ -107,7 +107,7 @@ link_rules:
       - mount: relay_x
 - id: earth_mars_trunk
   topology:
-    mode: nearest_n
+    mode: nearest_start
     n: 1
   endpoints:
   - select:

@@ -402,7 +402,7 @@ def test_apply_edits_route_accepts_one_revision_and_answers_typed_refusals(
         json={
             "draft": opened,
             "expected_draft_revision": 0,
-            "edits": [edit({**rule, "topology": {"mode": "nearest_n", "n": 1}})],
+            "edits": [edit({**rule, "topology": {"mode": "nearest_start", "n": 1}})],
         },
     )
     assert stale_base_response.status_code == 200, stale_base_response.text

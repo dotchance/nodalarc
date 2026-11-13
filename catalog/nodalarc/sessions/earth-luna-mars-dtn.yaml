@@ -257,7 +257,7 @@ link_rules:
       - mount: access_ka
 - id: leo_isl
   topology:
-    mode: nearest_n
+    mode: nearest_start
     n: 4
   endpoints:
   - select:
@@ -274,7 +274,7 @@ link_rules:
       - medium: optical
 - id: leo_to_geo
   topology:
-    mode: nearest_n
+    mode: nearest_start
     n: 1
   endpoints:
   - select:
@@ -291,7 +291,7 @@ link_rules:
       - medium: optical
 - id: geo_isl
   topology:
-    mode: nearest_n
+    mode: nearest_start
     n: 2
   endpoints:
   - select:
@@ -308,7 +308,7 @@ link_rules:
       - medium: optical
 - id: geo_to_luna
   topology:
-    mode: nearest_n
+    mode: nearest_start
     n: 1
   endpoints:
   - select:
@@ -423,7 +423,7 @@ link_rules:
       - mount: relay_x
 - id: earth_mars_trunk
   topology:
-    mode: nearest_n
+    mode: nearest_start
     n: 1
   endpoints:
   - select:

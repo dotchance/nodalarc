@@ -120,7 +120,7 @@ def _boundary_overlay_session() -> dict[str, Any]:
         terminal = {"all": [{"role": "crosslink"}, {"medium": "optical"}]}
         return {
             "id": rule_id,
-            "topology": {"mode": "nearest_n", "n": 1},
+            "topology": {"mode": "nearest_start", "n": 1},
             "endpoints": [
                 {"select": {"segment": left}, "terminal": terminal},
                 {"select": {"segment": right}, "terminal": terminal},
@@ -467,7 +467,7 @@ def test_backend_gestures_never_mint_an_id_the_session_or_a_pending_edit_holds(
                         "terminal": crosslink,
                     },
                 ],
-                "topology": {"mode": "nearest_n", "n": 1},
+                "topology": {"mode": "nearest_start", "n": 1},
                 "constraints": {"max_links_per_node": {"relay": 1, "ground-1": 1}},
             }
         ],
@@ -672,7 +672,7 @@ def test_backend_never_reuses_topology_ids_or_repairs_dangling_boundaries(
                     {"select": {"segment": "polar"}, "terminal": crosslink},
                     {"select": {"segment": "meo"}, "terminal": crosslink},
                 ],
-                "topology": {"mode": "nearest_n", "n": 1},
+                "topology": {"mode": "nearest_start", "n": 1},
             }
         ],
         "routing": {
@@ -764,7 +764,7 @@ def test_a_new_boundary_runs_over_the_first_enabled_rule_that_is_not_access(
     session["link_rules"].append(
         {
             "id": "geo_to_polar",
-            "topology": {"mode": "nearest_n", "n": 1},
+            "topology": {"mode": "nearest_start", "n": 1},
             "endpoints": [
                 {"select": {"segment": "geo"}, "terminal": not_access},
                 {"select": {"segment": "polar"}, "terminal": not_access},
@@ -1164,7 +1164,7 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
             "id": "link-1",
             "enabled": True,
             "endpoints": [{"select": {"segment": "space-1"}, "terminal": isl}] * 2,
-            "topology": {"mode": "nearest_n", "n": 2},
+            "topology": {"mode": "nearest_start", "n": 2},
         }
     ]
 
@@ -1453,7 +1453,7 @@ def test_connect_command_uses_backend_resolved_terminal_facts(
     # Each segment's node mounts the optical cislunar crosslink terminal.
     crosslink = {"all": [{"role": "crosslink"}, {"medium": "optical"}]}
     assert [endpoint["terminal"] for endpoint in rule["endpoints"]] == [crosslink, crosslink]
-    assert rule["topology"] == {"mode": "nearest_n", "n": 1}
+    assert rule["topology"] == {"mode": "nearest_start", "n": 1}
 
 
 def test_connect_refuses_a_draft_that_does_not_resolve(
@@ -1687,7 +1687,7 @@ def test_rederive_accepts_the_rules_own_pending_edit_with_it(
             "id": "link-1",
             "enabled": False,
             "endpoints": [{"select": {"segment": "space-1"}, "terminal": isl}] * 2,
-            "topology": {"mode": "nearest_n", "n": 2},
+            "topology": {"mode": "nearest_start", "n": 2},
         }
     ]
     # The runtime does not support a range constraint, so a rederive carrying one
@@ -1699,7 +1699,7 @@ def test_rederive_accepts_the_rules_own_pending_edit_with_it(
     assert held_edit.working == {
         **{key: value for key, value in rule.items() if key != "enabled"},
         "endpoints": [{"select": {"segment": "space-1"}, "terminal": isl}] * 2,
-        "topology": {"mode": "nearest_n", "n": 2},
+        "topology": {"mode": "nearest_start", "n": 2},
         "constraints": {"max_range_km": 12345.0},
     }
 
@@ -2370,7 +2370,7 @@ def test_complete_card_values_build_objects_that_validate_on_their_own() -> None
                 min_elevation_deg=10.0,
             ),
             b=BuilderVisualLinkEndpoint(segment_id="leo", role="access", medium="rf"),
-            topology_mode="nearest_n",
+            topology_mode="nearest_start",
             topology_n=2,
             max_range_km=3000.0,
         )
@@ -2379,7 +2379,7 @@ def test_complete_card_values_build_objects_that_validate_on_their_own() -> None
     assert rule == {
         "id": "leo_ground",
         "enabled": False,
-        "topology": {"mode": "nearest_n", "n": 2},
+        "topology": {"mode": "nearest_start", "n": 2},
         "endpoints": [
             {
                 "select": {"all": [{"segment": "ground"}, {"tag": "gateways"}]},
@@ -2484,10 +2484,10 @@ def test_missing_card_values_stay_absent_and_each_is_named_in_an_issue() -> None
             rule_id="leo_isl",
             a=BuilderVisualLinkEndpoint(role="isl", medium="optical"),
             b=BuilderVisualLinkEndpoint(segment_id="leo", role="isl", medium="optical"),
-            topology_mode="nearest_n",
+            topology_mode="nearest_start",
         )
     )
-    assert nearest["topology"] == {"mode": "nearest_n"}
+    assert nearest["topology"] == {"mode": "nearest_start"}
     assert nearest["endpoints"][0]["select"] == {}
     assert _issue_pointers(nearest_issues) == {"/topology/n", "/endpoints/0/select/segment"}
 
@@ -3303,7 +3303,7 @@ def test_apply_edits_refuses_the_whole_batch_for_one_stale_or_invalid_edit(
         [
             ranged_isl,
             _content_edit(
-                access_address, {**access, "topology": {"mode": "nearest_n", "n": 1}}, access
+                access_address, {**access, "topology": {"mode": "nearest_start", "n": 1}}, access
             ),
         ],
     )

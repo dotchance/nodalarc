@@ -41,6 +41,6 @@ export const AUTHORING_FACTS: BuilderVisualAuthoringFacts = {
   ],
   topology_modes: [
     { id: "visible_candidates", label: "all visible pairs", runtime_supported: true, support_note: null, requires_n: false },
-    { id: "nearest_n", label: "nearest N", runtime_supported: true, support_note: null, requires_n: true },
+    { id: "nearest_start", label: "nearest N", runtime_supported: true, support_note: null, requires_n: true },
   ],
 };

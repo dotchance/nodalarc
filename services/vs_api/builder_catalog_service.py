@@ -637,7 +637,7 @@ class BuilderCatalogAuthoringService:
                         runtime_supported=(issue := runtime.check_link_topology(identifier))
                         is None,
                         support_note=issue.support_note if issue is not None else None,
-                        requires_n=identifier == "nearest_n",
+                        requires_n=identifier == "nearest_start",
                     )
                     for identifier, label in TOPOLOGY_MODE_LABELS
                 ),

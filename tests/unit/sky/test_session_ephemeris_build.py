@@ -411,7 +411,7 @@ class TestLinkStateSnapshotEpochId:
             rule_map={
                 pair: LinkRuleMetadata(
                     link_rule_id="leo-to-meo-relay-candidates",
-                    topology_mode="nearest_n",
+                    topology_mode="nearest_start",
                     endpoint_segments=("leo", "meo"),
                 )
             },
@@ -420,5 +420,5 @@ class TestLinkStateSnapshotEpochId:
         restored = type(snap).model_validate_json(snap.model_dump_json())
         link = restored.links[0]
         assert link.link_rule_id == "leo-to-meo-relay-candidates"
-        assert link.topology_mode == "nearest_n"
+        assert link.topology_mode == "nearest_start"
         assert link.endpoint_segments == ("leo", "meo")

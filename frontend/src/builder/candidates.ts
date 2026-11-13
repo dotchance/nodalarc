@@ -101,7 +101,7 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
     if (allocated === undefined) {
       throw new Error(`rule preview ${preview.rule_id} has no allocation`);
     }
-    const fixed = mode === "explicit_pairs" || mode === "nearest_n";
+    const fixed = mode === "explicit_pairs" || mode === "nearest_start";
     notes.set(preview.rule_id, previewNote(preview, allocated, fixed));
     if (preview.preview_scope === "computed" && preview.pairs_drawn === 0) darkRules += 1;
     pairs.push(...preview.drawable_pairs);

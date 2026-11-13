@@ -1197,14 +1197,10 @@ VisibleCandidatesTopology = MappingBegin,
                             "mode", "visible_candidates",
                             MappingEnd ;
 
-NearestVisibleTopology = MappingBegin,
-                         "mode", "nearest_visible",
-                         MappingEnd ;
-
-NearestNTopology = MappingBegin,
-                   "mode", "nearest_n",
-                   "n", PositiveInteger,
-                   MappingEnd ;
+NearestStartTopology = MappingBegin,
+                       "mode", "nearest_start",
+                       "n", PositiveInteger,
+                       MappingEnd ;
 
 ExplicitPair = MappingBegin,
                "a", Identifier,
@@ -1217,8 +1213,7 @@ ExplicitPairsTopology = MappingBegin,
                         MappingEnd ;
 
 LinkTopology = VisibleCandidatesTopology
-             | NearestVisibleTopology
-             | NearestNTopology
+             | NearestStartTopology
              | ExplicitPairsTopology ;
 
 MaxLinksPerNodeMap = MappingBegin,
@@ -1274,9 +1269,11 @@ is invalid. A mask below the horizon dip at the station's altitude is invalid.
 `ExplicitPair.a` and `ExplicitPair.b` are local node ids within the two resolved
 endpoint segments, not resolver-derived runtime node ids. Ground local ids are
 site-qualified. Every pair must resolve inside the rule's selected endpoint
-sets. `nearest_n` applies a deterministic, physical-distance-ranked greedy
-degree cap: no selected node has more than `n` declared candidates, and a node
-may receive fewer when the peer's cap has already been filled.
+sets. `nearest_start` applies a deterministic, physical-distance-ranked greedy
+degree cap to the positions at the session start: no selected node has more
+than `n` declared candidates, and a node may receive fewer when the peer's cap
+has already been filled. The pairs stay fixed for the session; physics decides
+when each one is usable.
 
 Every unordered runtime node pair produced by enabled link rules has exactly
 one owning rule; if two rules produce the same pair, resolution fails. Each
@@ -1653,7 +1650,7 @@ construct. The production profile currently supports:
 - `two_body` and `j2_mean_elements` reusable-orbit propagation;
 - Earth `sgp4_tle` placement on fixed space nodes;
 - `session` clocks;
-- `visible_candidates`, `nearest_n`, and `explicit_pairs` topology modes;
+- `visible_candidates`, `nearest_start`, and `explicit_pairs` topology modes;
 - the `max_links_per_node` link constraint;
 - loopback address pools using `by_node_order` allocation;
 - the `routed` and `host` forwarding classes; `bridge` and `control_only` are
@@ -1688,7 +1685,6 @@ runtime execution:
 - raw state-vector space-node placement;
 - `crtbp` propagation;
 - `affine` clocks;
-- `nearest_visible` topology;
 - `max_range_km` and `require_mutual_visibility` link constraints;
 - `handover_concurrency: all_at_once`, `mbb_reserve` above 1, and
   `bbm_acquire_timeout_ticks` values other than 1;

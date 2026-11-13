@@ -161,7 +161,7 @@ Topology modes:
 | Mode | Meaning |
 |------|---------|
 | `visible_candidates` | Evaluate every visible candidate under the rule, bounded by candidate limits. |
-| `nearest_n` | Rank pairs by physical distance and greedily cap each selected node at `n` candidates; a node may receive fewer when a peer's cap is already full. |
+| `nearest_start` | Rank pairs by physical distance and greedily cap each selected node at `n` candidates; a node may receive fewer when a peer's cap is already full. |
 | `explicit_pairs` | Use the exact declared candidate pairs. |
 
 Each link is a local link or a long-delay link: a long-delay link's one-way

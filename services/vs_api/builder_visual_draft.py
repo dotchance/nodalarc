@@ -114,7 +114,7 @@ from nodalarc.models.catalog import (
 )
 from nodalarc.models.link_rules import (
     LinkRule,
-    NearestNTopology,
+    NearestStartTopology,
     NodeSelector,
     TerminalSelector,
     VisibleCandidatesTopology,
@@ -322,7 +322,7 @@ class _PlacedSegment:
 class _DerivedLinkPhysics:
     role: Literal["access", "isl", "crosslink", "backbone"]
     medium: Literal["rf", "optical"]
-    topology_mode: Literal["visible_candidates", "nearest_n"]
+    topology_mode: Literal["visible_candidates", "nearest_start"]
     topology_n: int
     formable: bool
 
@@ -530,15 +530,15 @@ def _derive_link_physics(
     preferences: tuple[
         tuple[
             Literal["access", "isl", "crosslink", "backbone"],
-            Literal["visible_candidates", "nearest_n"],
+            Literal["visible_candidates", "nearest_start"],
             int,
         ],
         ...,
     ]
     if first.segment_id == second.segment_id:
-        preferences = (("isl", "nearest_n", 2), ("crosslink", "nearest_n", 2))
+        preferences = (("isl", "nearest_start", 2), ("crosslink", "nearest_start", 2))
     elif first.kind == "space" and second.kind == "space":
-        preferences = (("crosslink", "nearest_n", 1), ("isl", "nearest_n", 1))
+        preferences = (("crosslink", "nearest_start", 1), ("isl", "nearest_start", 1))
     else:
         preferences = (("access", "visible_candidates", 1),)
     for role, topology_mode, topology_n in preferences:
@@ -570,7 +570,7 @@ def _derive_link_physics(
 def _physics_notice(physics: _DerivedLinkPhysics) -> str:
     topology = (
         f" · nearest-{physics.topology_n}"
-        if physics.topology_mode == "nearest_n"
+        if physics.topology_mode == "nearest_start"
         else " · all visible pairs"
     )
     warning = "" if physics.formable else " — WARNING: neither side has matching terminals"
@@ -686,12 +686,12 @@ def _link_rule_document(
         )
     else:
         topology["mode"] = rule.topology_mode
-        if rule.topology_mode == "nearest_n":
+        if rule.topology_mode == "nearest_start":
             if rule.topology_n is None:
                 issues.append(
                     _object_issue(
                         "builder.draft.link_topology_n_required",
-                        "nearest_n topology requires n",
+                        "nearest_start topology requires n",
                         "topology",
                         "n",
                     )
@@ -1013,7 +1013,7 @@ def _saves_unchanged(
 
 
 def _link_projection(rule: LinkRule) -> BuilderVisualLinkRule | None:
-    if not isinstance(rule.topology, VisibleCandidatesTopology | NearestNTopology):
+    if not isinstance(rule.topology, VisibleCandidatesTopology | NearestStartTopology):
         return None
     if rule.tags:
         return None
@@ -1043,7 +1043,7 @@ def _link_projection(rule: LinkRule) -> BuilderVisualLinkRule | None:
         a=endpoints[0],
         b=endpoints[1],
         topology_mode=rule.topology.mode,
-        topology_n=rule.topology.n if isinstance(rule.topology, NearestNTopology) else None,
+        topology_n=rule.topology.n if isinstance(rule.topology, NearestStartTopology) else None,
         max_range_km=rule.constraints.max_range_km if rule.constraints is not None else None,
     )
     if not _saves_unchanged(rule, *_link_rule_document(projected)):

@@ -239,7 +239,7 @@
           ],
           "id": "leo_isl",
           "topology": {
-            "mode": "nearest_n",
+            "mode": "nearest_start",
             "n": 4
           }
         },
@@ -279,7 +279,7 @@
           ],
           "id": "leo_to_geo",
           "topology": {
-            "mode": "nearest_n",
+            "mode": "nearest_start",
             "n": 1
           }
         },
@@ -319,7 +319,7 @@
           ],
           "id": "geo_isl",
           "topology": {
-            "mode": "nearest_n",
+            "mode": "nearest_start",
             "n": 2
           }
         },
@@ -359,7 +359,7 @@
           ],
           "id": "geo_to_luna",
           "topology": {
-            "mode": "nearest_n",
+            "mode": "nearest_start",
             "n": 1
           }
         },
@@ -658,7 +658,7 @@
           ],
           "id": "earth_mars_trunk",
           "topology": {
-            "mode": "nearest_n",
+            "mode": "nearest_start",
             "n": 1
           }
         },
@@ -1540,7 +1540,7 @@
           "kind": "isl",
           "max_range_km": null,
           "rule_id": "leo_isl",
-          "topology_mode": "nearest_n",
+          "topology_mode": "nearest_start",
           "topology_n": 4
         },
         {
@@ -1641,7 +1641,7 @@
           "kind": "isl",
           "max_range_km": null,
           "rule_id": "leo_to_geo",
-          "topology_mode": "nearest_n",
+          "topology_mode": "nearest_start",
           "topology_n": 1
         },
         {
@@ -1684,7 +1684,7 @@
           "kind": "isl",
           "max_range_km": null,
           "rule_id": "geo_isl",
-          "topology_mode": "nearest_n",
+          "topology_mode": "nearest_start",
           "topology_n": 2
         },
         {
@@ -1720,7 +1720,7 @@
           "kind": "inter_body",
           "max_range_km": null,
           "rule_id": "geo_to_luna",
-          "topology_mode": "nearest_n",
+          "topology_mode": "nearest_start",
           "topology_n": 1
         },
         {
@@ -1964,7 +1964,7 @@
           "kind": "inter_body",
           "max_range_km": null,
           "rule_id": "earth_mars_trunk",
-          "topology_mode": "nearest_n",
+          "topology_mode": "nearest_start",
           "topology_n": 1
         },
         {

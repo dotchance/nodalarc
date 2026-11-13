@@ -437,7 +437,7 @@ def _computed_preview(
     epoch_unix: float,
 ) -> BuilderRulePreview:
     mode = rule.topology.mode
-    if mode in ("explicit_pairs", "nearest_n"):
+    if mode in ("explicit_pairs", "nearest_start"):
         candidates = fixed.get(rule.rule_id, [])
         pairs_total = len(candidates)
         pair_iter: Any = ((c.node_a, c.node_b, c) for c in candidates)
@@ -449,10 +449,7 @@ def _computed_preview(
         pair_iter = ((na, nb, None) for na, nb in _canonical_pairs(members_a, members_b))
         fixed_pairs = False
     else:
-        # nearest_visible is rejected upstream; nothing else is computable.
-        pairs_total = 0
-        pair_iter = iter(())
-        fixed_pairs = False
+        raise ValueError(f"link rule {rule.rule_id!r} has unknown topology mode {mode!r}")
 
     tested = min(pairs_total, _PREVIEW_TESTED_BUDGET)
     ep0 = set(rule.endpoints[0].node_ids)

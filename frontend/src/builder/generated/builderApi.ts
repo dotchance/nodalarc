@@ -978,7 +978,7 @@ export interface BuilderVisualSetSpacePopulationCommand {
 }
 
 /**  */
-export type BuilderVisualTopologyMode = "visible_candidates" | "nearest_n";
+export type BuilderVisualTopologyMode = "visible_candidates" | "nearest_start";
 
 /** Presentation and runtime facts for one visual link topology mode. */
 export interface BuilderVisualTopologyModeMetadata {
@@ -1647,7 +1647,7 @@ export type TerminalMedium = "rf" | "optical";
 export type TerminalMediumLiteral = "rf" | "optical";
 
 /**  */
-export type TopologyMode = "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
+export type TopologyMode = "visible_candidates" | "nearest_start" | "explicit_pairs";
 
 /** Public, path-free representation returned for an opaque operation ID. */
 export interface TransitionOperation {

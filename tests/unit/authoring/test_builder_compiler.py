@@ -385,7 +385,7 @@ def test_a_nearest_n_rule_without_n_names_the_field_where_the_yaml_holds_it(
 ) -> None:
     session = _load(SIMPLE_SESSION)
     position = [rule["id"] for rule in session["link_rules"]].index("leo_isl")
-    session["link_rules"][position]["topology"] = {"mode": "nearest_n"}
+    session["link_rules"][position]["topology"] = {"mode": "nearest_start"}
 
     result = _compile(_request(session), snapshot)
 
@@ -404,7 +404,7 @@ def test_a_nearest_n_rule_without_n_names_the_field_where_the_yaml_holds_it(
     # The same rule as a pending edit: its own refusal names the field within the rule.
     accepted = _accepted(SIMPLE_SESSION)
     rule = _member(accepted, "/link_rules", "leo_isl")
-    working = {**deepcopy(rule), "topology": {"mode": "nearest_n"}}
+    working = {**deepcopy(rule), "topology": {"mode": "nearest_start"}}
     _candidate, outcomes = _apply(accepted, _content("/link_rules", "leo_isl", working, base=rule))
     assert [(issue.json_pointer, issue.message) for issue in outcomes[0].issues] == [
         (pointer, "topology.n: is required")
@@ -867,7 +867,7 @@ def test_compile_applies_pending_edits_and_echoes_the_draft_it_was_sent(
     boundaries = deepcopy(session["routing"]["boundaries"])
     for export in boundaries[0]["export"]:
         export["export_node_loopbacks"] = False
-    topology = {"mode": "nearest_n", "n": 3}
+    topology = {"mode": "nearest_start", "n": 3}
     request = _edits_request(
         session,
         _edited(session, "/link_rules", "leo_isl", topology=topology),
@@ -916,7 +916,7 @@ def test_compile_leaves_a_stale_edit_out_and_reports_it(snapshot: CatalogReadSna
             {**leo_isl, "enabled": False},
             base={**leo_isl, "topology": {"mode": "visible_candidates"}},
         ),
-        _edited(session, "/link_rules", "geo_isl", topology={"mode": "nearest_n", "n": 1}),
+        _edited(session, "/link_rules", "geo_isl", topology={"mode": "nearest_start", "n": 1}),
     )
 
     result = _compile(request, snapshot)
@@ -931,7 +931,7 @@ def test_compile_leaves_a_stale_edit_out_and_reports_it(snapshot: CatalogReadSna
     assert result.save_verdict.blockers == (issue,)
     assert result.deploy_eligibility_after_save.blockers == (issue,)
     expected = deepcopy(session)
-    _member(expected, "/link_rules", "geo_isl")["topology"] = {"mode": "nearest_n", "n": 1}
+    _member(expected, "/link_rules", "geo_isl")["topology"] = {"mode": "nearest_start", "n": 1}
     assert result.canonical_session_json == expected
 
 

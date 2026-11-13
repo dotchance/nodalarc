@@ -21,8 +21,7 @@ from dataclasses import dataclass
 from nodalarc.models.link_rules import (
     ExplicitPairsTopology,
     LinkLabel,
-    NearestNTopology,
-    NearestVisibleTopology,
+    NearestStartTopology,
     TopologyMode,
     VisibleCandidatesTopology,
 )
@@ -111,22 +110,16 @@ def _apply_static_topology(
     topology = rule.topology
     if isinstance(topology, VisibleCandidatesTopology):
         return tuple((pair, idx) for idx, pair in enumerate(unique))
-    if isinstance(topology, NearestVisibleTopology):
-        raise ValueError(
-            f"link_rule {rule.rule_id!r} uses topology.mode='nearest_visible', which is "
-            "a dynamic per-tick topology. The current runtime supports static declared graphs; use "
-            "visible_candidates, nearest_n, or explicit_pairs."
-        )
-    if isinstance(topology, NearestNTopology):
+    if isinstance(topology, NearestStartTopology):
         if pair_rank is None:
             raise ValueError(
-                f"link_rule {rule.rule_id!r} uses topology.mode='nearest_n', but no "
+                f"link_rule {rule.rule_id!r} uses topology.mode='nearest_start', but no "
                 "physical pair ranking was provided"
             )
         for pair in unique:
             if pair not in pair_rank:
                 raise ValueError(
-                    f"link_rule {rule.rule_id!r} nearest_n pair {pair} has no physical rank"
+                    f"link_rule {rule.rule_id!r} nearest_start pair {pair} has no physical rank"
                 )
         degree: dict[str, int] = defaultdict(int)
         ordered: list[tuple[str, str]] = []

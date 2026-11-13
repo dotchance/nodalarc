@@ -4059,7 +4059,7 @@
     "type": "keplerian"
    },
    "luna-artemis-dtn-lab-gw1": {
-    "alt_km": 0.0,
+    "alt_km": 0.426,
     "frame_id": "luna",
     "lat_deg": -89.0,
     "local_node_id": "luna-artemis-dtn-lab-gw1",
@@ -4073,7 +4073,7 @@
     "type": "fixed"
    },
    "luna-artemis-quic-lab-gw1": {
-    "alt_km": 0.0,
+    "alt_km": 0.847,
     "frame_id": "luna",
     "lat_deg": -89.4,
     "local_node_id": "luna-artemis-quic-lab-gw1",

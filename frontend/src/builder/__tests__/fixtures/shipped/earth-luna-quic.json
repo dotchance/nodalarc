@@ -11200,7 +11200,7 @@
           "segment_id": "luna_ground",
           "slot": null,
           "surface_position": {
-            "alt_m": 0.0,
+            "alt_m": 847.0,
             "body": "luna",
             "lat_deg": -89.4,
             "lon_deg": 30.0
@@ -11266,7 +11266,7 @@
           "segment_id": "luna_ground",
           "slot": null,
           "surface_position": {
-            "alt_m": 0.0,
+            "alt_m": 847.0,
             "body": "luna",
             "lat_deg": -89.4,
             "lon_deg": 30.0

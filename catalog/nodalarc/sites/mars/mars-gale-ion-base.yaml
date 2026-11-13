@@ -8,8 +8,7 @@ site:
     source: nodalarc_catalog
     notes: 'Curiosity''s landing site, Bradbury Landing, at its NAIF planetodetic
       coordinates (msl_v08.tf: 4.643851 S, 137.4417 E; planetocentric
-      4.5895 S per the PDS Analyst''s Notebook). Height above the ellipsoid
-      is not taken from a source and is 0.'
+      4.5895 S per the PDS Analyst''s Notebook). Height above the ellipsoid, -4927 m, is the position in NAIF''s landing-site kernel msl_ls_ops120808_iau2000_v1.bsp (radius 3391.134 km) on the catalog ellipsoid; MOLA''s 16 pixel-per-degree radius grid agrees within 8 m.'
   ethernet:
   - id: lan0
   nodes:
@@ -55,4 +54,4 @@ site:
   location:
     lat_deg: -4.643851
     lon_deg: 137.4417
-    alt_m: 0
+    alt_m: -4927

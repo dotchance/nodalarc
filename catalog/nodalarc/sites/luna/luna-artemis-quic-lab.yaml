@@ -6,8 +6,7 @@ site:
   display_name: Artemis QUIC lab (surface gateway + server host)
   verified:
     source: nodalarc_catalog
-    notes: Lunar south-pole surface site pairing the surface gateway with a processing
-      host that runs the QUIC server endpoint.
+    notes: 'Lunar south-pole surface site pairing the surface gateway with a processing host that runs the QUIC server endpoint. Height above the ellipsoid, 847 m, is the LOLA south polar DEM (LDEM_85S_40M) radius at the site, 1736.847 km (553 m below the 1737.4 km reference sphere), on the catalog ellipsoid.'
   ethernet:
   - id: lan0
   nodes:
@@ -53,4 +52,4 @@ site:
   location:
     lat_deg: -89.4
     lon_deg: 30.0
-    alt_m: 0
+    alt_m: 847

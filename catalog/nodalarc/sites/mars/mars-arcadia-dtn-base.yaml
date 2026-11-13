@@ -12,7 +12,7 @@ site:
       here to planetodetic latitude on the catalog ellipsoid. Not an
       announced landing point. Out of view of an areostationary relay over
       105 E, it reaches the network only through low-orbiter passes.
-      Height above the ellipsoid is not taken from a source and is 0.'
+      Height above the ellipsoid, -3934 m, is the MOLA MEGDR 16 pixel-per-degree radius at the planetocentric centre (3384.421 km) on the catalog ellipsoid.'
   ethernet:
   - id: lan0
   nodes:
@@ -58,4 +58,4 @@ site:
   location:
     lat_deg: 38.9674
     lon_deg: -169.846
-    alt_m: 0
+    alt_m: -3934

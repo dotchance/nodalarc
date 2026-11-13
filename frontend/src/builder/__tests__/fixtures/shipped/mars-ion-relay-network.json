@@ -831,7 +831,7 @@
           "segment_id": "mars_bases",
           "slot": null,
           "surface_position": {
-            "alt_m": 0.0,
+            "alt_m": -2236.0,
             "body": "mars",
             "lat_deg": 18.64875816,
             "lon_deg": 77.45088572
@@ -897,7 +897,7 @@
           "segment_id": "mars_bases",
           "slot": null,
           "surface_position": {
-            "alt_m": 0.0,
+            "alt_m": -2236.0,
             "body": "mars",
             "lat_deg": 18.64875816,
             "lon_deg": 77.45088572
@@ -967,7 +967,7 @@
           "segment_id": "mars_bases",
           "slot": null,
           "surface_position": {
-            "alt_m": 0.0,
+            "alt_m": -4927.0,
             "body": "mars",
             "lat_deg": -4.643851,
             "lon_deg": 137.4417
@@ -1033,7 +1033,7 @@
           "segment_id": "mars_bases",
           "slot": null,
           "surface_position": {
-            "alt_m": 0.0,
+            "alt_m": -4927.0,
             "body": "mars",
             "lat_deg": -4.643851,
             "lon_deg": 137.4417
@@ -1103,7 +1103,7 @@
           "segment_id": "mars_bases",
           "slot": null,
           "surface_position": {
-            "alt_m": 0.0,
+            "alt_m": -3934.0,
             "body": "mars",
             "lat_deg": 38.9674,
             "lon_deg": -169.846
@@ -1169,7 +1169,7 @@
           "segment_id": "mars_bases",
           "slot": null,
           "surface_position": {
-            "alt_m": 0.0,
+            "alt_m": -3934.0,
             "body": "mars",
             "lat_deg": 38.9674,
             "lon_deg": -169.846

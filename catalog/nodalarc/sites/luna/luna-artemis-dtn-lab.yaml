@@ -6,8 +6,7 @@ site:
   display_name: Artemis DTN lab (surface gateway + DTN endpoint host)
   verified:
     source: nodalarc_catalog
-    notes: Lunar south-pole surface site pairing the surface gateway with
-      a host that runs the lunar uD3TN endpoint.
+    notes: 'Lunar south-pole surface site pairing the surface gateway with a host that runs the lunar uD3TN endpoint. Height above the ellipsoid, 426 m, is the LOLA south polar DEM (LDEM_85S_40M) radius at the site, 1736.427 km (973 m below the 1737.4 km reference sphere), on the catalog ellipsoid.'
   ethernet:
   - id: lan0
   nodes:
@@ -53,4 +52,4 @@ site:
   location:
     lat_deg: -89.0
     lon_deg: 60.0
-    alt_m: 0
+    alt_m: 426

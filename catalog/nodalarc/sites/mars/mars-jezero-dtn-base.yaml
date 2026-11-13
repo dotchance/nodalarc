@@ -9,7 +9,7 @@ site:
     notes: 'Perseverance''s landing site, Octavia E. Butler Landing, at its NAIF
       planetodetic coordinates (m2020_v04.tf: 18.64875816 N, 77.45088572 E,
       relative to IAU_MARS of pck00010; this catalog''s frame is pck00011''s).
-      Height above the ellipsoid is not taken from a source and is 0.'
+      Height above the ellipsoid, -2236 m, is the position in NAIF''s landing-site kernel m2020_ls_ops210303_iau2000_v1.bsp (radius 3391.937 km) on the catalog ellipsoid; MOLA''s 16 pixel-per-degree radius grid agrees within 8 m.'
   ethernet:
   - id: lan0
   nodes:
@@ -55,4 +55,4 @@ site:
   location:
     lat_deg: 18.64875816
     lon_deg: 77.45088572
-    alt_m: 0
+    alt_m: -2236

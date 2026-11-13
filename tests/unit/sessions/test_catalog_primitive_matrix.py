@@ -170,6 +170,59 @@ def test_every_orbit_primitive_is_physically_sane(path: Path) -> None:
     assert 0.0 <= inclination <= 180.0, f"{path.name}: inclination out of range"
 
 
+# The longitude each geostationary satellite of the shipped GEO sessions is named for, in degrees
+# east. Each sits on its own slot orbit.
+GEO_SLOTS_DEG_EAST = {
+    "geo-inmarsat-025e": 25.0,
+    "geo-inmarsat-054w": -54.0,
+    "geo-inmarsat-098w": -98.0,
+    "geo-inmarsat-143e": 143.5,
+    "geo-tdrs-041w": -41.0,
+    "geo-tdrs-049w": -49.0,
+    "geo-tdrs-085w": -85.0,
+    "geo-tdrs-111w": -111.0,
+    "geo-tdrs-171w": -171.0,
+    "geo-tdrs-174e": 174.0,
+}
+
+
+@pytest.mark.parametrize("session", ["earth-geo-inmarsat", "earth-geo-tdrs"])
+def test_geostationary_satellites_hold_the_slots_they_are_named_for(session: str) -> None:
+    """OME's satellites sit on their slots at the session start and 30 days later: the catalog's
+    slot orbits, as the resolver gives them to OME, through the satellite-state function OME uses
+    and the platform's Earth orientation. The slot orbits once sat 103.95 degrees east of their
+    slots, and drifted 0.027 degrees a day at the geostationary altitude under J2."""
+    import math
+
+    from nodalarc.models.session import session_epoch_unix
+    from nodalarc.physics.satellites import analytic_satellite_states, orbit_model_for
+
+    from tests.conftest import load_runtime_ome_test_inputs
+
+    view, resolved, _gs, satellites, *_ = load_runtime_ome_test_inputs(
+        origin="test.geo_slots", name=session
+    )
+    start = session_epoch_unix(resolved.time)
+    assert {sat.node_id for sat in satellites} <= set(GEO_SLOTS_DEG_EAST)
+    for sat in satellites:
+        for days in (0.0, 30.0):
+            t = start + days * 86400.0
+            states = analytic_satellite_states(
+                view.physics,
+                body_frame=view.body_frames["earth"],
+                model=orbit_model_for(view.orbit.propagator),
+                elements=[sat.elements],
+                phases_s=[t - start],
+                master_sim_time_unix=t,
+            )
+            x, y, _ = states.position_fixed_km[0]
+            longitude = math.degrees(math.atan2(y, x))
+            slot = GEO_SLOTS_DEG_EAST[sat.node_id]
+            assert abs(math.remainder(longitude - slot, 360.0)) < 0.01, (
+                f"{sat.node_id}: sub-satellite longitude {longitude:.4f} after {days:.0f} days"
+            )
+
+
 def _site_rf_access_install_km(site: dict) -> float | None:
     """The largest authored rf-access install range on the site, if any."""
     best: float | None = None

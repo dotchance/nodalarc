@@ -5,14 +5,15 @@ orbit:
   id: earth-geo-tdrs-174e
   central_body: nodalarc:bodies/earth.yaml
   epoch: '2026-06-08T00:00:00Z'
-  shape:
-    altitude_km: 35786
+  elements:
+    semi_major_axis_km: 42166.26
+    eccentricity: 0.0
   orientation:
     inclination_deg: 0.0
     raan_deg: 0.0
     argument_of_perigee_deg: 0.0
   phase:
-    mean_anomaly_deg: 174.0
+    mean_anomaly_deg: 70.0545
   propagator: j2_mean_elements
   reference: https://www.esa.int/Enabling_Support/Space_Operations/Types_of_orbits
-  notes: GEO slot orbit. Mean anomaly is used as the first-pass longitude slot proxy in the grammar catalog.
+  notes: 'Geostationary slot at 174.0 E, the slot this orbit is named for. The semi-major axis is the circular equatorial orbit whose longitude rate under the declared J2 rates equals the platform''s Earth rotation rate, so the satellite holds its slot as station-keeping does. The mean anomaly places the sub-satellite point at 174.0 E at the epoch through the platform''s Earth orientation.'

@@ -244,7 +244,7 @@ class TestIslVisibility:
         The production rate and path length of this pass are compared with
         the reference in tests/unit/physics/test_line_of_sight_rate.py."""
         shell = DeclaredShell(780.0, 86.4, 31.6, 6, 15.0)
-        expected = [(2870, "ok", 1.41), (2890, "tracking_exceeded", 3.64), (2910, "ok", 1.38)]
+        expected = [(2870, "ok", 1.26), (2890, "tracking_exceeded", 3.60), (2910, "ok", 1.55)]
         for t_s, reason, reference_rate in expected:
             pos_a, vel_a = state(shell, 5, 0, t_s)
             pos_b, vel_b = state(shell, 0, 2, t_s)

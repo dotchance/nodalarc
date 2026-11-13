@@ -143,14 +143,14 @@ class TestJ2MeanElementPropagation:
         """Numeric fixture for the declared J2 mean-element model.
 
         This is a model-contract golden, not an SGP4 realism claim. The rates
-        lock down the first-order secular equations; the inertial state was
-        recorded from the J2 model before its Kepler code moved into the shared
-        physics module, whose Earth orbit basis is ICRF, so the model's meaning
-        did not change. Earth-fixed values are checked against SPICE in the
-        physics tests.
+        lock down the first-order secular equations, the perigee rate included on
+        this circular orbit; the inertial state was recorded from the model with
+        that rate. The rates' accuracy against a numerically integrated J2 orbit
+        is checked in the physics tests, and Earth-fixed values against SPICE.
         """
-        raan_dot, _argp_dot, mean_anomaly_dot = _j2_rates(starlink_elements)
+        raan_dot, argp_dot, mean_anomaly_dot = _j2_rates(starlink_elements)
         assert math.degrees(raan_dot) * 86400.0 == pytest.approx(-4.505396881873124, abs=1e-12)
+        assert math.degrees(argp_dot) * 86400.0 == pytest.approx(3.035364666629875, abs=1e-12)
         assert math.degrees(mean_anomaly_dot) == pytest.approx(0.06282946126423121, abs=1e-14)
 
         states = orbit_states(
@@ -159,12 +159,12 @@ class TestJ2MeanElementPropagation:
             model="j2-mean-elements",
             body_frame=EARTH_TEST_BODY_FRAME,
         )
-        assert float(states.px[0, 0]) == pytest.approx(775.9976902218401, abs=1e-9)
-        assert float(states.py[0, 0]) == pytest.approx(-4149.136788311715, abs=1e-9)
-        assert float(states.pz[0, 0]) == pytest.approx(-5484.7838887531525, abs=1e-9)
-        assert float(states.vx[0, 0]) == pytest.approx(7.536873403401121, abs=1e-12)
-        assert float(states.vy[0, 0]) == pytest.approx(0.4169832265898894, abs=1e-12)
-        assert float(states.vz[0, 0]) == pytest.approx(0.7508911910687706, abs=1e-12)
+        assert float(states.px[0, 0]) == pytest.approx(867.0013670928046, abs=1e-9)
+        assert float(states.py[0, 0]) == pytest.approx(-4143.728272662603, abs=1e-9)
+        assert float(states.pz[0, 0]) == pytest.approx(-5475.234007919045, abs=1e-9)
+        assert float(states.vx[0, 0]) == pytest.approx(7.529156903021105, abs=1e-12)
+        assert float(states.vy[0, 0]) == pytest.approx(0.4773888992304267, abs=1e-12)
+        assert float(states.vz[0, 0]) == pytest.approx(0.830945205738939, abs=1e-12)
 
     def test_j2_molniya_argument_of_perigee_rate_is_near_critical_inclination(
         self,

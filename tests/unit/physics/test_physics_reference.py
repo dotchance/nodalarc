@@ -308,13 +308,58 @@ def _osculating(
     return a, float(np.linalg.norm(e_vec)), inc, raan, argp
 
 
+def _integrated_j2_orbit(el: OrbitalElements, days: float) -> np.ndarray:
+    """A fourth-order Runge-Kutta integration of two-body plus J2 acceleration from the kernel's
+    state, sampled every 300 s: rows of (t, a, e, i, node, argument of perigee, argument of
+    latitude), all osculating."""
+    mu = EARTH.gravitational_parameter_km3_s2
+    position, velocity = _kernel(el, [0.0], "j2-mean-elements", EARTH)
+    state = np.concatenate([position[0], velocity[0]])
+    step = 20.0
+
+    def derivative(s: np.ndarray) -> np.ndarray:
+        return np.concatenate([s[3:], _j2_acceleration(s[:3], EARTH)])
+
+    samples = []
+    for index in range(int(days * 86400 / step) + 1):
+        if index % 15 == 0:
+            r, v = state[:3], state[3:]
+            h = np.cross(r, v)
+            node = np.cross([0.0, 0.0, 1.0], h)
+            latitude = math.atan2((np.cross(node, r) @ h) / np.linalg.norm(h), node @ r)
+            samples.append((index * step, *_osculating(r, v, mu), latitude))
+        k1 = derivative(state)
+        k2 = derivative(state + 0.5 * step * k1)
+        k3 = derivative(state + 0.5 * step * k2)
+        k4 = derivative(state + step * k3)
+        state = state + step / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
+    return np.array(samples)
+
+
+def _declared_at_the_run_mean(table: np.ndarray, el: OrbitalElements):
+    mean = OrbitalElements(
+        float(table[:, 1].mean()),
+        float(table[:, 3].mean()),
+        el.raan_rad,
+        eccentricity=float(table[:, 2].mean()) if el.eccentricity else 0.0,
+        argument_of_perigee_rad=el.argument_of_perigee_rad,
+        mean_anomaly_rad=0.0,
+    )
+    return secular_rates(
+        ElementsBatch.from_elements([mean]), model="j2-mean-elements", body_frame=EARTH
+    )
+
+
+def _fitted_rate(table: np.ndarray, column: int) -> float:
+    return float(np.polyfit(table[:, 0], np.unwrap(table[:, column]), 1)[0])
+
+
 def test_declared_j2_rates_match_a_numerically_integrated_j2_orbit() -> None:
     """Accuracy of the declared approximation, separate from implementation agreement.
 
-    A fourth-order Runge-Kutta integration of two-body plus J2 acceleration
-    runs three days from the kernel's state. Straight-line fits to the
-    osculating node and argument of perigee give the numerical secular
-    rates, and the declared rates are evaluated at the run's mean elements.
+    Straight-line fits to the osculating node and argument of perigee of a three-day integration
+    give the numerical secular rates, and the declared rates are evaluated at the run's mean
+    elements.
     """
     el = OrbitalElements(
         7000.0,
@@ -324,41 +369,42 @@ def test_declared_j2_rates_match_a_numerically_integrated_j2_orbit() -> None:
         argument_of_perigee_rad=math.radians(30.0),
         mean_anomaly_rad=0.0,
     )
-    mu = EARTH.gravitational_parameter_km3_s2
-    position, velocity = _kernel(el, [0.0], "j2-mean-elements", EARTH)
-    state = np.concatenate([position[0], velocity[0]])
-    step = 20.0
-    steps = int(3 * 86400 / step)
+    table = _integrated_j2_orbit(el, 3.0)
+    declared = _declared_at_the_run_mean(table, el)
+    assert float(declared.raan_dot[0]) == pytest.approx(_fitted_rate(table, 4), rel=1e-3)
+    assert float(declared.argument_of_perigee_dot[0]) == pytest.approx(
+        _fitted_rate(table, 5), rel=1e-3
+    )
 
-    def derivative(s: np.ndarray) -> np.ndarray:
-        return np.concatenate([s[3:], _j2_acceleration(s[:3], EARTH)])
 
-    samples = []
-    for index in range(steps + 1):
-        if index % 15 == 0:
-            samples.append((index * step, *_osculating(state[:3], state[3:], mu)))
-        k1 = derivative(state)
-        k2 = derivative(state + 0.5 * step * k1)
-        k3 = derivative(state + 0.5 * step * k2)
-        k4 = derivative(state + step * k3)
-        state = state + step / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
-    table = np.array(samples)
-    t = table[:, 0]
-    raan_fit = np.polyfit(t, np.unwrap(table[:, 4]), 1)[0]
-    argp_fit = np.polyfit(t, np.unwrap(table[:, 5]), 1)[0]
-    mean = OrbitalElements(
-        float(table[:, 1].mean()),
-        float(table[:, 3].mean()),
-        el.raan_rad,
-        eccentricity=float(table[:, 2].mean()),
-        argument_of_perigee_rad=el.argument_of_perigee_rad,
+@pytest.mark.parametrize(
+    ("altitude_km", "inclination_deg"),
+    [(550.0, 53.0), (780.0, 86.4)],
+    ids=["53deg-550km", "86.4deg-780km"],
+)
+def test_a_circular_j2_orbit_moves_along_track_at_the_declared_rate(
+    altitude_km: float, inclination_deg: float
+) -> None:
+    """On a circular orbit the argument of perigee is undefined, but where the satellite is along
+    its orbit is not: the argument of latitude advances at the perigee rate plus the mean-anomaly
+    rate. Leaving the perigee rate out puts a Starlink-like satellite about 366 km behind its
+    integrated position after one day. The two cases have opposite signs of the perigee rate. The
+    integration agrees with the declared rates to 1e-5 of the orbital rate; without the perigee
+    rate the difference is about 6e-4.
+    """
+    el = OrbitalElements(
+        EARTH.equatorial_radius_km + altitude_km,
+        math.radians(inclination_deg),
+        math.radians(40.0),
+        eccentricity=0.0,
+        argument_of_perigee_rad=0.0,
         mean_anomaly_rad=0.0,
     )
-    declared = secular_rates(
-        ElementsBatch.from_elements([mean]), model="j2-mean-elements", body_frame=EARTH
-    )
-    assert float(declared.raan_dot[0]) == pytest.approx(raan_fit, rel=1e-3)
-    assert float(declared.argument_of_perigee_dot[0]) == pytest.approx(argp_fit, rel=1e-3)
+    table = _integrated_j2_orbit(el, 3.0)
+    declared = _declared_at_the_run_mean(table, el)
+    along_track = float(declared.argument_of_perigee_dot[0] + declared.mean_anomaly_dot[0])
+    assert along_track == pytest.approx(_fitted_rate(table, 6), rel=5e-5)
+    assert float(declared.raan_dot[0]) == pytest.approx(_fitted_rate(table, 4), rel=1e-3)
 
 
 def test_time_outside_coverage_is_refused(physics_context: PhysicsContext) -> None:

@@ -332,10 +332,7 @@ class TestConstructionAuthority:
             p = a * (1.0 - e * e)
             j2_factor = 1.5 * frame.j2 * (frame.equatorial_radius_km / p) ** 2 * n
             raan_dot = -j2_factor * math.cos(i)
-            # NodalArc's circular J2 contract: perigee is undefined at e = 0,
-            # so its secular rate is zero there. The kernel and the advance
-            # helper share the convention; the test honors it.
-            argp_dot = 0.0 if e == 0.0 else j2_factor * (2.0 - 2.5 * math.sin(i) ** 2)
+            argp_dot = j2_factor * (2.0 - 2.5 * math.sin(i) ** 2)
             m_dot = n + j2_factor * math.sqrt(1.0 - e * e) * (1.0 - 1.5 * math.sin(i) ** 2)
 
             expected_m = (authored.mean_anomaly_rad + m_dot * shifted_s) % math.tau

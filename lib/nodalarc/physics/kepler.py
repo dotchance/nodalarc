@@ -142,9 +142,13 @@ def j2_secular_rates(batch: ElementsBatch, *, body_frame: BodyFrame) -> SecularR
 
     No qualified library with a matching model was found (searched: ANISE,
     Skyfield, SPICE, Orekit, Nyx), and a different model would move the
-    satellites of every existing session that uses this one. For circular
-    orbits the argument of perigee is undefined and its rate is zero, which
-    keeps the circular J2 contract existing sessions rely on.
+    satellites of every existing session that uses this one. The perigee rate
+    applies at every eccentricity. On a circular orbit the argument of perigee
+    is undefined, but the argument of latitude it carries, where the satellite
+    is along its orbit, advances at the perigee rate plus the mean-anomaly
+    rate. Rejected alternative: a zero perigee rate at e = 0, which left a
+    Starlink-like satellite 366 km a day behind a numerically integrated J2
+    orbit.
     """
     a = batch.semi_major_axis_km
     e = batch.eccentricity
@@ -157,9 +161,7 @@ def j2_secular_rates(batch: ElementsBatch, *, body_frame: BodyFrame) -> SecularR
     j2_factor = body_frame.j2 * (radius_ratio * radius_ratio)
     return SecularRates(
         raan_dot=-1.5 * j2_factor * n * cos_i,
-        argument_of_perigee_dot=np.where(
-            e == 0.0, 0.0, 0.75 * j2_factor * n * (5.0 * (cos_i * cos_i) - 1.0)
-        ),
+        argument_of_perigee_dot=0.75 * j2_factor * n * (5.0 * (cos_i * cos_i) - 1.0),
         mean_anomaly_dot=n
         * (1.0 + 0.75 * j2_factor * np.sqrt(1.0 - e * e) * (3.0 * (cos_i * cos_i) - 1.0)),
     )

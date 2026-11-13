@@ -87,8 +87,8 @@ function j2SecularRates(
   const j2Factor = body.j2 * (body.equatorialRadiusKm / p) ** 2;
   return {
     raanDot: -1.5 * j2Factor * n * cosI,
-    argumentOfPerigeeDot:
-      eccentricity === 0 ? 0.0 : 0.75 * j2Factor * n * (5.0 * cosI * cosI - 1.0),
+    // At every eccentricity: on a circular orbit it moves the satellite along its orbit.
+    argumentOfPerigeeDot: 0.75 * j2Factor * n * (5.0 * cosI * cosI - 1.0),
     meanAnomalyDot:
       n *
       (1.0 +

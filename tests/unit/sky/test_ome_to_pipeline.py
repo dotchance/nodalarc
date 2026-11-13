@@ -505,7 +505,9 @@ class TestPolarVisibilityTransitions:
         for node, (plane, slot) in (("leo-sat-p05s00", (5, 0)), ("leo-sat-p00s02", (0, 2))):
             a, _, raan, u, _ = reference_elements(shell, plane, slot, offset_s)
             assert same_angle(elements[node].raan_rad, raan), node
-            assert same_angle(elements[node].mean_anomaly_rad, u), node
+            # On a circular orbit the argument of latitude is the perigee plus the mean anomaly.
+            latitude = elements[node].argument_of_perigee_rad + elements[node].mean_anomaly_rad
+            assert same_angle(latitude, u), node
             assert math.isclose(elements[node].semi_major_axis_km, a)
         assert math.isclose(elements["leo-sat-p05s00"].semi_major_axis_km, 7158.137)
         for node in ("leo-sat-p05s00", "leo-sat-p00s02"):

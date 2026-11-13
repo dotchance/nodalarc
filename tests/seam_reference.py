@@ -6,8 +6,9 @@
 Circular orbits from a constellation's declared altitude, inclination, RAAN
 spacing, slot count and Walker-star phase offset, propagated in the inertial
 frame with the first-order secular J2 rates that the declared
-``j2_mean_elements`` propagator applies to a circular orbit: the node and the
-mean anomaly drift, the argument of perigee does not. Independent of OME's
+``j2_mean_elements`` propagator applies to a circular orbit: the node drifts, and
+the argument of latitude advances at the mean-anomaly rate plus the perigee rate.
+Independent of OME's
 propagator and decision functions: it derives expected transition times and
 rates for the seam experiments and never decides feasibility for the runtime.
 
@@ -58,7 +59,7 @@ def elements(
     n = math.sqrt(MU_EARTH_KM3_S2 / a**3)
     k = 0.75 * n * EARTH_J2 * (EARTH_RADIUS_KM / a) ** 2
     raan_rate = -2.0 * k * math.cos(inc)
-    u_rate = n + k * (3.0 * math.cos(inc) ** 2 - 1.0)
+    u_rate = n + k * (3.0 * math.cos(inc) ** 2 - 1.0) + k * (5.0 * math.cos(inc) ** 2 - 1.0)
     return a, inc, raan0 + raan_rate * t_s, u0 + u_rate * t_s, u_rate
 
 

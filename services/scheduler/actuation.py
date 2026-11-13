@@ -421,6 +421,15 @@ def _pair_failure_class(
 ) -> ActuationFailureClass:
     if any(r.failure_class == ActuationFailureClass.FENCE for r in agent_results):
         return ActuationFailureClass.FENCE
+    failing = [r for r in agent_results if r.failure_class != ActuationFailureClass.NONE]
+    if failing and all(r.failure_class == ActuationFailureClass.AGENT_UNREACHABLE for r in failing):
+        # The command did not reach an end, or got no answer from it: nothing was observed
+        # there, on any link type. The pair keeps its last proven record, and the next
+        # reconcile sends the command again. Rejected alternative: count it an observed
+        # failure, which halted the Scheduler on an ISL and blocked a station on an access
+        # link while a Node Agent restarted, and left a station whose command reached one end
+        # proving a half-changed kernel against its old record for good.
+        return ActuationFailureClass.AGENT_UNREACHABLE
     if link_type == "isl" and any(
         r.failure_class != ActuationFailureClass.NONE for r in agent_results
     ):

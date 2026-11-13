@@ -2097,10 +2097,18 @@ class Dispatcher:
         await self._record_agent_health(result)
         if not result.has_failures:
             return
+        # A pair whose command reached no answer observed nothing: it keeps its last proven
+        # record, the next reconcile sends it again, and the agent health above tells the
+        # operator the Node Agent is not answering. It neither halts nor blocks a station.
+        observed = {
+            pair
+            for pair in result.failed_pairs
+            if result.pair_results[pair].failure_class != ActuationFailureClass.AGENT_UNREACHABLE
+        }
         fatal_pairs = {
             pair
             for pair, pair_result in result.pair_results.items()
-            if pair in result.failed_pairs
+            if pair in observed
             and (
                 pair_result.failure_class
                 in {ActuationFailureClass.FENCE, ActuationFailureClass.ISL_FAILURE}
@@ -2137,7 +2145,7 @@ class Dispatcher:
             )
 
         by_gs: dict[str, set[tuple[str, str]]] = {}
-        for pair in result.failed_pairs:
+        for pair in observed:
             pair_result = result.pair_results[pair]
             if pair_result.link_type != "ground" or pair_result.gs_id is None:
                 continue

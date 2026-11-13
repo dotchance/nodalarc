@@ -158,3 +158,77 @@ def test_a_link_the_node_agent_could_not_prove_is_never_reported_up_and_dispatch
     ]
     assert len(halts) == 1, "the operator is told once that dispatch halted"
     assert scheduler._dispatch_blocked_reason is not None, "dispatch continues after the halt"
+
+
+class NoRespondersError(Exception):
+    """What the NATS client raises when no Node Agent is subscribed to the subject."""
+
+
+class _RestartingNodeAgent:
+    """A Node Agent mid-restart: it subscribes only after re-verifying its server's wiring, so the
+    first request finds nobody listening. Once subscribed it answers with verified proof."""
+
+    def __init__(self) -> None:
+        self.link_up_requests = 0
+
+    async def async_batch_link_up(self, request, **_kwargs):
+        self.link_up_requests += 1
+        if self.link_up_requests == 1:
+            raise NoRespondersError("nats: no responders available for request")
+        return node_agent_pb2.BatchLinkUpResponse(
+            success=True,
+            interface_results=[
+                node_agent_pb2.InterfaceResult(
+                    node_id=interface.node_id,
+                    interface_name=interface.interface_name,
+                    success=True,
+                    verified=True,
+                )
+                for interface in request.interfaces
+            ],
+        )
+
+
+async def _schedule_and_dispatch(scheduler: Dispatcher, agent, tick: int) -> None:
+    """OME schedules the link at the tick; the dispatch worker reconciles toward it."""
+    scheduler._running = True
+    worker = asyncio.create_task(scheduler._dispatch_worker(scheduler._nc))
+    requests_before = agent.link_up_requests
+    await scheduler._handle_visibility_event(
+        _link_scheduled().model_copy(update={"sim_time": SIM_TIME + timedelta(seconds=tick)})
+    )
+    await scheduler._handle_clock_tick_payload(
+        {
+            "epoch_id": scheduler._expected_epoch_id,
+            "sim_time": (SIM_TIME + timedelta(seconds=tick + 1)).isoformat(),
+        }
+    )
+    for _ in range(200):
+        if agent.link_up_requests > requests_before and scheduler._dispatch_queue.empty():
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    scheduler._dispatch_queue.put_nowait(None)
+    await worker
+
+
+def test_a_link_whose_node_agent_did_not_answer_is_sent_again_and_never_halts() -> None:
+    agent, published = _RestartingNodeAgent(), _Published()
+    scheduler = _scheduler(agent, published)
+
+    def announced_up() -> list[str]:
+        return [s for s, _ in published.messages if s == link_up_subject(SESSION)]
+
+    async def scenario() -> None:
+        await _schedule_and_dispatch(scheduler, agent, tick=0)
+        assert agent.link_up_requests == 1
+        assert scheduler._dispatch_blocked_reason is None, "a Node Agent restart halted dispatch"
+        assert PAIR not in scheduler._actual_links, "a link nobody proved is held as actual"
+        assert not announced_up(), "a link nobody proved was announced up"
+
+        await _schedule_and_dispatch(scheduler, agent, tick=1)
+        assert agent.link_up_requests == 2, "the link was not sent again"
+        assert PAIR in scheduler._actual_links, "the link the Node Agent proved is not held"
+        assert announced_up(), "the proven link was not announced up"
+
+    asyncio.run(scenario())

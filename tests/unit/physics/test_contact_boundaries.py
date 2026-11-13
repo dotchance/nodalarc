@@ -33,7 +33,14 @@ from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import PhysicsContext, body_fixed_from_geodetic
 from nodalarc.physics.ephemeris_table import SUN_RADIUS_KM
 from nodalarc.physics.lighttime import OrbitEndpoint
-from ome.direction_checks import DirectionEnds, IslLimits, PairSignals, isl_reasons
+from ome.direction_checks import (
+    DirectionEnds,
+    EndLimits,
+    EndTable,
+    PairSignals,
+    SpaceRegard,
+    direction_reasons,
+)
 from ome.ground_visibility_engine import GroundGeometry
 
 from tests.physics_fixtures import (
@@ -205,18 +212,14 @@ def test_an_earth_moon_link_opens_and_closes_when_spice_says(
     """A satellite 550 km above Earth and one 100 km above the Moon: open while no body blocks
     either direction, each received at its arrival time."""
     endpoints = {"leo": LEO, "orbiter": ORBITER}
-    unlimited = [IslLimits(math.inf, 360.0, None, polar_seam=False)]
+    unlimited = EndTable.from_limits([EndLimits(SpaceRegard("local_horizontal", 360.0))])
 
     def produced(t: float) -> bool:
         signals = PairSignals.sent_at(physics_context, SHAPES, endpoints, [("leo", "orbiter")], t)
         for direction in signals.directions([("leo", "orbiter")]):
-            reasons = isl_reasons(
-                DirectionEnds.from_signals(direction),
-                unlimited,
-                transmitter_latitude_deg=np.zeros(1),
-                receiver_latitude_deg=np.zeros(1),
-                latitude_threshold_deg=90.0,
-            )
+            reasons = direction_reasons(
+                DirectionEnds.from_signals(direction), unlimited, unlimited
+            ).reason
             if reasons[0] != "ok":
                 return False
         return True

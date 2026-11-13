@@ -22,7 +22,15 @@ from nodalarc.models.addressing import NeighborAssignment
 from nodalarc.physics.geodesy import geodetic_from_body_fixed_batch
 from nodalarc.physics.lighttime import SignalEnd
 
-from ome.direction_checks import DirectionEnds, IslLimits, PairSignals, isl_reasons
+from ome.direction_checks import (
+    DirectionEnds,
+    EndLimits,
+    PairLimits,
+    PairSignals,
+    SpaceRegard,
+    direction_reasons,
+    pair_tables,
+)
 from ome.propagation_engine import PropagatedState
 from ome.visibility import enforce_symmetric_scheduling, schedule_isl_terminals
 
@@ -130,7 +138,7 @@ class _Candidate:
     interface_a: str
     interface_b: str
     range_km: float
-    limits: IslLimits
+    limits: PairLimits
     applied_tracking_rate: float | None
 
 
@@ -169,29 +177,39 @@ def _result(
     )
 
 
+def _end_limits(constraints: IslTerminalConstraints) -> EndLimits:
+    """A space terminal's own limits: its field of regard is a band about its local horizontal."""
+    return EndLimits(
+        SpaceRegard("local_horizontal", constraints.field_of_regard_deg),
+        max_range_km=constraints.max_range_km,
+        max_tracking_rate_deg_s=constraints.max_tracking_rate_deg_s,
+    )
+
+
 def isl_pair_reasons(
     *,
     signals: PairSignals,
     body_frames: Mapping[str, BodyFrame],
     pairs: Sequence[tuple[str, str]],
-    limits: Sequence[IslLimits],
+    limits: Sequence[PairLimits],
     latitude_threshold_deg: float,
 ) -> list[str]:
     """Per ISL candidate, "ok" or the first failing constraint of its two directions (a->b
-    before b->a)."""
+    before b->a), each end held to its own terminal's limits."""
     if not pairs:
         return []
     forward, backward = signals.directions(pairs)
+    a_ends, b_ends, seam = pair_tables(limits)
     reasons = []
-    for direction in (forward, backward):
+    for direction, transmitter, receiver in ((forward, a_ends, b_ends), (backward, b_ends, a_ends)):
+        polar = seam & (
+            (np.abs(_latitudes_deg(direction.transmitter, body_frames)) > latitude_threshold_deg)
+            | (np.abs(_latitudes_deg(direction.receiver, body_frames)) > latitude_threshold_deg)
+        )
         reasons.append(
-            isl_reasons(
-                DirectionEnds.from_signals(direction),
-                limits,
-                transmitter_latitude_deg=_latitudes_deg(direction.transmitter, body_frames),
-                receiver_latitude_deg=_latitudes_deg(direction.receiver, body_frames),
-                latitude_threshold_deg=latitude_threshold_deg,
-            )
+            direction_reasons(
+                DirectionEnds.from_signals(direction), transmitter, receiver, polar_seam=polar
+            ).reason
         )
     return [
         str(ahead) if ahead != "ok" else str(back)
@@ -280,9 +298,9 @@ def evaluate_isl_feasibility(
                 constraints_a.field_of_regard_deg,
                 constraints_b.field_of_regard_deg,
             )
-            applied_tracking_rate = (
-                max_tracking_rate_deg_s if assignment_a.link_type == "cross_plane_isl" else None
-            )
+            # The stricter of the two terminals' rates, as published; each end is checked
+            # against its own.
+            applied_tracking_rate = max_tracking_rate_deg_s
             pos_a, _vel_a, pos_b, _vel_b = _state_vectors(state_a, state_b)
             range_km = compute_range_km(pos_a, pos_b)
             common = {
@@ -322,10 +340,9 @@ def evaluate_isl_feasibility(
                     interface_a=assignment_a.interface,
                     interface_b=assignment_b.interface,
                     range_km=range_km,
-                    limits=IslLimits(
-                        max_range_km=max_range_km,
-                        field_of_regard_deg=field_of_regard_deg,
-                        max_tracking_rate_deg_s=applied_tracking_rate,
+                    limits=PairLimits(
+                        a=_end_limits(constraints_a),
+                        b=_end_limits(constraints_b),
                         polar_seam=polar_seam_enabled
                         and assignment_a.link_type == "cross_plane_isl"
                         and state_a.central_body == state_b.central_body,
@@ -373,9 +390,14 @@ def evaluate_isl_feasibility(
             one_way_ms=one_way[candidate.pair],
             reason=reason,
             terminal_type=candidate.constraints_a.terminal_type,
-            max_range_km=candidate.limits.max_range_km,
+            max_range_km=min(
+                candidate.constraints_a.max_range_km, candidate.constraints_b.max_range_km
+            ),
             applied_tracking_rate=candidate.applied_tracking_rate,
-            field_of_regard_deg=candidate.limits.field_of_regard_deg,
+            field_of_regard_deg=min(
+                candidate.constraints_a.field_of_regard_deg,
+                candidate.constraints_b.field_of_regard_deg,
+            ),
         )
     return results
 

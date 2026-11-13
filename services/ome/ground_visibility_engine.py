@@ -21,10 +21,13 @@ from nodalarc.physics.lighttime import Endpoint, Signals, SiteEndpoint
 
 from ome.direction_checks import (
     DirectionEnds,
-    GroundLimits,
-    GroundLimitTable,
+    EndLimits,
+    EndTable,
     GroundPairVerdict,
     PairSignals,
+    SpaceRegard,
+    SurfaceRegard,
+    direction_reasons,
     ground_directions,
     ground_pair_verdicts,
 )
@@ -169,7 +172,7 @@ class GroundGeometry:
             tuple[TerminalPhysicsProfile | None, TerminalPhysicsProfile | None]
         ] = []
         self.station_endpoints: dict[str, Endpoint] = {}
-        limits: list[GroundLimits] = []
+        limits: list[tuple[EndLimits, EndLimits]] = []
         for gs_id, sat_id in pairs:
             if (gs_id, sat_id) in self._rows:
                 continue
@@ -192,7 +195,8 @@ class GroundGeometry:
                 gs_id, SiteEndpoint(gs_reference_bodies[gs_id], (gs_ecef.x, gs_ecef.y, gs_ecef.z))
             )
             limits.append(_limits(gs_geo, gs_min_elevations[gs_id], gs_profile, sat_profile))
-        self._table = GroundLimitTable.from_limits(limits)
+        self._station_table = EndTable.from_limits([station for station, _ in limits])
+        self._satellite_table = EndTable.from_limits([satellite for _, satellite in limits])
 
     def station_positions_common(self, sim_time_unix: float) -> dict[str, CommonVec3]:
         """Each station's position in the common frame (Earth's centre, ICRF axes) at an instant:
@@ -235,20 +239,13 @@ class GroundGeometry:
         rows = np.array([self._row(gs_id, sat_id) for gs_id, sat_id in pairs])
         up = DirectionEnds.from_signals(uplink_signals)
         down = DirectionEnds.from_signals(downlink_signals)
-        table = self._table.take(rows)
+        station = self._station_table.take(rows)
+        satellite = self._satellite_table.take(rows)
         uplink = ground_directions(
-            station=up.transmitter,
-            satellite=up.receiver,
-            path_km=up.path_km,
-            blocked=up.blocked,
-            table=table,
+            direction_reasons(up, station, satellite), station_transmits=True
         )
         downlink = ground_directions(
-            station=down.receiver,
-            satellite=down.transmitter,
-            path_km=down.path_km,
-            blocked=down.blocked,
-            table=table,
+            direction_reasons(down, satellite, station), station_transmits=False
         )
         return ground_pair_verdicts(uplink, downlink)
 
@@ -258,22 +255,42 @@ def _limits(
     min_elevation_deg: float,
     gs_profile: TerminalPhysicsProfile | None,
     sat_profile: TerminalPhysicsProfile | None,
-) -> GroundLimits:
+) -> tuple[EndLimits, EndLimits]:
+    """The station's and the satellite's limits. Geometry-only links (no profiles) keep only the
+    station's elevation mask."""
     if gs_profile is None or sat_profile is None:
-        return GroundLimits(gs_geo.lat_deg, gs_geo.lon_deg, min_elevation_deg)
-    return GroundLimits(
-        gs_lat_deg=gs_geo.lat_deg,
-        gs_lon_deg=gs_geo.lon_deg,
-        min_elevation_deg=min_elevation_deg,
-        gs_max_range_km=gs_profile.max_range_km,
-        sat_max_range_km=sat_profile.max_range_km,
-        gs_boresight=gs_profile.boresight,
-        gs_field_of_regard_deg=gs_profile.field_of_regard_deg,
-        sat_boresight=sat_profile.boresight,
-        sat_field_of_regard_deg=sat_profile.field_of_regard_deg,
-        gs_max_tracking_rate_deg_s=gs_profile.max_tracking_rate_deg_s,
-        sat_max_tracking_rate_deg_s=sat_profile.max_tracking_rate_deg_s,
+        return (
+            EndLimits(SurfaceRegard(gs_geo.lat_deg, gs_geo.lon_deg, min_elevation_deg)),
+            EndLimits(SpaceRegard("nadir")),
+        )
+    sat_boresight = sat_profile.boresight
+    if sat_boresight is not None:
+        if sat_boresight.mode != "nadir":
+            raise ValueError(
+                f"Unsupported satellite ground-terminal boresight mode={sat_boresight.mode!r}"
+            )
+        if sat_profile.field_of_regard_deg is None:
+            raise ValueError("Satellite boresight visibility requires its field of regard")
+    station = EndLimits(
+        SurfaceRegard(
+            gs_geo.lat_deg,
+            gs_geo.lon_deg,
+            min_elevation_deg,
+            boresight=gs_profile.boresight,
+            field_of_regard_deg=gs_profile.field_of_regard_deg,
+        ),
+        max_range_km=gs_profile.max_range_km,
+        max_tracking_rate_deg_s=gs_profile.max_tracking_rate_deg_s,
     )
+    satellite = EndLimits(
+        SpaceRegard(
+            "nadir",
+            None if sat_boresight is None else sat_profile.field_of_regard_deg,
+        ),
+        max_range_km=sat_profile.max_range_km,
+        max_tracking_rate_deg_s=sat_profile.max_tracking_rate_deg_s,
+    )
+    return station, satellite
 
 
 @dataclass(frozen=True)

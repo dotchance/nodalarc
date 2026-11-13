@@ -25,7 +25,7 @@ from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import PhysicsContext
 from nodalarc.physics.context import tdb_seconds_of
 from nodalarc.physics.lighttime import Endpoint, SiteEndpoint, signals_sent_at
-from ome.direction_checks import IslLimits, PairSignals
+from ome.direction_checks import EndLimits, PairLimits, PairSignals, SpaceRegard
 from ome.isl_engine import (
     IslFeasibilityResult,
     IslTerminalConstraints,
@@ -537,12 +537,8 @@ def test_cross_body_occlusion_uses_the_oblate_ellipsoid_not_a_sphere():
     physics = _physics()
     polar, equatorial = _limb_directions(physics)
     pair = ("earth-sat", "luna-sat")
-    limits = IslLimits(
-        max_range_km=1.0e6,
-        field_of_regard_deg=360.0,
-        max_tracking_rate_deg_s=None,
-        polar_seam=False,
-    )
+    end = EndLimits(SpaceRegard("local_horizontal", 360.0), max_range_km=1.0e6)
+    limits = PairLimits(end, end)
 
     def verdict(closest_km: np.ndarray) -> tuple[str, list[bool]]:
         signals = PairSignals.sent_at(
@@ -674,3 +670,109 @@ def test_isl_feasibility_is_topology_bounded_not_all_pairs():
 
     assert len(feasibility) == sat_count
     assert len(feasibility) < sat_count * (sat_count - 1) // 20
+
+
+def test_the_tracking_limit_applies_on_an_intra_plane_link_too():
+    """The counter-rotating pair of the cross-plane test, declared intra-plane: its line of sight
+    turns at 4.3 deg/s, above both terminals' 2.5 deg/s. A link's class does not exempt it from
+    its terminals' physics; once the tracking limit applied to cross-plane links only."""
+    states, endpoints = _propagated(
+        [
+            _satellite(
+                "sat-A",
+                OrbitalElements(
+                    semi_major_axis_km=6921.0,
+                    inclination_rad=0.0,
+                    raan_rad=0.0,
+                    mean_anomaly_rad=0.0,
+                ),
+            ),
+            _satellite(
+                "sat-B",
+                OrbitalElements(
+                    semi_major_axis_km=7121.0,
+                    inclination_rad=math.pi,
+                    raan_rad=0.0,
+                    mean_anomaly_rad=0.0,
+                ),
+            ),
+        ],
+        "keplerian-circular",
+        EPOCH,
+    )
+    by_node = {
+        "sat-A": [_assignment("isl0", "sat-B", "intra_plane_isl", 1)],
+        "sat-B": [_assignment("isl0", "sat-A", "intra_plane_isl", 1)],
+    }
+    feasibility = evaluate_isl_feasibility(
+        node_order=["sat-A", "sat-B"],
+        sat_states=states,
+        by_node=by_node,
+        terminal_constraints={
+            "sat-A": {"isl0": _constraints(None, tracking=2.5)},
+            "sat-B": {"isl0": _constraints(None, tracking=2.5)},
+        },
+        polar_seam_enabled=False,
+        latitude_threshold_deg=70.0,
+        body_frames=TEST_BODY_FRAMES,
+        signals=_tick_signals(endpoints, by_node, EPOCH),
+    )
+    result = feasibility[("sat-A", "sat-B")]
+    assert result.reject_reason == "tracking_exceeded"
+    assert result.applied_max_tracking_rate_deg_s == 2.5
+
+
+def test_each_end_is_held_to_its_own_field_of_regard():
+    """Co-planar satellites at 6900 and 7500 km, 10 degrees apart: the lower end points 20.5
+    degrees off its local horizontal, the upper end 30.5 degrees off its own. Their terminals
+    allow 50 and 70 degrees (half angles 25 and 35), so each end is inside its own field of
+    regard and the link is open. The smaller field of regard applied to both ends refused it."""
+    states, endpoints = _propagated(
+        [
+            _satellite(
+                "sat-A",
+                OrbitalElements(
+                    semi_major_axis_km=6900.0,
+                    inclination_rad=0.0,
+                    raan_rad=0.0,
+                    mean_anomaly_rad=0.0,
+                ),
+            ),
+            _satellite(
+                "sat-B",
+                OrbitalElements(
+                    semi_major_axis_km=7500.0,
+                    inclination_rad=0.0,
+                    raan_rad=0.0,
+                    mean_anomaly_rad=math.radians(10.0),
+                ),
+            ),
+        ],
+        "keplerian-circular",
+        EPOCH,
+    )
+    by_node = {
+        "sat-A": [_assignment("isl0", "sat-B", "intra_plane_isl", 1)],
+        "sat-B": [_assignment("isl0", "sat-A", "intra_plane_isl", 1)],
+    }
+
+    def terminal(field_of_regard_deg: float) -> IslTerminalConstraints:
+        return IslTerminalConstraints(
+            role=None,
+            max_range_km=4400.0,
+            max_tracking_rate_deg_s=4.0,
+            field_of_regard_deg=field_of_regard_deg,
+            terminal_type="rf",
+        )
+
+    feasibility = evaluate_isl_feasibility(
+        node_order=["sat-A", "sat-B"],
+        sat_states=states,
+        by_node=by_node,
+        terminal_constraints={"sat-A": {"isl0": terminal(50.0)}, "sat-B": {"isl0": terminal(70.0)}},
+        polar_seam_enabled=False,
+        latitude_threshold_deg=70.0,
+        body_frames=TEST_BODY_FRAMES,
+        signals=_tick_signals(endpoints, by_node, EPOCH),
+    )
+    assert feasibility[("sat-A", "sat-B")].reject_reason == "ok"

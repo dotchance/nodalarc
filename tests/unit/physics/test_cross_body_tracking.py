@@ -24,9 +24,12 @@ from nodalarc.physics.lighttime import OrbitEndpoint
 from ome.direction_checks import (
     DirectionEnds,
     EndArrays,
-    GroundLimits,
-    GroundLimitTable,
+    EndLimits,
+    EndTable,
     PairSignals,
+    SpaceRegard,
+    SurfaceRegard,
+    direction_reasons,
     ground_directions,
 )
 from ome.ground_visibility_engine import GroundGeometry
@@ -145,23 +148,20 @@ def test_each_end_is_judged_against_its_own_tracking_limit(
 ) -> None:
     """A station limited to 1 deg/s and an orbiter limited to 0.001 deg/s, the station looking
     straight up at the orbiter overhead: the rejecting endpoint is the end over its own limit."""
-    table = GroundLimitTable.from_limits(
-        [
-            GroundLimits(
-                gs_lat_deg=0.0,
-                gs_lon_deg=0.0,
-                min_elevation_deg=10.0,
-                gs_max_tracking_rate_deg_s=STATION_LIMIT_DEG_S,
-                sat_max_tracking_rate_deg_s=ORBITER_LIMIT_DEG_S,
-            )
-        ]
+    station = EndTable.from_limits(
+        [EndLimits(SurfaceRegard(0.0, 0.0, 10.0), max_tracking_rate_deg_s=STATION_LIMIT_DEG_S)]
+    )
+    orbiter = EndTable.from_limits(
+        [EndLimits(SpaceRegard("nadir"), max_tracking_rate_deg_s=ORBITER_LIMIT_DEG_S)]
     )
     up = (1.0, 0.0, 0.0)  # local vertical at latitude 0, longitude 0
-    directions = ground_directions(
-        station=_ends(station_rate, up),
-        satellite=_ends(orbiter_rate, (-1.0, 0.0, 0.0)),
+    ends = DirectionEnds(
         path_km=np.array([1000.0]),
         blocked=np.array([False]),
-        table=table,
+        transmitter=_ends(station_rate, up),
+        receiver=_ends(orbiter_rate, (-1.0, 0.0, 0.0)),
+    )
+    directions = ground_directions(
+        direction_reasons(ends, station, orbiter), station_transmits=True
     )
     assert (directions.reason[0], directions.rejecting_endpoint[0]) == (reason, rejecting)

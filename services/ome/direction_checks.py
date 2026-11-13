@@ -8,20 +8,15 @@ A direction is one signal: the transmitter at emission and the receiver at arriv
 frame and the apparent direction it points along at its epoch. A link is open while both of its
 directions are open.
 
-The checks run on arrays over every direction of a tick. Precedence and limiting-endpoint rules
-are the ones OME applied to both ends at one instant before light time existed:
+The checks run on arrays over every direction of a tick. One check serves every link: each end
+is held to its own terminal's limits, and its field of regard is specialised by its mount's frame
+(a surface mount's local sky, a space mount's nadir cone or local-horizontal band). Precedence:
+line of sight, range, elevation mask, field of regard (surface ends first), tracking rate, polar
+seam.
 
-- ISL: line of sight, range, field of regard (off local horizontal), tracking rate, polar seam.
-- Ground: line of sight, range, elevation mask, ground field of regard, satellite off-nadir field
-  of regard, tracking rate.
-
-Range is the direction's path length (c times its light time). A limit on one quantity both ends
-share takes the smaller of the two terminals' values, and the rejecting endpoint names the end
-that declared it: range (one path length). A limit on what each end does on its own applies to
-that end alone: a ground pair's tracking rate, since each end slews at its own rate (a station
-turns with its body; an orbiter of another body holds the station with an inertial rate), and the
-rejecting endpoint names the end whose rate exceeded its own limit. An ISL's two terminals are
-one terminal type, so its single tracking limit is each end's own.
+Range is the direction's path length (c times its light time), against the smaller of the two
+terminals' ranges, and the rejecting endpoint names the end that declared it. Every other limit
+applies to its own end: each end slews at its own rate and can carry its own terminal.
 """
 
 from __future__ import annotations
@@ -29,7 +24,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import get_args
+from typing import Literal, get_args
 
 import numpy as np
 from nodalarc.body_frames import BodyFrame
@@ -38,7 +33,7 @@ from nodalarc.models.link_decisions import (
     GroundVisibilityRejectingEndpoint,
     GroundVisibilityRejectReason,
 )
-from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.models.terminal_physics import TerminalBoresight
 from nodalarc.physics import PhysicsContext
 from nodalarc.physics.lighttime import Endpoint, Signals, signals_sent_at
 
@@ -159,92 +154,54 @@ def _off_horizontal_deg(end: EndArrays) -> np.ndarray:
 
 
 @dataclass(frozen=True)
-class IslLimits:
-    """Applied limits of one ISL candidate (the smaller of the two terminals' values)."""
+class SurfaceRegard:
+    """A surface mount's sky: the end's geodetic position, its elevation mask, and its terminal's
+    boresight and field of regard (None when no terminal limit is in effect, as in geometry-only
+    links)."""
 
-    max_range_km: float
-    field_of_regard_deg: float
-    max_tracking_rate_deg_s: float | None
-    polar_seam: bool
-
-
-def isl_reasons(
-    ends: DirectionEnds,
-    limits: Sequence[IslLimits],
-    *,
-    transmitter_latitude_deg: np.ndarray,
-    receiver_latitude_deg: np.ndarray,
-    latitude_threshold_deg: float,
-) -> np.ndarray:
-    """Per direction, "ok" or the first failing ISL constraint."""
-    max_range = np.array([limit.max_range_km for limit in limits])
-    field_of_regard = np.array([limit.field_of_regard_deg for limit in limits])
-    max_rate = np.array(
-        [
-            math.inf if limit.max_tracking_rate_deg_s is None else limit.max_tracking_rate_deg_s
-            for limit in limits
-        ]
-    )
-    seam = np.array([limit.polar_seam for limit in limits], dtype=bool)
-    half = field_of_regard / 2.0
-    outside_regard = (field_of_regard < 360.0) & (
-        (_off_horizontal_deg(ends.transmitter) > half) | (_off_horizontal_deg(ends.receiver) > half)
-    )
-    tracking = (np.degrees(ends.transmitter.rate_rad_s) > max_rate) | (
-        np.degrees(ends.receiver.rate_rad_s) > max_rate
-    )
-    polar = seam & (
-        (np.abs(transmitter_latitude_deg) > latitude_threshold_deg)
-        | (np.abs(receiver_latitude_deg) > latitude_threshold_deg)
-    )
-    return np.select(
-        [ends.blocked, ends.path_km > max_range, outside_regard, tracking, polar],
-        ["los_blocked", "range_exceeded", "field_of_regard", "tracking_exceeded", "polar_seam"],
-        default="ok",
-    ).astype(object)
+    lat_deg: float
+    lon_deg: float
+    min_elevation_deg: float
+    boresight: TerminalBoresight | None = None
+    field_of_regard_deg: float | None = None
 
 
 @dataclass(frozen=True)
-class GroundLimits:
-    """One ground candidate: the station's geodetic position, its elevation mask, and each end's
-    terminal limits (None where a constraint is not in effect, as in geometry-only links)."""
+class SpaceRegard:
+    """A space mount's field of regard: a cone about the direction to the centre of the other
+    end's body (``nadir``), or a band about the end's local horizontal (``local_horizontal``).
+    None, or 360 degrees about the horizontal, is no limit."""
 
-    gs_lat_deg: float
-    gs_lon_deg: float
-    min_elevation_deg: float
-    gs_max_range_km: float | None = None
-    sat_max_range_km: float | None = None
-    gs_boresight: TerminalBoresight | None = None
-    gs_field_of_regard_deg: float | None = None
-    sat_boresight: SatGroundTerminalBoresight | None = None
-    sat_field_of_regard_deg: float | None = None
-    gs_max_tracking_rate_deg_s: float | None = None
-    sat_max_tracking_rate_deg_s: float | None = None
+    mode: Literal["nadir", "local_horizontal"]
+    field_of_regard_deg: float | None = None
 
 
-def limiting_endpoint(
-    gs_value: float | None, sat_value: float | None
-) -> GroundVisibilityRejectingEndpoint:
-    """Which endpoint supplied the stricter terminal constraint."""
-    if gs_value is None and sat_value is None:
-        return "both"
-    if gs_value is None:
-        return "satellite"
-    if sat_value is None:
-        return "ground"
-    if math.isclose(gs_value, sat_value, rel_tol=0.0, abs_tol=1e-12):
-        return "both"
-    return "ground" if gs_value < sat_value else "satellite"
+@dataclass(frozen=True)
+class EndLimits:
+    """One end's terminal limits. The field of regard is specialised by the mount's frame; every
+    other limit is the same on every end. A limit that is None is not in effect and never binds.
+    Each end is held to its own terminal's limits: the two ends of a link slew at different rates
+    and can carry different terminals. Rejected alternative: the smaller of the two terminals'
+    values on both ends, and a tracking limit on cross-plane links only, which let an intra-plane
+    or inter-body link exceed its terminals' tracking rate."""
+
+    regard: SurfaceRegard | SpaceRegard
+    max_range_km: float | None = None
+    max_tracking_rate_deg_s: float | None = None
+
+
+@dataclass(frozen=True)
+class PairLimits:
+    """A candidate's two ends' limits, in pair order, and whether its polar-seam check applies."""
+
+    a: EndLimits
+    b: EndLimits
+    polar_seam: bool = False
 
 
 def _unbounded_if_none(value: float | None) -> float:
-    """A terminal limit as a number: no limit in effect (geometry-only links) never binds."""
+    """A terminal limit as a number: no limit in effect never binds."""
     return math.inf if value is None else value
-
-
-def _smaller(a: float | None, b: float | None) -> float:
-    values = [v for v in (a, b) if v is not None]
-    return min(values) if values else math.inf
 
 
 def _enu(lat_deg: np.ndarray, lon_deg: np.ndarray, vector: np.ndarray) -> np.ndarray:
@@ -262,15 +219,15 @@ def _unit_from_az_el(az_deg: float, el_deg: float) -> tuple[float, float, float]
     return (math.cos(el) * math.sin(az), math.cos(el) * math.cos(az), math.sin(el))
 
 
-def _ground_regard(limit: GroundLimits) -> tuple[int, tuple[float, ...]]:
-    """Mode code and parameters of the ground field of regard: 0 none, 1 steerable envelope
+def _surface_regard(regard: SurfaceRegard) -> tuple[int, tuple[float, ...]]:
+    """Mode code and parameters of a surface field of regard: 0 none, 1 steerable envelope
     (min az, max az, min el, max el), 2 cone about a boresight (unit east, north, up, half
     angle)."""
-    boresight = limit.gs_boresight
+    boresight = regard.boresight
     if boresight is None:
         return 0, ()
-    if limit.gs_field_of_regard_deg is None:
-        raise ValueError("Ground boresight visibility requires gs_field_of_regard_deg")
+    if regard.field_of_regard_deg is None:
+        raise ValueError("a surface boresight requires its field of regard")
     if boresight.mode == "steerable_envelope":
         bounds = (
             boresight.min_az_deg,
@@ -289,148 +246,175 @@ def _ground_regard(limit: GroundLimits) -> tuple[int, tuple[float, ...]]:
                 "configured_topocentric boresight is missing configured azimuth/elevation"
             )
         bore = _unit_from_az_el(boresight.configured_az_deg, boresight.configured_el_deg)
-    return 2, (*bore, limit.gs_field_of_regard_deg / 2.0)
+    return 2, (*bore, regard.field_of_regard_deg / 2.0)
 
 
-def _satellite_regard(limit: GroundLimits) -> float:
-    """Half apex angle of the satellite's nadir cone (infinite when it has no boresight)."""
-    if limit.sat_boresight is None:
-        return math.inf
-    if limit.sat_field_of_regard_deg is None:
-        raise ValueError("Satellite boresight visibility requires sat_field_of_regard_deg")
-    if limit.sat_boresight.mode != "nadir":
-        raise ValueError(
-            f"Unsupported satellite ground-terminal boresight mode={limit.sat_boresight.mode!r}"
-        )
-    return limit.sat_field_of_regard_deg / 2.0
+def _space_regard(regard: SpaceRegard) -> tuple[int, float]:
+    """Mode code (0 none, 1 nadir cone, 2 local-horizontal band) and half angle."""
+    if regard.field_of_regard_deg is None:
+        return 0, math.inf
+    if regard.mode == "local_horizontal" and regard.field_of_regard_deg >= 360.0:
+        return 0, math.inf
+    return (1 if regard.mode == "nadir" else 2), regard.field_of_regard_deg / 2.0
 
 
 @dataclass(frozen=True)
-class GroundLimitTable:
-    """Ground candidates' limits as arrays (one row per candidate), validated once."""
+class EndTable:
+    """Ends' limits as arrays, one row per candidate, validated once."""
 
+    surface: np.ndarray
     lat_deg: np.ndarray
     lon_deg: np.ndarray
     min_elevation_deg: np.ndarray
-    max_range_km: np.ndarray
-    gs_max_rate_deg_s: np.ndarray
-    sat_max_rate_deg_s: np.ndarray
-    regard_mode: np.ndarray
+    surface_mode: np.ndarray
     envelope: np.ndarray
     cone: np.ndarray
-    satellite_half_deg: np.ndarray
-    range_rejector: np.ndarray
+    space_mode: np.ndarray
+    space_half_deg: np.ndarray
+    max_range_km: np.ndarray
+    max_rate_deg_s: np.ndarray
 
     @classmethod
-    def from_limits(cls, limits: Sequence[GroundLimits]) -> GroundLimitTable:
+    def from_limits(cls, limits: Sequence[EndLimits]) -> EndTable:
         count = len(limits)
-        mode: np.ndarray = np.zeros(count, dtype=np.int8)
-        envelope = np.zeros((count, 4))
-        cone = np.zeros((count, 4))
+        surface: np.ndarray = np.zeros(count, dtype=bool)
+        lat, lon = np.zeros(count), np.zeros(count)
+        min_elevation = np.full(count, -math.inf)
+        surface_mode: np.ndarray = np.zeros(count, dtype=np.int8)
+        envelope, cone = np.zeros((count, 4)), np.zeros((count, 4))
+        space_mode: np.ndarray = np.zeros(count, dtype=np.int8)
+        space_half = np.full(count, math.inf)
         for row, limit in enumerate(limits):
-            mode[row], parameters = _ground_regard(limit)
-            if mode[row] == 1:
-                envelope[row] = parameters
-            elif mode[row] == 2:
-                cone[row] = parameters
+            regard = limit.regard
+            if isinstance(regard, SurfaceRegard):
+                surface[row] = True
+                lat[row], lon[row] = regard.lat_deg, regard.lon_deg
+                min_elevation[row] = regard.min_elevation_deg
+                surface_mode[row], parameters = _surface_regard(regard)
+                if surface_mode[row] == 1:
+                    envelope[row] = parameters
+                elif surface_mode[row] == 2:
+                    cone[row] = parameters
+            else:
+                space_mode[row], space_half[row] = _space_regard(regard)
         return cls(
-            lat_deg=np.array([limit.gs_lat_deg for limit in limits], dtype=float),
-            lon_deg=np.array([limit.gs_lon_deg for limit in limits], dtype=float),
-            min_elevation_deg=np.array([limit.min_elevation_deg for limit in limits], dtype=float),
-            max_range_km=np.array(
-                [_smaller(limit.gs_max_range_km, limit.sat_max_range_km) for limit in limits],
-                dtype=float,
-            ),
-            gs_max_rate_deg_s=np.array(
-                [_unbounded_if_none(limit.gs_max_tracking_rate_deg_s) for limit in limits],
-                dtype=float,
-            ),
-            sat_max_rate_deg_s=np.array(
-                [_unbounded_if_none(limit.sat_max_tracking_rate_deg_s) for limit in limits],
-                dtype=float,
-            ),
-            regard_mode=mode,
+            surface=surface,
+            lat_deg=lat,
+            lon_deg=lon,
+            min_elevation_deg=min_elevation,
+            surface_mode=surface_mode,
             envelope=envelope,
             cone=cone,
-            satellite_half_deg=np.array(
-                [_satellite_regard(limit) for limit in limits], dtype=float
-            ),
-            range_rejector=np.array(
-                [
-                    limiting_endpoint(limit.gs_max_range_km, limit.sat_max_range_km)
-                    for limit in limits
-                ],
-                dtype=object,
+            space_mode=space_mode,
+            space_half_deg=space_half,
+            max_range_km=np.array([_unbounded_if_none(limit.max_range_km) for limit in limits]),
+            max_rate_deg_s=np.array(
+                [_unbounded_if_none(limit.max_tracking_rate_deg_s) for limit in limits]
             ),
         )
 
-    def take(self, rows: np.ndarray) -> GroundLimitTable:
-        return GroundLimitTable(*(getattr(self, name)[rows] for name in self.__dataclass_fields__))
+    def take(self, rows: np.ndarray) -> EndTable:
+        return EndTable(*(getattr(self, name)[rows] for name in self.__dataclass_fields__))
 
 
 @dataclass(frozen=True)
-class GroundDirections:
-    """Per direction: reason, rejecting endpoint, the station's elevation and azimuth of its
-    pointing, and the satellite's off-nadir angle of its pointing (NaN where the satellite has
-    no boresight)."""
+class EndCheck:
+    """One end of every direction against its own limits. Elevation and azimuth are the end's
+    look angles in its local sky (NaN on a space end); the off-nadir angle is NaN unless the end
+    has a nadir field of regard."""
 
-    reason: np.ndarray
-    rejecting_endpoint: np.ndarray
+    surface: np.ndarray
     elevation_deg: np.ndarray
     azimuth_deg: np.ndarray
-    sat_off_nadir_deg: np.ndarray
+    below_mask: np.ndarray
+    outside_regard: np.ndarray
+    off_nadir_deg: np.ndarray
+    over_rate: np.ndarray
 
 
-def ground_directions(
-    *,
-    station: EndArrays,
-    satellite: EndArrays,
-    path_km: np.ndarray,
-    blocked: np.ndarray,
-    table: GroundLimitTable,
-) -> GroundDirections:
-    """Ground constraints for each direction, given its station end, satellite end and limits."""
-    local = _enu(table.lat_deg, table.lon_deg, station.pointing_fixed)
+def end_check(end: EndArrays, table: EndTable) -> EndCheck:
+    """One end against its own limits: a surface end in its local sky, a space end against its
+    nadir cone or local-horizontal band, and every end against its own tracking rate."""
+    local = _enu(table.lat_deg, table.lon_deg, end.pointing_fixed)
     elevation = np.degrees(np.arctan2(local[:, 2], np.hypot(local[:, 0], local[:, 1])))
     azimuth = np.degrees(np.arctan2(local[:, 0], local[:, 1])) % 360.0
-
     min_az, max_az, min_el, max_el = table.envelope.T
-    outside_envelope = (table.regard_mode == 1) & ~(
+    outside_envelope = (table.surface_mode == 1) & ~(
         (min_az <= azimuth) & (azimuth <= max_az) & (min_el <= elevation) & (elevation <= max_el)
     )
     length = np.linalg.norm(local, axis=1, keepdims=True)
     target = np.divide(local, length, out=np.zeros_like(local), where=length > 0.0)
     cone_cosine = np.clip(np.einsum("ni,ni->n", table.cone[:, :3], target), -1.0, 1.0)
-    outside_cone = (table.regard_mode == 2) & (
+    outside_cone = (table.surface_mode == 2) & (
         np.degrees(np.arccos(cone_cosine)) > table.cone[:, 3]
     )
-    outside_ground = outside_envelope | outside_cone
+    # A nadir cone points at the centre of the other end's body: the end's own body for a
+    # same-body pair, another body for a lunar orbiter serving an Earth station.
+    nadir_cosine = np.clip(
+        np.einsum("ni,ni->n", end.toward_other_body_fixed, end.pointing_fixed), -1.0, 1.0
+    )
+    off_nadir = np.where(table.space_mode == 1, np.degrees(np.arccos(nadir_cosine)), np.nan)
+    outside_nadir = (table.space_mode == 1) & (off_nadir > table.space_half_deg)
+    outside_band = (table.space_mode == 2) & (_off_horizontal_deg(end) > table.space_half_deg)
+    surface = table.surface
+    return EndCheck(
+        surface=surface,
+        elevation_deg=np.where(surface, elevation, np.nan),
+        azimuth_deg=np.where(surface, azimuth, np.nan),
+        below_mask=surface & (elevation < table.min_elevation_deg),
+        outside_regard=outside_envelope | outside_cone | outside_nadir | outside_band,
+        off_nadir_deg=off_nadir,
+        over_rate=np.degrees(end.rate_rad_s) > table.max_rate_deg_s,
+    )
 
-    has_boresight = np.isfinite(table.satellite_half_deg)
-    # The satellite terminal's nadir points at the centre of the body its station stands on:
-    # the satellite's own body for a same-body pair, another body for a lunar orbiter serving an
-    # Earth station.
-    nadir = satellite.toward_other_body_fixed
-    nadir_cosine = np.clip(np.einsum("ni,ni->n", nadir, satellite.pointing_fixed), -1.0, 1.0)
-    off_nadir = np.where(has_boresight, np.degrees(np.arccos(nadir_cosine)), np.nan)
-    outside_satellite = has_boresight & (off_nadir > table.satellite_half_deg)
 
-    # Each end against its own terminal's limit: the two ends slew at different rates.
-    station_over = np.degrees(station.rate_rad_s) > table.gs_max_rate_deg_s
-    satellite_over = np.degrees(satellite.rate_rad_s) > table.sat_max_rate_deg_s
-    tracking = station_over | satellite_over
-    tracking_rejector = np.where(
-        station_over & satellite_over, "both", np.where(station_over, "ground", "satellite")
-    ).astype(object)
-    out_of_range = path_km > table.max_range_km
+@dataclass(frozen=True)
+class DirectionVerdict:
+    """Per direction: the first failing constraint ("ok" when none), the end that failed it
+    ("transmitter", "receiver", "both", or "none" for line of sight, the elevation mask and the
+    polar seam), and each end's check."""
+
+    reason: np.ndarray
+    rejecting_end: np.ndarray
+    transmitter: EndCheck
+    receiver: EndCheck
+
+
+def direction_reasons(
+    ends: DirectionEnds,
+    transmitter: EndTable,
+    receiver: EndTable,
+    *,
+    polar_seam: np.ndarray | None = None,
+) -> DirectionVerdict:
+    """Every constraint of each direction, in precedence: line of sight, range (the smaller of the
+    two terminals'), elevation mask, field of regard (surface ends first), tracking rate (each end
+    against its own), polar seam (the candidate's flag, evaluated by the caller)."""
+    tx, rx = end_check(ends.transmitter, transmitter), end_check(ends.receiver, receiver)
+    count = len(ends.path_km)
+    range_limit = np.minimum(transmitter.max_range_km, receiver.max_range_km)
+    range_end = np.where(
+        transmitter.max_range_km < receiver.max_range_km,
+        "transmitter",
+        np.where(receiver.max_range_km < transmitter.max_range_km, "receiver", "both"),
+    )
+    tracking = tx.over_rate | rx.over_rate
+    tracking_end = np.where(
+        tx.over_rate & rx.over_rate, "both", np.where(tx.over_rate, "transmitter", "receiver")
+    )
+    seam = np.zeros(count, dtype=bool) if polar_seam is None else polar_seam
     conditions = [
-        blocked,
-        out_of_range,
-        elevation < table.min_elevation_deg,
-        outside_ground,
-        outside_satellite,
+        ends.blocked,
+        ends.path_km > range_limit,
+        tx.below_mask | rx.below_mask,
+        tx.surface & tx.outside_regard,
+        rx.surface & rx.outside_regard,
+        ~tx.surface & tx.outside_regard,
+        ~rx.surface & rx.outside_regard,
         tracking,
+        seam,
     ]
+    none: np.ndarray = np.full(count, "none", dtype=object)
     reason = np.select(
         conditions,
         [
@@ -439,23 +423,74 @@ def ground_directions(
             "elevation_below_min",
             "field_of_regard",
             "field_of_regard",
+            "field_of_regard",
+            "field_of_regard",
             "tracking_exceeded",
+            "polar_seam",
         ],
         default="ok",
     ).astype(object)
     rejecting = np.select(
         conditions,
         [
-            np.full(len(reason), "none", dtype=object),
-            table.range_rejector,
-            np.full(len(reason), "none", dtype=object),
-            np.full(len(reason), "ground", dtype=object),
-            np.full(len(reason), "satellite", dtype=object),
-            tracking_rejector,
+            none,
+            range_end.astype(object),
+            none,
+            np.full(count, "transmitter", dtype=object),
+            np.full(count, "receiver", dtype=object),
+            np.full(count, "transmitter", dtype=object),
+            np.full(count, "receiver", dtype=object),
+            tracking_end.astype(object),
+            none,
         ],
         default="none",
     ).astype(object)
-    return GroundDirections(reason, rejecting, elevation, azimuth, off_nadir)
+    return DirectionVerdict(reason, rejecting, tx, rx)
+
+
+def pair_tables(limits: Sequence[PairLimits]) -> tuple[EndTable, EndTable, np.ndarray]:
+    """The a-end and b-end tables of candidates in pair order, and their polar-seam flags."""
+    return (
+        EndTable.from_limits([pair.a for pair in limits]),
+        EndTable.from_limits([pair.b for pair in limits]),
+        np.array([pair.polar_seam for pair in limits], dtype=bool),
+    )
+
+
+@dataclass(frozen=True)
+class GroundDirections:
+    """Per direction of a ground candidate: reason, rejecting endpoint named by role, the
+    station's elevation and azimuth of its pointing, and the satellite's off-nadir angle of its
+    pointing (NaN where the satellite has no boresight)."""
+
+    reason: np.ndarray
+    rejecting_endpoint: np.ndarray
+    elevation_deg: np.ndarray
+    azimuth_deg: np.ndarray
+    sat_off_nadir_deg: np.ndarray
+
+
+def ground_directions(verdict: DirectionVerdict, *, station_transmits: bool) -> GroundDirections:
+    """A direction verdict in the published ground vocabulary: the station's end is "ground" and
+    the other end "satellite"."""
+    station, satellite = (
+        (verdict.transmitter, verdict.receiver)
+        if station_transmits
+        else (verdict.receiver, verdict.transmitter)
+    )
+    station_end = "transmitter" if station_transmits else "receiver"
+    role = np.where(
+        verdict.rejecting_end == station_end,
+        "ground",
+        np.where(
+            np.isin(verdict.rejecting_end, ["transmitter", "receiver"]),
+            "satellite",
+            verdict.rejecting_end,
+        ),
+    ).astype(object)
+    return GroundDirections(
+        verdict.reason, role, station.elevation_deg, station.azimuth_deg, satellite.off_nadir_deg
+    )
 
 
 # The typed vocabularies the per-direction arrays hold; an unknown value is a producer bug and

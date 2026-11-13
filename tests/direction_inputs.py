@@ -25,13 +25,14 @@ from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, Termina
 from ome.direction_checks import (
     DirectionEnds,
     EndArrays,
-    GroundLimits,
-    GroundLimitTable,
+    EndLimits,
+    EndTable,
     GroundPairVerdict,
-    IslLimits,
+    SpaceRegard,
+    SurfaceRegard,
+    direction_reasons,
     ground_directions,
     ground_pair_verdicts,
-    isl_reasons,
 )
 
 type Vector = Sequence[float]
@@ -95,12 +96,13 @@ def isl_reason(
     on; without it the cutoff is off and no latitude is read.
     """
     end_a, end_b, distance = _ends(pos_a, vel_a, pos_b, vel_b)
-    limit = IslLimits(
+    # Both ends carry the same terminal.
+    limit = EndLimits(
+        SpaceRegard("local_horizontal", field_of_regard_deg),
         max_range_km=max_range_km,
-        field_of_regard_deg=field_of_regard_deg,
         max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-        polar_seam=polar_seam_latitudes_deg is not None,
     )
+    table = EndTable.from_limits([limit, limit])
     lat_a, lat_b = polar_seam_latitudes_deg or (math.nan, math.nan)
     ends = DirectionEnds(
         path_km=np.array([distance, distance]),
@@ -108,13 +110,10 @@ def isl_reason(
         transmitter=_stack(end_a, end_b),
         receiver=_stack(end_b, end_a),
     )
-    reasons = isl_reasons(
-        ends,
-        [limit, limit],
-        transmitter_latitude_deg=np.array([lat_a, lat_b]),
-        receiver_latitude_deg=np.array([lat_b, lat_a]),
-        latitude_threshold_deg=latitude_threshold_deg,
+    seam = polar_seam_latitudes_deg is not None and (
+        abs(lat_a) > latitude_threshold_deg or abs(lat_b) > latitude_threshold_deg
     )
+    reasons = direction_reasons(ends, table, table, polar_seam=np.array([seam, seam])).reason
     return str(reasons[0]) if reasons[0] != "ok" else str(reasons[1])
 
 
@@ -141,25 +140,35 @@ def ground_verdict(
     downlink are one evaluation.
     """
     station, satellite, distance = _ends(gs_km, AT_REST, sat_km, sat_velocity_km_s)
-    limits = GroundLimits(
-        gs_lat_deg=gs_geo.lat_deg,
-        gs_lon_deg=gs_geo.lon_deg,
-        min_elevation_deg=min_elevation_deg,
-        gs_max_range_km=gs_max_range_km,
-        sat_max_range_km=sat_max_range_km,
-        gs_boresight=gs_boresight,
-        gs_field_of_regard_deg=gs_field_of_regard_deg,
-        sat_boresight=sat_boresight,
-        sat_field_of_regard_deg=sat_field_of_regard_deg,
-        gs_max_tracking_rate_deg_s=gs_max_tracking_rate_deg_s,
-        sat_max_tracking_rate_deg_s=sat_max_tracking_rate_deg_s,
+    station_limits = EndLimits(
+        SurfaceRegard(
+            gs_geo.lat_deg,
+            gs_geo.lon_deg,
+            min_elevation_deg,
+            boresight=gs_boresight,
+            field_of_regard_deg=gs_field_of_regard_deg,
+        ),
+        max_range_km=gs_max_range_km,
+        max_tracking_rate_deg_s=gs_max_tracking_rate_deg_s,
     )
-    directions = ground_directions(
-        station=station,
-        satellite=satellite,
+    satellite_limits = EndLimits(
+        SpaceRegard("nadir", None if sat_boresight is None else sat_field_of_regard_deg),
+        max_range_km=sat_max_range_km,
+        max_tracking_rate_deg_s=sat_max_tracking_rate_deg_s,
+    )
+    ends = DirectionEnds(
         path_km=np.array([distance]),
         blocked=np.array([False]),
-        table=GroundLimitTable.from_limits([limits]),
+        transmitter=station,
+        receiver=satellite,
+    )
+    directions = ground_directions(
+        direction_reasons(
+            ends,
+            EndTable.from_limits([station_limits]),
+            EndTable.from_limits([satellite_limits]),
+        ),
+        station_transmits=True,
     )
     (verdict,) = ground_pair_verdicts(directions, directions)
     return verdict

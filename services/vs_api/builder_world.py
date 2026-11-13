@@ -44,7 +44,7 @@ from nodalarc.resolve_session import (
     SessionResolution,
     SessionResolutionError,
 )
-from ome.direction_checks import IslLimits, PairSignals
+from ome.direction_checks import EndLimits, PairLimits, PairSignals, SpaceRegard
 from ome.event_stream import build_session_ephemeris, build_step_context
 from ome.ground_visibility_engine import GroundGeometry
 from ome.isl_engine import isl_pair_reasons
@@ -238,13 +238,12 @@ def _isl_limits(
     candidate: Any,
     ctx: Any,
     rule: ResolvedLinkRule,
-) -> tuple[float | None, float]:
-    """``(max_range_km, field_of_regard_deg)`` for an ISL pair, min-reduced
-    across the two endpoints' terminals, the reduction the runtime applies.
-    A fixed pair uses the terminals the allocator
-    assigned (its interfaces); a visible pair, which has no assignment, reduces
-    across each node's ISL terminals. FoR defaults to 360 (gate off) when no
-    terminal limit is known.
+) -> tuple[EndLimits, EndLimits] | None:
+    """Each end's own range and field of regard for an ISL pair, as the runtime checks them;
+    None when no range is known. A fixed pair uses the terminals the allocator assigned (its
+    interfaces); a visible pair, which has no assignment, takes each node's tightest ISL
+    terminal. FoR is 360 (gate off) when no terminal limit is known. Tracking is a motion gate,
+    off for a frozen epoch.
 
     Each node is keyed to ITS OWN allocated interface by node id (never by
     argument position), so orientation can never re-pair a node with the other
@@ -269,12 +268,17 @@ def _isl_limits(
             min(float(t.field_of_regard_deg) for t in by_iface.values()),
         )
 
+    def _end(limit: tuple[float, float]) -> EndLimits:
+        return EndLimits(SpaceRegard("local_horizontal", limit[1]), max_range_km=limit[0])
+
     la = _node_limit(node_a)
     lb = _node_limit(node_b)
     if la is None or lb is None:
         rng = rule.constraints.max_range_km if rule.constraints else None
-        return (float(rng) if rng is not None else None), 360.0
-    return min(la[0], lb[0]), min(la[1], lb[1])
+        if rng is None:
+            return None
+        return _end((float(rng), 360.0)), _end((float(rng), 360.0))
+    return _end(la), _end(lb)
 
 
 def _isl_terminal_type(node_id: str, candidate: Any, ctx: Any) -> str | None:
@@ -295,7 +299,7 @@ def _isl_terminal_type(node_id: str, candidate: Any, ctx: Any) -> str | None:
 
 
 # A pair the preview judges with geometry: (kind, node ids, ISL limits or None).
-type _GeometryRequest = tuple[str, str, str, IslLimits | None]
+type _GeometryRequest = tuple[str, str, str, PairLimits | None]
 
 
 def _isl_request(
@@ -323,16 +327,11 @@ def _isl_request(
     type_b = _isl_terminal_type(node_b, candidate, ctx)
     if type_a is not None and type_b is not None and type_a != type_b:
         return "terminal_type_mismatch"
-    max_range, fov = _isl_limits(node_a, node_b, candidate, ctx, rule)
-    if max_range is None:
+    ends = _isl_limits(node_a, node_b, candidate, ctx, rule)
+    if ends is None:
         return "no_geometry"
-    limits = IslLimits(
-        max_range_km=max_range,
-        field_of_regard_deg=fov,
-        max_tracking_rate_deg_s=None,  # motion gate — off for a frozen epoch
-        polar_seam=False,  # motion gate — off for a frozen epoch
-    )
-    return ("isl", node_a, node_b, limits)
+    # The polar seam is a motion gate, off for a frozen epoch.
+    return ("isl", node_a, node_b, PairLimits(ends[0], ends[1], polar_seam=False))
 
 
 def _ground_request(
@@ -373,7 +372,7 @@ def _pair_request(
     return "no_geometry"
 
 
-def _isl_limits_of(request: _GeometryRequest) -> IslLimits:
+def _isl_limits_of(request: _GeometryRequest) -> PairLimits:
     limits = request[3]
     if limits is None:
         raise ValueError(f"ISL preview request {request[1]}<->{request[2]} carries no limits")

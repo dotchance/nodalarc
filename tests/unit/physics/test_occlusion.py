@@ -45,9 +45,12 @@ from nodalarc.physics.lighttime import (
 from nodalarc.physics.occlusion import PathEnds, obstructions
 from ome.direction_checks import (
     DirectionEnds,
-    GroundLimits,
-    GroundLimitTable,
+    EndLimits,
+    EndTable,
     GroundPairVerdict,
+    SpaceRegard,
+    SurfaceRegard,
+    direction_reasons,
     ground_directions,
     ground_pair_verdicts,
 )
@@ -326,23 +329,25 @@ def _ground_verdict(
         physics, SHAPES, [station_end, satellite], [satellite, station_end], sent
     )
     ends = DirectionEnds.from_signals(signals)
-    table = GroundLimitTable.from_limits(
-        [GroundLimits(station.lat_deg, station.lon_deg, min_elevation_deg)]
+    station_table = EndTable.from_limits(
+        [EndLimits(SurfaceRegard(station.lat_deg, station.lon_deg, min_elevation_deg))]
     )
-    up, down = np.array([0]), np.array([1])
+    satellite_table = EndTable.from_limits([EndLimits(SpaceRegard("nadir"))])
+
+    def direction(row: int) -> DirectionEnds:
+        rows = np.array([row])
+        return DirectionEnds(
+            ends.path_km[rows],
+            ends.blocked[rows],
+            ends.transmitter.take(rows),
+            ends.receiver.take(rows),
+        )
+
     uplink = ground_directions(
-        station=ends.transmitter.take(up),
-        satellite=ends.receiver.take(up),
-        path_km=ends.path_km[up],
-        blocked=ends.blocked[up],
-        table=table,
+        direction_reasons(direction(0), station_table, satellite_table), station_transmits=True
     )
     downlink = ground_directions(
-        station=ends.receiver.take(down),
-        satellite=ends.transmitter.take(down),
-        path_km=ends.path_km[down],
-        blocked=ends.blocked[down],
-        table=table,
+        direction_reasons(direction(1), satellite_table, station_table), station_transmits=False
     )
     (verdict,) = ground_pair_verdicts(uplink, downlink)
     return verdict

@@ -109,7 +109,7 @@ def test_constellation_phasing_mode_matches_the_declared_plane_shape() -> None:
 SHIPPED_SESSION_SHAPES = {
     "earth-geo-inmarsat.yaml": (8, 16),
     "earth-geo-tdrs.yaml": (10, 24),
-    "earth-leo-heo-geo-luna-reachability.yaml": (132, 587),
+    "earth-leo-heo-geo-luna-reachability.yaml": (137, 767),
     # 80/153: a full Iridium-class 66-satellite shell (continuous
     # mid-latitude coverage), GEO ring, lunar ELFO relays, one Earth QUIC
     # lab and one lunar QUIC lab, each pairing a routed gateway with a
@@ -140,17 +140,19 @@ SHIPPED_SESSION_SHAPES = {
     # cross-plane pairs — at this shell's density the ground segment
     # carries inter-chain connectivity (BBM bridge gateways hold steady
     # multi-links; MBB's reserve would forbid bridging).
-    "earth-leo-polar.yaml": (45, 282),
+    "earth-leo-polar.yaml": (47, 354),
     # 45/288: the polar sky plus the six counter-rotating seam pairs (plane 5
     # to plane 0, same slot), a range-transition experiment.
-    "earth-leo-polar-seam.yaml": (45, 288),
+    "earth-leo-polar-seam.yaml": (47, 360),
     # 45/258: the seam-crossing phasing of the same shell with only the six
     # two-slot-offset seam pairs, a tracking-limit experiment.
-    "earth-leo-polar-seam-tracking.yaml": (45, 258),
-    "earth-leo-simple.yaml": (41, 180),
-    # 1056 = 880 + 176: the ISL rule moved from nearest_n (176 degree-capped
-    # pairs, a disconnected graph) to the explicit 352-pair grid.
-    "earth-leo-walker.yaml": (181, 1056),
+    "earth-leo-polar-seam-tracking.yaml": (47, 330),
+    # 51/540: fourteen sites (Denver carries two routers) and 36 satellites; each site
+    # router is an access candidate of every satellite.
+    "earth-leo-simple.yaml": (51, 540),
+    # 2816 = 2464 + 352: 14 site routers by 176 satellites, and the explicit 352-pair
+    # ISL grid (the rule moved from nearest_n, a disconnected graph).
+    "earth-leo-walker.yaml": (191, 2816),
     "earth-meo-gps.yaml": (31, 120),
 }
 
@@ -298,11 +300,11 @@ def test_generated_space_nodes_get_deterministic_runtime_loopbacks() -> None:
     assert all(node.interfaces is not None for node in satellites)
     # Ground environments allocate from the shared pool first (sorted by
     # node id in the segment-allocation pass), so the first satellites
-    # follow the five simple-session ground routers.
+    # follow the fifteen simple-session ground routers.
     assert [node.interfaces.lo0.ipv4 for node in satellites[:3] if node.interfaces] == [
-        "100.64.0.6/32",
-        "100.64.0.7/32",
-        "100.64.0.8/32",
+        "100.64.0.16/32",
+        "100.64.0.17/32",
+        "100.64.0.18/32",
     ]
     # The session declares no IPv6 loopback, so no node holds one.
     assert all(node.interfaces.lo0.ipv6 is None for node in satellites if node.interfaces)

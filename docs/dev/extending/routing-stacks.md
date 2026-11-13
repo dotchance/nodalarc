@@ -112,7 +112,7 @@ routing:
       selectors: [{any: [{segment: leo}, {segment: ground}]}]
 simulation:
   candidate_limits:
-    max_pairs_per_rule: 500
+    max_pairs_per_rule: 600
     max_pairs_per_tick: 2000
 time:
   start_time: '2026-06-08T00:00:00Z'

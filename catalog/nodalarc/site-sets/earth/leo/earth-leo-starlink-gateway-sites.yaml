@@ -12,7 +12,12 @@ site_set:
   - nodalarc:sites/earth/br/earth-br-sao-paulo.yaml
   - nodalarc:sites/earth/nz/earth-nz-christchurch.yaml
   - nodalarc:sites/earth/us/hi/earth-us-hi-honolulu.yaml
-  notes: Seven LEO A gateway sites spread across longitudes so the single
-    53-degree ring's coverage windows tile more of the day. Fairbanks was
+  - nodalarc:sites/earth/us/wa/earth-us-wa-brewster.yaml
+  - nodalarc:sites/earth/us/earth-us-hitterdal.yaml
+  - nodalarc:sites/earth/us/earth-us-slope-county.yaml
+  - nodalarc:sites/earth/us/earth-us-colburn.yaml
+  notes: Eleven LEO A gateway sites spread across longitudes so the single
+    53-degree ring's coverage windows tile more of the day. Brewster, Hitterdal,
+    Slope County and Colburn see the ring the longest share of the day. Fairbanks was
     removed - at 64.8 N it sits above the ring's coverage band and can never
     schedule a pass over its 25-degree elevation mask.

@@ -1079,7 +1079,11 @@
                 "earth-es-madrid-gw1",
                 "earth-br-sao-paulo-gw1",
                 "earth-nz-christchurch-gw1",
-                "earth-us-hi-honolulu-gw1"
+                "earth-us-hi-honolulu-gw1",
+                "earth-us-wa-brewster-gw1",
+                "earth-us-hitterdal-gw1",
+                "earth-us-slope-county-gw1",
+                "earth-us-colburn-gw1"
               ],
               "segment_id": "leo_a_ground",
               "terminal_medium": "rf",
@@ -1146,7 +1150,8 @@
                 "earth-dj-djibouti-gw1",
                 "earth-sg-singapore-gw1",
                 "earth-za-cape-town-gw1",
-                "earth-jp-tokyo-gw1"
+                "earth-jp-tokyo-gw1",
+                "earth-us-prudhoe-bay-gw1"
               ],
               "segment_id": "leo_b_ground",
               "terminal_medium": "rf",
@@ -15125,8 +15130,8 @@
           "interfaces": {
             "ethernet": {
               "terr0": {
-                "ipv4": "172.16.14.1/24",
-                "ipv6": "fd00:da7a:0:e::1/64"
+                "ipv4": "172.16.15.1/24",
+                "ipv6": "fd00:da7a:0:f::1/64"
               }
             },
             "lo0": {
@@ -15141,10 +15146,10 @@
           "originated_prefixes": {
             "ipv4": [
               "0.0.0.0/0",
-              "172.16.14.0/24"
+              "172.16.15.0/24"
             ],
             "ipv6": [
-              "fd00:da7a:0:e::/64"
+              "fd00:da7a:0:f::/64"
             ]
           },
           "plane": null,
@@ -15227,12 +15232,500 @@
           "interfaces": {
             "ethernet": {
               "terr0": {
+                "ipv4": "172.16.20.1/24",
+                "ipv6": "fd00:da7a:0:14::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.96/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "earth-us-wa-brewster-gw1",
+          "namespace": "earth-us-wa-brewster",
+          "node_id": "earth-us-wa-brewster-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "0.0.0.0/0",
+              "172.16.20.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:14::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "earth_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "term1"
+                },
+                {
+                  "area_id": null,
+                  "name": "term2"
+                },
+                {
+                  "area_id": null,
+                  "name": "term3"
+                },
+                {
+                  "area_id": null,
+                  "name": "term4"
+                },
+                {
+                  "area_id": null,
+                  "name": "term5"
+                },
+                {
+                  "area_id": null,
+                  "name": "term6"
+                },
+                {
+                  "area_id": null,
+                  "name": "term7"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "leo_a_ground",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 260.0,
+            "body": "earth",
+            "lat_deg": 48.1,
+            "lon_deg": -119.78
+          },
+          "tags": [
+            "leo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 8,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 120.0,
+              "installed_min_elevation_deg": 30.0,
+              "link_role": null,
+              "max_range_km": 1250.0,
+              "medium": "rf",
+              "min_elevation_deg": 30.0,
+              "owner_node_id": "earth-us-wa-brewster-gw1",
+              "receive_mbps": 5000.0,
+              "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-ground-gateway.yaml",
+              "source_terminal_id": "rf-ka-starlink-ground-gateway",
+              "terminal_id": "access_ka",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.5,
+              "transmit_mbps": 5000.0
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.16.1/24",
+                "ipv6": "fd00:da7a:0:10::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.97/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "earth-us-hitterdal-gw1",
+          "namespace": "earth-us-hitterdal",
+          "node_id": "earth-us-hitterdal-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "0.0.0.0/0",
+              "172.16.16.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:10::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "earth_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "term1"
+                },
+                {
+                  "area_id": null,
+                  "name": "term2"
+                },
+                {
+                  "area_id": null,
+                  "name": "term3"
+                },
+                {
+                  "area_id": null,
+                  "name": "term4"
+                },
+                {
+                  "area_id": null,
+                  "name": "term5"
+                },
+                {
+                  "area_id": null,
+                  "name": "term6"
+                },
+                {
+                  "area_id": null,
+                  "name": "term7"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "leo_a_ground",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 360.0,
+            "body": "earth",
+            "lat_deg": 46.978917,
+            "lon_deg": -96.258028
+          },
+          "tags": [
+            "leo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 8,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 120.0,
+              "installed_min_elevation_deg": 30.0,
+              "link_role": null,
+              "max_range_km": 1250.0,
+              "medium": "rf",
+              "min_elevation_deg": 30.0,
+              "owner_node_id": "earth-us-hitterdal-gw1",
+              "receive_mbps": 5000.0,
+              "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-ground-gateway.yaml",
+              "source_terminal_id": "rf-ka-starlink-ground-gateway",
+              "terminal_id": "access_ka",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.5,
+              "transmit_mbps": 5000.0
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.19.1/24",
+                "ipv6": "fd00:da7a:0:13::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.98/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "earth-us-slope-county-gw1",
+          "namespace": "earth-us-slope-county",
+          "node_id": "earth-us-slope-county-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "0.0.0.0/0",
+              "172.16.19.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:13::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "earth_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "term1"
+                },
+                {
+                  "area_id": null,
+                  "name": "term2"
+                },
+                {
+                  "area_id": null,
+                  "name": "term3"
+                },
+                {
+                  "area_id": null,
+                  "name": "term4"
+                },
+                {
+                  "area_id": null,
+                  "name": "term5"
+                },
+                {
+                  "area_id": null,
+                  "name": "term6"
+                },
+                {
+                  "area_id": null,
+                  "name": "term7"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "leo_a_ground",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 800.0,
+            "body": "earth",
+            "lat_deg": 46.408389,
+            "lon_deg": -103.114583
+          },
+          "tags": [
+            "leo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 8,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 120.0,
+              "installed_min_elevation_deg": 30.0,
+              "link_role": null,
+              "max_range_km": 1250.0,
+              "medium": "rf",
+              "min_elevation_deg": 30.0,
+              "owner_node_id": "earth-us-slope-county-gw1",
+              "receive_mbps": 5000.0,
+              "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-ground-gateway.yaml",
+              "source_terminal_id": "rf-ka-starlink-ground-gateway",
+              "terminal_id": "access_ka",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.5,
+              "transmit_mbps": 5000.0
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.14.1/24",
+                "ipv6": "fd00:da7a:0:e::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.99/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "earth-us-colburn-gw1",
+          "namespace": "earth-us-colburn",
+          "node_id": "earth-us-colburn-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "0.0.0.0/0",
+              "172.16.14.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:e::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "earth_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "term1"
+                },
+                {
+                  "area_id": null,
+                  "name": "term2"
+                },
+                {
+                  "area_id": null,
+                  "name": "term3"
+                },
+                {
+                  "area_id": null,
+                  "name": "term4"
+                },
+                {
+                  "area_id": null,
+                  "name": "term5"
+                },
+                {
+                  "area_id": null,
+                  "name": "term6"
+                },
+                {
+                  "area_id": null,
+                  "name": "term7"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "leo_a_ground",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 600.0,
+            "body": "earth",
+            "lat_deg": 48.34525,
+            "lon_deg": -116.439333
+          },
+          "tags": [
+            "leo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 8,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 120.0,
+              "installed_min_elevation_deg": 30.0,
+              "link_role": null,
+              "max_range_km": 1250.0,
+              "medium": "rf",
+              "min_elevation_deg": 30.0,
+              "owner_node_id": "earth-us-colburn-gw1",
+              "receive_mbps": 5000.0,
+              "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-ground-gateway.yaml",
+              "source_terminal_id": "rf-ka-starlink-ground-gateway",
+              "terminal_id": "access_ka",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.5,
+              "transmit_mbps": 5000.0
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
                 "ipv4": "172.16.4.1/24",
                 "ipv6": "fd00:da7a:0:4::1/64"
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.96/32",
+              "ipv4": "10.255.0.100/32",
               "ipv6": null
             }
           },
@@ -15330,7 +15823,7 @@
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.97/32",
+              "ipv4": "10.255.0.101/32",
               "ipv6": null
             }
           },
@@ -15427,12 +15920,12 @@
           "interfaces": {
             "ethernet": {
               "terr0": {
-                "ipv4": "172.16.16.1/24",
-                "ipv6": "fd00:da7a:0:10::1/64"
+                "ipv4": "172.16.21.1/24",
+                "ipv6": "fd00:da7a:0:15::1/64"
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.98/32",
+              "ipv4": "10.255.0.102/32",
               "ipv6": null
             }
           },
@@ -15443,10 +15936,10 @@
           "originated_prefixes": {
             "ipv4": [
               "0.0.0.0/0",
-              "172.16.16.0/24"
+              "172.16.21.0/24"
             ],
             "ipv6": [
-              "fd00:da7a:0:10::/64"
+              "fd00:da7a:0:15::/64"
             ]
           },
           "plane": null,
@@ -15534,7 +16027,7 @@
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.99/32",
+              "ipv4": "10.255.0.103/32",
               "ipv6": null
             }
           },
@@ -15631,12 +16124,134 @@
           "interfaces": {
             "ethernet": {
               "terr0": {
-                "ipv4": "172.16.15.1/24",
-                "ipv6": "fd00:da7a:0:f::1/64"
+                "ipv4": "172.16.18.1/24",
+                "ipv6": "fd00:da7a:0:12::1/64"
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.100/32",
+              "ipv4": "10.255.0.104/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "earth-us-prudhoe-bay-gw1",
+          "namespace": "earth-us-prudhoe-bay",
+          "node_id": "earth-us-prudhoe-bay-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "0.0.0.0/0",
+              "172.16.18.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:12::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "earth_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "term1"
+                },
+                {
+                  "area_id": null,
+                  "name": "term2"
+                },
+                {
+                  "area_id": null,
+                  "name": "term3"
+                },
+                {
+                  "area_id": null,
+                  "name": "term4"
+                },
+                {
+                  "area_id": null,
+                  "name": "term5"
+                },
+                {
+                  "area_id": null,
+                  "name": "term6"
+                },
+                {
+                  "area_id": null,
+                  "name": "term7"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "leo_b_ground",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 10.0,
+            "body": "earth",
+            "lat_deg": 70.246556,
+            "lon_deg": -148.569
+          },
+          "tags": [
+            "leo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 8,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 120.0,
+              "installed_min_elevation_deg": 30.0,
+              "link_role": null,
+              "max_range_km": 1250.0,
+              "medium": "rf",
+              "min_elevation_deg": 30.0,
+              "owner_node_id": "earth-us-prudhoe-bay-gw1",
+              "receive_mbps": 5000.0,
+              "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-ground-gateway.yaml",
+              "source_terminal_id": "rf-ka-starlink-ground-gateway",
+              "terminal_id": "access_ka",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.5,
+              "transmit_mbps": 5000.0
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.17.1/24",
+                "ipv6": "fd00:da7a:0:11::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.105/32",
               "ipv6": null
             }
           },
@@ -15646,10 +16261,10 @@
           "node_id": "earth-us-nm-white-sands-gw1",
           "originated_prefixes": {
             "ipv4": [
-              "172.16.15.0/24"
+              "172.16.17.0/24"
             ],
             "ipv6": [
-              "fd00:da7a:0:f::/64"
+              "fd00:da7a:0:11::/64"
             ]
           },
           "plane": null,
@@ -15733,7 +16348,7 @@
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.101/32",
+              "ipv4": "10.255.0.106/32",
               "ipv6": null
             }
           },
@@ -15831,7 +16446,7 @@
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.102/32",
+              "ipv4": "10.255.0.107/32",
               "ipv6": null
             }
           },
@@ -15921,7 +16536,7 @@
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.103/32",
+              "ipv4": "10.255.0.108/32",
               "ipv6": null
             }
           },
@@ -16018,7 +16633,7 @@
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.104/32",
+              "ipv4": "10.255.0.109/32",
               "ipv6": null
             }
           },
@@ -16150,7 +16765,7 @@
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.105/32",
+              "ipv4": "10.255.0.110/32",
               "ipv6": null
             }
           },
@@ -16282,7 +16897,7 @@
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.106/32",
+              "ipv4": "10.255.0.111/32",
               "ipv6": null
             }
           },
@@ -16414,7 +17029,7 @@
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.107/32",
+              "ipv4": "10.255.0.112/32",
               "ipv6": null
             }
           },
@@ -16498,12 +17113,12 @@
           "interfaces": {
             "ethernet": {
               "terr0": {
-                "ipv4": "172.16.17.1/24",
-                "ipv6": "fd00:da7a:0:11::1/64"
+                "ipv4": "172.16.22.1/24",
+                "ipv6": "fd00:da7a:0:16::1/64"
               }
             },
             "lo0": {
-              "ipv4": "10.255.0.108/32",
+              "ipv4": "10.255.0.113/32",
               "ipv6": null
             }
           },
@@ -16513,10 +17128,10 @@
           "node_id": "luna-artemis-base-gw1",
           "originated_prefixes": {
             "ipv4": [
-              "172.16.17.0/24"
+              "172.16.22.0/24"
             ],
             "ipv6": [
-              "fd00:da7a:0:11::/64"
+              "fd00:da7a:0:16::/64"
             ]
           },
           "plane": null,

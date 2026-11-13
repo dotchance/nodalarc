@@ -25,6 +25,10 @@ from tests.physics_fixtures import EARTH_TEST_BODY_FRAME
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
+# The fixture runs OME over one orbital period of earth-leo-simple: 14 sites and 36 satellites
+# take about 55 s, past the suite's 30 s default.
+pytestmark = pytest.mark.timeout(120)
+
 
 def _custom_example_period_s() -> float:
     body_frame = EARTH_TEST_BODY_FRAME

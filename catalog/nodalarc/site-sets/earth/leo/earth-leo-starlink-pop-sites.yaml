@@ -9,4 +9,17 @@ site_set:
   - nodalarc:sites/earth/us/co/earth-us-co-denver.yaml
   - nodalarc:sites/earth/us/va/earth-us-va-ashburn.yaml
   - nodalarc:sites/earth/de/earth-de-frankfurt.yaml
-  notes: Small Starlink-style gateway set for simple LEO demos.
+  - nodalarc:sites/earth/us/earth-us-loring.yaml
+  - nodalarc:sites/earth/us/earth-us-cass-county.yaml
+  - nodalarc:sites/earth/us/earth-us-redmond.yaml
+  - nodalarc:sites/earth/us/earth-us-conrad.yaml
+  - nodalarc:sites/earth/us/earth-us-manistique.yaml
+  - nodalarc:sites/earth/gb/earth-gb-london.yaml
+  - nodalarc:sites/earth/nl/earth-nl-amsterdam.yaml
+  - nodalarc:sites/earth/pl/earth-pl-warsaw.yaml
+  - nodalarc:sites/earth/de/earth-de-berlin.yaml
+  - nodalarc:sites/earth/fk/earth-fk-stanley.yaml
+  notes: Starlink-style gateway set for the LEO demos. The four PoP cities and ten
+    gateway sites chosen by the share of the day each sees the 53-degree shells
+    above its 25-degree mask, among sites with the two or more access terminals
+    make-before-break handover needs.

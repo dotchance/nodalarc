@@ -129,7 +129,7 @@ link_rules:
 
 simulation:
   candidate_limits:
-    max_pairs_per_rule: 500
+    max_pairs_per_rule: 600
     max_pairs_per_tick: 2000
 
 time:

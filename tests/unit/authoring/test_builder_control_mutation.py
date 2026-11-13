@@ -192,7 +192,7 @@ def test_scalar_presence_and_literal_choice_advance_one_compiled_revision(
     assert result.visual_draft.applied_session["simulation"]["ground_link_model"] == "geometry_only"
     assert result.visual_draft.applied_session["simulation"]["acknowledge_geometry_only"] is True
     assert result.visual_draft.applied_session["simulation"]["candidate_limits"] == {
-        "max_pairs_per_rule": 500,
+        "max_pairs_per_rule": 600,
         "max_pairs_per_tick": 2000,
     }
     assert result.compile_result.draft.draft_revision == result.visual_draft.draft_revision

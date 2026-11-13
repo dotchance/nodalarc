@@ -12,6 +12,8 @@ site_set:
   - nodalarc:sites/earth/za/earth-za-cape-town.yaml
   - nodalarc:sites/earth/jp/earth-jp-tokyo.yaml
   - nodalarc:sites/earth/us/co/earth-us-co-denver.yaml
+  - nodalarc:sites/earth/us/ak/earth-us-ak-fairbanks.yaml
+  - nodalarc:sites/earth/us/earth-us-prudhoe-bay.yaml
   notes: Gateway sites with LEO access terminals sized for the 780 km polar
     shell at the declared access mask. At this shell's density the only
     physically visible inter-satellite links are the six cross-plane
@@ -24,3 +26,5 @@ site_set:
     Svalbard anchors the polar convergence; Frankfurt, Djibouti,
     Singapore, Cape Town, and Tokyo spread the remaining bridges across
     longitudes and hemispheres.
+    Fairbanks and Prudhoe Bay add high-latitude gateways, where the shell's
+    passes are most frequent.

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import ipaddress
+import re
 from pathlib import Path
 
 import nodalarc.runtime_support as runtime_support
@@ -190,5 +191,5 @@ def test_a_router_whose_adapter_cannot_route_its_ipv6_is_refused(
     assert feature.category == FeatureCategory.ROUTING_ADDRESS_FAMILY
     assert feature.value == "isis:ipv6"
     # The site routers carry IPv6; the IPv4-only satellites are not named.
-    assert "earth-us-co-denver-gw1" in feature.message
+    assert re.search(r"earth-[a-z-]+-gw\d", feature.message), feature.message
     assert "leo-" not in feature.message

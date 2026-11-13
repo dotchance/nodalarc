@@ -1464,5 +1464,5 @@ def test_a_resolution_reads_each_catalog_object_once(monkeypatch) -> None:
     )
     resolved = resolver_module.resolve_session(raw, catalog=shipped_read_view())
 
-    assert len(resolved.nodes) == 181
+    assert len(resolved.nodes) == 191
     assert loads and len(loads) == len(set(loads))

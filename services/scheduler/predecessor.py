@@ -10,14 +10,27 @@ recovery and its stale footprint. A Scheduler that holds the writer Lease reads 
 commands anything, so its first reconcile starts from what the kernel carries: it takes down the
 links OME no longer wants, brings up the new ones and retimes every link it took over.
 
+The record describes the network namespaces of the pods the predecessor's wiring gate proved,
+named by their sandboxes in the snapshot. A pod replaced since then (a ``make upgrade`` that
+rolls the session images replaces every one) was wired anew by its Node Agent from nothing, under
+the same session and wiring generation. What the record says about that pod is not in the
+kernel, so the successor takes over only what sits in sandboxes its own wiring gate still
+proves. A link with both ends on replaced pods is gone. A link with one end on a replaced pod
+left its other half where it was: an access link's half becomes its station's stale footprint
+and the station starts unproven; a fixed link is left out, and the first reconcile brings it up
+as a Scheduler with no predecessor does.
+
 Rejected alternative: survey the kernel with KernelInventory and build ``_actual_links`` from what
 it finds. KernelInventory is the referee that compares the kernel with the Scheduler's record. A
-referee that writes the record it judges proves nothing, so the invariants forbid it.
+referee that writes the record it judges proves nothing, so the invariants forbid it. Rejected
+too: fence the record by the session's run identity. The Operator keeps it when one pod is
+replaced, so it cannot tell which namespaces still hold the record's links.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from nodalarc.models.events import OpsEvent
@@ -44,6 +57,42 @@ STATION_STATE_CODES = frozenset(
         SchedulerOpsCode.KERNEL_DIRTY,
     }
 )
+
+
+@dataclass(frozen=True)
+class Takeover:
+    """What a starting Scheduler took over from its predecessor.
+
+    ``recorded``: the stations whose retained state it resumes. ``rewired``: the nodes whose pod
+    was replaced since the predecessor's wiring gate; their Node Agent wired them anew, and the
+    successor's own wiring gate proved that wiring. ``unproven``: the stations left holding a link
+    half whose other end was rewired, which start kernel_dirty until KernelInventory proves the
+    half down.
+    """
+
+    predecessor: str
+    recorded: frozenset[str]
+    rewired: frozenset[str]
+    unproven: frozenset[str]
+
+
+def rewired_nodes(
+    snapshot: ActualLinkSnapshot, wired_sandboxes: Mapping[str, str]
+) -> frozenset[str]:
+    """The nodes whose pod sandbox differs from the one the predecessor's wiring gate proved."""
+    return frozenset(
+        node_id
+        for node_id, sandbox in wired_sandboxes.items()
+        if snapshot.wired_sandboxes.get(node_id) != sandbox
+    )
+
+
+def still_in_kernel(
+    footprint: Mapping[LinkPair, ActiveLinkInfo], rewired: frozenset[str]
+) -> dict[LinkPair, ActiveLinkInfo]:
+    """The rows of a stale footprint that can still hold kernel state: those with an end on a pod
+    that was not wired anew. A row with both ends rewired names nothing left in the kernel."""
+    return {pair: info for pair, info in footprint.items() if not set(pair) <= rewired}
 
 
 class _RecordIdentity(BaseModel):
@@ -135,17 +184,22 @@ def inherited_actual_links(
     interface_map: Mapping[LinkPair, tuple[str, str]],
     gs_capacities: Mapping[str, int],
     long_delay_pairs: frozenset[LinkPair],
-) -> dict[LinkPair, ActiveLinkInfo]:
-    """The predecessor's proven links as this Scheduler's record of them.
+    rewired: frozenset[str],
+) -> tuple[dict[LinkPair, ActiveLinkInfo], dict[LinkPair, ActiveLinkInfo]]:
+    """The predecessor's proven links as this Scheduler's record of them, and the access-link
+    halves that a rewired pod left at the other end.
 
     Each record holds the delays the kernel was commanded and no OME range: OME's geometry for
     the link is unknown until its next snapshot, so the first reconcile retimes every inherited
     link it still wants, as it retimes an adopted long-delay contact. A fixed link sits on the
     interfaces the session's map gives it, an access link on a station's terminal; a link that
     fits neither is not this session's and refuses the start. Long-delay links are left out:
-    their contacts live in the kernel, and the long-delay adoption surveys them there.
+    their contacts live in the kernel, and the long-delay adoption surveys them there. A link
+    with an end on a rewired pod is not in the kernel (see the module docstring); when only one
+    end of an access link was rewired, the other half comes back as a stale footprint row.
     """
     links: dict[LinkPair, ActiveLinkInfo] = {}
+    stale: dict[LinkPair, ActiveLinkInfo] = {}
     for row in snapshot.active_links:
         pair = (row.pair[0], row.pair[1])
         if pair in long_delay_pairs:
@@ -165,6 +219,11 @@ def inherited_actual_links(
                 f"Scheduler {snapshot.scheduler_instance_id} proved {pair} up; it is neither a "
                 "fixed link nor an access link of this session"
             )
+        ends_rewired = len(set(pair) & rewired)
+        if ends_rewired == 1 and link_type == "ground":
+            stale[pair] = ActiveLinkInfo(interfaces[0], interfaces[1], 0.0, 0.0, link_type="ground")
+        if ends_rewired:
+            continue
         netem = (row.netem_ms[0], row.netem_ms[1])
         links[pair] = ActiveLinkInfo(
             interfaces[0],
@@ -174,7 +233,7 @@ def inherited_actual_links(
             link_type=link_type,
             commanded_netem_ms=netem,
         )
-    return links
+    return links, stale
 
 
 def inherited_station_state(

@@ -167,8 +167,10 @@ def wait_for_wiring_gate(
     poll_s: float = 2.0,
     monotonic: Callable[[], float] = _time.monotonic,
     sleep: Callable[[float], None] = _time.sleep,
-) -> None:
-    """Block Scheduler startup until Node Agent wiring is complete.
+) -> dict[str, str]:
+    """Block Scheduler startup until Node Agent wiring is complete, and return the pod sandbox
+    of each expected node as its wiring proof names it: the network namespaces this Scheduler
+    commands, which its link record names for a successor.
 
     Dispatching before every namespace has its veth/bridge wiring creates a
     topology that can never match OME's authoritative link state. Timeout is a
@@ -183,7 +185,7 @@ def wait_for_wiring_gate(
             ready = {node_id for node_id, status in statuses.items() if status.ready_for(manifest)}
             if expected_nodes.issubset(ready):
                 log.info("Wiring gate passed: %d/%d nodes ready", len(ready), expected_count)
-                return
+                return {node_id: statuses[node_id].sandbox_id for node_id in expected_nodes}
             current_statuses = {
                 node_id: status
                 for node_id, status in statuses.items()
@@ -571,7 +573,7 @@ def _run_scheduler() -> None:
         len(expected_nodes),
         wiring_manifest.wiring_generation,
     )
-    wait_for_wiring_gate(
+    wired_sandboxes = wait_for_wiring_gate(
         k8s_v1=k8s_v1,
         namespace=ns,
         manifest=wiring_manifest,
@@ -635,6 +637,7 @@ def _run_scheduler() -> None:
             clean_kernel_audit_interval_s=get_platform_config().scheduler_clean_kernel_audit_interval_s,
             session_id=session_id,
             wiring_generation=wiring_manifest.wiring_generation,
+            wired_sandboxes=wired_sandboxes,
             required_substrate_pairs=wiring_manifest.required_substrate_pairs,
             substrate_measurements=substrate_measurements,
             read_lifecycle_identity=_make_lifecycle_identity_reader(k8s_v1, ns),

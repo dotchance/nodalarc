@@ -166,6 +166,7 @@ from scheduler.long_delay_adoption import (
 from scheduler.node_agent_batches import LinkUpBatchPlan
 from scheduler.pod_locator import PodLocationMap
 from scheduler.predecessor import (
+    Takeover,
     commanded_rows,
     footprint_rows,
     inherited_actual_links,
@@ -173,6 +174,8 @@ from scheduler.predecessor import (
     predecessor_snapshot,
     predecessor_station_records,
     read_retained,
+    rewired_nodes,
+    still_in_kernel,
 )
 from scheduler.substrate_latency import (
     load_substrate_status_documents,
@@ -261,6 +264,7 @@ class Dispatcher:
         session_id: str,
         wiring_generation: str,
         writer_epoch: int,
+        wired_sandboxes: Mapping[str, str],
         max_latency_age_s: float,
         required_substrate_pairs: list[RequiredSubstratePair] | None = None,
         substrate_measurements: dict[str, SubstrateMeasurement] | None = None,
@@ -356,6 +360,9 @@ class Dispatcher:
         if not wiring_generation:
             raise ValueError("wiring_generation is required")
         self._wiring_generation = wiring_generation
+        # Each session node's pod sandbox as this Scheduler's wiring gate proved it: the network
+        # namespaces its record describes (ActualLinkSnapshot.wired_sandboxes).
+        self._wired_sandboxes = dict(wired_sandboxes)
         # The transition count of the session writer lease this instance
         # holds; every Node Agent command carries it.
         if writer_epoch < 1:
@@ -1484,6 +1491,7 @@ class Dispatcher:
             epoch_id=self._last_snapshot_epoch_id,
             snapshot_seq=self._last_snapshot_seq,
             active_links=commanded_rows(self._actual_links, self._open_pairs()),
+            wired_sandboxes=self._wired_sandboxes,
             pending_pairs=self._pending_pair_rows(),
             draining_contacts=self._draining_contact_rows(),
             emitted_at=self._now(),
@@ -1779,13 +1787,13 @@ class Dispatcher:
             details=details,
         )
 
-    async def _take_over_from_predecessor(self) -> tuple[str, frozenset[str]] | None:
+    async def _take_over_from_predecessor(self) -> Takeover | None:
         """Take over the record of the Scheduler that last commanded this wiring generation
         (``scheduler.predecessor``): the links its Node Agents proved up and each station's
-        actuation state with its stale footprint. Runs once the writer Lease is held and before
-        any command. Returns the predecessor's instance id and the stations it left a record for,
-        None when no Scheduler of this generation published a link record (nothing has commanded
-        a local link yet)."""
+        actuation state with its stale footprint, on the pods its wiring gate proved and this
+        Scheduler's wiring gate still proves. Runs once the writer Lease is held and before any
+        command. None when no Scheduler of this generation published a link record (nothing has
+        commanded a local link yet)."""
         js = self._js
         snapshot = predecessor_snapshot(
             await read_retained(
@@ -1802,14 +1810,16 @@ class Dispatcher:
                 self._wiring_generation,
             )
             return None
-        self._actual_links.update(
-            inherited_actual_links(
-                snapshot,
-                interface_map=self._interface_map,
-                gs_capacities=self._gs_capacities,
-                long_delay_pairs=frozenset(self._long_delay_bounds_s),
-            )
+        rewired = rewired_nodes(snapshot, self._wired_sandboxes)
+        links, halves = inherited_actual_links(
+            snapshot,
+            interface_map=self._interface_map,
+            gs_capacities=self._gs_capacities,
+            long_delay_pairs=frozenset(self._long_delay_bounds_s),
+            rewired=rewired,
         )
+        self._actual_links.update(links)
+        self._gs_stale_link_infos.update(halves)
         for pair, info in self._actual_links.items():
             self._last_latencies[pair] = info.latencies_ms
         records = predecessor_station_records(
@@ -1821,41 +1831,60 @@ class Dispatcher:
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
         )
+        resumed = set()
+        unproven = {gs_id_for_pair(pair, self._gs_capacities) for pair in halves}
         for gs_id, (code, details) in sorted(records.items()):
             if gs_id not in self._gs_capacities:
                 raise RuntimeError(
                     f"retained station record names {gs_id}, not a station of this session"
                 )
             state, stale = inherited_station_state(gs_id, code, details)
-            self._gs_stale_link_infos.update(stale)
+            surviving = still_in_kernel(stale, rewired)
+            self._gs_stale_link_infos.update(surviving)
+            if gs_id in rewired:
+                # Its own state was the old pod's; what its footprint left elsewhere is unproven.
+                if surviving:
+                    unproven.add(gs_id)
+                continue
             if state.state != ActuationState.CLEAN:
                 state = replace(
                     state,
                     stale_pairs=frozenset(self._kernel_expected_down_for_gs(gs_id, {})),
                 )
             self._gs_actuation[gs_id] = state
+            resumed.add(gs_id)
         log.info(
-            "Took over %d links and %d station records from Scheduler %s (writer epoch %d)",
+            "Took over %d of %d links and %d station records from Scheduler %s (writer epoch "
+            "%d); %d pods were wired anew since, leaving %d link halves to prove down",
+            len(links),
             len(snapshot.active_links),
-            len(records),
+            len(resumed),
             snapshot.scheduler_instance_id,
             snapshot.writer_epoch,
+            len(rewired),
+            len(halves),
         )
-        return snapshot.scheduler_instance_id, frozenset(records)
+        return Takeover(
+            predecessor=snapshot.scheduler_instance_id,
+            recorded=frozenset(resumed),
+            rewired=rewired,
+            unproven=frozenset(unproven),
+        )
 
-    async def _publish_startup_actuation_roster(
-        self, takeover: tuple[str, frozenset[str]] | None
-    ) -> None:
+    async def _publish_startup_actuation_roster(self, takeover: Takeover | None) -> None:
         """Publish every configured station's state at Scheduler start.
 
         VS-API derives actuation health from Scheduler OpsEvents. If startup
         does not declare the roster, a missing station can look healthy by omission.
         With no predecessor, the wiring gate is the proof boundary: reaching this
         point means startup verified the generation's managed kernel state, and no
-        Scheduler has commanded a link on it. With a predecessor, each station keeps
-        the state the predecessor recorded. A station the predecessor left no record
-        for is unproven: it enters kernel_dirty and the KernelInventory verify proves
-        it against the links taken over.
+        Scheduler has commanded a link on it. With a predecessor:
+        - a station left holding a link half whose other end was wired anew is unproven: it
+          enters kernel_dirty and the KernelInventory verify proves the half down;
+        - a station whose state the predecessor recorded keeps that state;
+        - a station whose pod was wired anew since is clean on this Scheduler's wiring gate,
+          as with no predecessor;
+        - a station the predecessor left no record for is unproven, as above.
         """
         sim_time = self._current_sim_time or self._now()
         for gs_id in sorted(self._gs_capacities):
@@ -1866,8 +1895,24 @@ class Dispatcher:
                     reason="scheduler startup roster: wiring gate verified clean kernel state",
                 )
                 continue
-            predecessor, recorded = takeover
-            if gs_id in recorded:
+            predecessor = takeover.predecessor
+            if gs_id in takeover.unproven:
+                await self._set_gs_nonclean(
+                    gs_id=gs_id,
+                    state_name=ActuationState.KERNEL_DIRTY,
+                    code=SchedulerOpsCode.KERNEL_DIRTY,
+                    operation="SchedulerTakeover",
+                    failure_class=ActuationFailureClass.GROUND_UNKNOWN,
+                    affected_pairs=set(self._kernel_expected_down_for_gs(gs_id, {})),
+                    result=None,
+                    sim_time=sim_time,
+                    reason=(
+                        f"a pod at one end of a link Scheduler {predecessor} proved for this "
+                        "station was wired anew; the other half is unproven until "
+                        "KernelInventory proves it down"
+                    ),
+                )
+            elif gs_id in takeover.recorded:
                 state = self._ground_state(gs_id)
                 await self._publish_scheduler_ops(
                     code=self._actuation_state_code_for(state),
@@ -1886,6 +1931,15 @@ class Dispatcher:
                         state_before=state,
                         state_after=state,
                         reason=f"state recorded by Scheduler {predecessor}",
+                    ),
+                )
+            elif gs_id in takeover.rewired:
+                await self._mark_gs_clean(
+                    gs_id=gs_id,
+                    sim_time=sim_time,
+                    reason=(
+                        f"its pod was wired anew since Scheduler {predecessor} recorded it; "
+                        "this Scheduler's wiring gate verified its kernel state"
                     ),
                 )
             else:

@@ -221,6 +221,12 @@ class ActualLinkSnapshot(BaseModel):
     snapshot by it. A restarted Scheduler takes its predecessor's links from the
     current snapshot before it commands anything.
 
+    ``wired_sandboxes`` names, for every session node, the CRI sandbox of the pod the Node
+    Agent wired, as the instance's wiring gate proved it. The links in ``active_links`` live in
+    those sandboxes' network namespaces. A pod replaced under the same wiring generation is
+    wired anew from nothing, so a successor takes over only what sits in sandboxes its own
+    wiring gate still proves.
+
     ``pending_pairs`` carries the Scheduler-owned in_flight -> faulted clock for every
     desired-but-not-kernel-actual pair (see ``PendingActuationPair``); it rides the same
     retained snapshot so the divergence timing recovers atomically with the actual set
@@ -241,6 +247,7 @@ class ActualLinkSnapshot(BaseModel):
     epoch_id: int | None = None
     snapshot_seq: int | None = None
     active_links: list[CommandedLink]
+    wired_sandboxes: dict[str, str]
     pending_pairs: list[PendingActuationPair] = Field(default_factory=list)
     # Long-delay contacts that stopped admitting and still deliver; never in ``active_links``.
     draining_contacts: list[DrainingContact] = Field(default_factory=list)

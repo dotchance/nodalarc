@@ -89,6 +89,7 @@ def _scheduler(agent: _NodeAgent, published: _Published) -> Dispatcher:
         session_id=SESSION,
         wiring_generation="sha256:" + "a" * 64,
         writer_epoch=1,
+        wired_sandboxes={node_id: f"sandbox-{node_id}" for node_id in (*PAIR, "gs-a")},
         max_latency_age_s=1.0,
         # The session also declares one ground station; it plays no part here.
         gs_terminal_capacities={"gs-a": 1},

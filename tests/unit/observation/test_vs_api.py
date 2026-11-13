@@ -2183,6 +2183,7 @@ class TestKernelActualRecovery:
                 writer_epoch=writer_epoch,
                 hostname=instance + "-host",
                 active_links=_commanded(pairs),
+                wired_sandboxes={},
                 pending_pairs=[
                     PendingActuationPair(pair=list(p), pending_since=since, operation="BatchLinkUp")
                     for p, since in (pending or [])
@@ -2867,6 +2868,7 @@ class TestSessionHistory:
                 hostname="sched-1-host",
                 sim_time=sim_time,
                 active_links=_commanded(pairs),
+                wired_sandboxes={},
                 emitted_at=datetime(2026, 9, 23, 12, 0, 6, tzinfo=UTC),
             )
             .model_dump_json()
@@ -3386,6 +3388,7 @@ class TestLongDelayContacts:
                 writer_epoch=1,
                 hostname="sched-1-host",
                 active_links=[],
+                wired_sandboxes={},
                 draining_contacts=[
                     DrainingContact(
                         pair=["earth-relay", "mars-relay"],

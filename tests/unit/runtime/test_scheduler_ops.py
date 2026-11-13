@@ -37,6 +37,8 @@ from scheduler.predecessor import (
     inherited_station_state,
     predecessor_snapshot,
     predecessor_station_records,
+    rewired_nodes,
+    still_in_kernel,
 )
 
 from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
@@ -60,6 +62,18 @@ OLD_PASS = (STATION, "leo-sat-p00s19")
 NEW_PASS = (STATION, "leo-sat-p00s18")
 INTERFACE_MAP = {ISL: ("isl0", "isl1"), LONG_DELAY: ("isl3", "isl0")}
 STATIONS = {STATION: 1}
+OTHER_STATION = "earth-de-frankfurt-gw1"
+NODES = (*ISL, *LONG_DELAY, STATION, OTHER_STATION, OLD_PASS[1], NEW_PASS[1])
+# The pod sandbox each node's wiring proof names; a replaced pod gets a new one.
+SANDBOXES = {node_id: f"sandbox-{node_id}" for node_id in NODES}
+
+
+def _replaced(*node_ids: str) -> dict[str, str]:
+    """The sandboxes a wiring gate proves after the named nodes' pods were replaced."""
+    return {
+        node_id: f"{sandbox}-new" if node_id in node_ids else sandbox
+        for node_id, sandbox in SANDBOXES.items()
+    }
 
 
 def _snapshot(instance: str, epoch: int, links, *, generation: str = GENERATION):
@@ -70,6 +84,7 @@ def _snapshot(instance: str, epoch: int, links, *, generation: str = GENERATION)
         writer_epoch=epoch,
         hostname=f"{instance}-host",
         active_links=links,
+        wired_sandboxes=SANDBOXES,
         emitted_at=EMITTED,
     )
 
@@ -117,14 +132,15 @@ def test_a_successor_holds_the_links_its_predecessor_proved_and_retimes_them() -
     snapshot = predecessor_snapshot(messages, session_id=SESSION, wiring_generation=GENERATION)
     assert snapshot is not None and snapshot.scheduler_instance_id == "sched-b"
 
-    taken = inherited_actual_links(
+    taken, halves = inherited_actual_links(
         snapshot,
         interface_map=INTERFACE_MAP,
         gs_capacities=STATIONS,
         long_delay_pairs=frozenset({LONG_DELAY}),
+        rewired=rewired_nodes(snapshot, SANDBOXES),
     )
     # The long-delay contact is the long-delay adoption's to survey in the kernel.
-    assert set(taken) == {ISL, OLD_PASS}
+    assert set(taken) == {ISL, OLD_PASS} and halves == {}
     for pair in taken:
         assert (taken[pair].interface_a, taken[pair].interface_b) == (
             proven[pair].interface_a,
@@ -153,7 +169,11 @@ def test_a_link_record_that_is_not_this_sessions_refuses_the_start() -> None:
     )
     with pytest.raises(RuntimeError, match="the session wires it on"):
         inherited_actual_links(
-            moved, interface_map=INTERFACE_MAP, gs_capacities=STATIONS, long_delay_pairs=frozenset()
+            moved,
+            interface_map=INTERFACE_MAP,
+            gs_capacities=STATIONS,
+            long_delay_pairs=frozenset(),
+            rewired=frozenset(),
         )
     stranger = ("leo-sat-p00s00", "leo-sat-p07s07")
     unknown = _snapshot(
@@ -165,6 +185,7 @@ def test_a_link_record_that_is_not_this_sessions_refuses_the_start() -> None:
             interface_map=INTERFACE_MAP,
             gs_capacities=STATIONS,
             long_delay_pairs=frozenset(),
+            rewired=frozenset(),
         )
 
 
@@ -305,6 +326,7 @@ def test_a_station_its_predecessor_left_no_record_for_starts_unproven() -> None:
         session_id=SESSION,
         wiring_generation=GENERATION,
         writer_epoch=5,
+        wired_sandboxes=SANDBOXES,
         max_latency_age_s=1.0,
         gs_terminal_capacities={STATION: 1, other: 1},
         gs_handover_modes={STATION: "bbm", other: "bbm"},
@@ -346,6 +368,7 @@ def test_a_successor_takes_over_the_delays_its_predecessor_last_commanded() -> N
         session_id=SESSION,
         wiring_generation=GENERATION,
         writer_epoch=4,
+        wired_sandboxes=SANDBOXES,
         max_latency_age_s=1.0,
         gs_terminal_capacities=STATIONS,
         gs_handover_modes={STATION: "bbm"},
@@ -371,9 +394,150 @@ def test_a_successor_takes_over_the_delays_its_predecessor_last_commanded() -> N
     ]
     snapshot = predecessor_snapshot(retained[-1:], session_id=SESSION, wiring_generation=GENERATION)
     assert snapshot is not None
-    taken = inherited_actual_links(
-        snapshot, interface_map=INTERFACE_MAP, gs_capacities=STATIONS, long_delay_pairs=frozenset()
+    taken, _halves = inherited_actual_links(
+        snapshot,
+        interface_map=INTERFACE_MAP,
+        gs_capacities=STATIONS,
+        long_delay_pairs=frozenset(),
+        rewired=frozenset(),
     )
     assert taken[ISL].commanded_netem_ms == (1.6, 1.7), (
         "the successor would prove the kernel against delays it no longer carries"
     )
+
+
+def test_a_link_on_a_pod_wired_anew_is_not_taken_over() -> None:
+    """A pod replaced under the same wiring generation (a make upgrade that rolls the session
+    images replaces every one) is wired anew from nothing, so no link the predecessor proved on it
+    is in the kernel. When only one end was replaced, an access link's other half stays where it
+    was and has to be proven down."""
+    both_replaced = (OTHER_STATION, NEW_PASS[1])
+    proven = {
+        ISL: _proven("isl0", "isl1", (1.2, 1.3)),
+        OLD_PASS: _proven("term0", "gnd0", (3.1, 3.4)),
+        both_replaced: _proven("term0", "gnd1", (3.0, 3.0)),
+    }
+    snapshot = _snapshot("sched-b", 5, commanded_rows(proven, set(proven)))
+    rewired = rewired_nodes(snapshot, _replaced(ISL[1], STATION, *both_replaced))
+    assert rewired == {ISL[1], STATION, *both_replaced}
+
+    taken, halves = inherited_actual_links(
+        snapshot,
+        interface_map=INTERFACE_MAP,
+        gs_capacities={STATION: 1, OTHER_STATION: 1},
+        long_delay_pairs=frozenset(),
+        rewired=rewired,
+    )
+    assert taken == {}, "a link on a replaced pod would be retimed on interfaces that are gone"
+    assert {pair: (info.interface_a, info.interface_b) for pair, info in halves.items()} == {
+        OLD_PASS: ("term0", "gnd0")
+    }, "the satellite's half of the station's pass is still in its pod"
+
+    footprint = {
+        OLD_PASS: _proven("term0", "gnd0", (0.0, 0.0)),
+        both_replaced: _proven("term0", "gnd1", (0.0, 0.0)),
+    }
+    assert set(still_in_kernel(footprint, rewired)) == {OLD_PASS}
+
+
+def _successor(stream: _RetainedLinkStream, wired_sandboxes: dict[str, str]) -> Dispatcher:
+    scheduler = Dispatcher(
+        interface_map=INTERFACE_MAP,
+        interface_rates=ANY_INTERFACE_RATES,
+        pod_locator=PodLocationMap(),
+        agent_pool=None,
+        session_id=SESSION,
+        wiring_generation=GENERATION,
+        writer_epoch=6,
+        wired_sandboxes=wired_sandboxes,
+        max_latency_age_s=1.0,
+        gs_terminal_capacities={STATION: 1, OTHER_STATION: 1},
+        gs_handover_modes={STATION: "bbm", OTHER_STATION: "bbm"},
+        sat_ground_terminal_capacities={OLD_PASS[1]: 1, NEW_PASS[1]: 1},
+        long_delay_bounds_s={},
+    )
+    scheduler._js = stream
+
+    async def start() -> None:
+        await scheduler._publish_startup_actuation_roster(
+            await scheduler._take_over_from_predecessor()
+        )
+
+    asyncio.run(start())
+    return scheduler
+
+
+def _retained_station_states(stream: _RetainedLinkStream) -> dict[str, str]:
+    prefix = actuation_state_subscribe_subject(SESSION).removesuffix(">")
+    return {
+        message["details"]["gs_id"]: message["details"]["actuation_state_after"]
+        for subject, message in stream.published
+        if subject.startswith(prefix)
+    }
+
+
+def _predecessor_records() -> dict[str, bytes]:
+    proven = {
+        ISL: _proven("isl0", "isl1", (1.2, 1.3)),
+        OLD_PASS: _proven("term0", "gnd0", (3.1, 3.4)),
+    }
+    dirty = _station_details(
+        gs_id=OTHER_STATION,
+        affected_pairs=[[OTHER_STATION, NEW_PASS[1]]],
+        actuation_state_before=ActuationState.KERNEL_DIRTY,
+        actuation_state_after=ActuationState.KERNEL_DIRTY,
+        stale_links=footprint_rows(
+            {(OTHER_STATION, NEW_PASS[1]): _proven("term0", "gnd0", (0.0, 0.0))}
+        ),
+    )
+    clean = _station_details(
+        actuation_state_before=ActuationState.CLEAN, actuation_state_after=ActuationState.CLEAN
+    )
+    return {
+        actual_links_subject(SESSION, "sched-b"): _snapshot(
+            "sched-b", 5, commanded_rows(proven, set(proven))
+        )
+        .model_dump_json()
+        .encode(),
+        actuation_state_subject(SESSION, STATION): _station_record(
+            clean, SchedulerOpsCode.ACTUATION_CLEAN
+        ),
+        actuation_state_subject(SESSION, OTHER_STATION): _station_record(
+            dirty, SchedulerOpsCode.KERNEL_DIRTY
+        ),
+    }
+
+
+def test_after_every_pod_is_wired_anew_a_successor_starts_as_with_no_predecessor() -> None:
+    """The make upgrade that rolled every session pod: the successor took over 40 links whose
+    interfaces the rewire removed, its SetLatency found no such interfaces, and it halted on
+    every restart."""
+    stream = _RetainedLinkStream(_predecessor_records())
+    scheduler = _successor(stream, _replaced(*NODES))
+
+    assert scheduler._actual_links == {}
+    assert scheduler._gs_stale_link_infos == {}
+    assert scheduler._ground_state(STATION).state == ActuationState.CLEAN
+    assert scheduler._ground_state(OTHER_STATION).state == ActuationState.CLEAN, (
+        "a station wired anew keeps the dirty state of the pod it replaced"
+    )
+    assert _retained_station_states(stream) == {STATION: "clean", OTHER_STATION: "clean"}
+
+
+def test_a_station_left_holding_half_of_a_link_starts_unproven() -> None:
+    """Only the satellite at the far end of each station's link was replaced. The stations keep
+    their halves, so each is proven before it is shown clean; the link between the two satellites
+    that were not replaced is held."""
+    stream = _RetainedLinkStream(_predecessor_records())
+    scheduler = _successor(stream, _replaced(OLD_PASS[1], NEW_PASS[1]))
+
+    assert set(scheduler._actual_links) == {ISL}
+    assert scheduler._ground_state(STATION).state == ActuationState.KERNEL_DIRTY
+    assert scheduler._ground_state(STATION).stale_pairs == {OLD_PASS}
+    other = scheduler._ground_state(OTHER_STATION)
+    assert other.state == ActuationState.KERNEL_DIRTY
+    assert other.stale_pairs == {(OTHER_STATION, NEW_PASS[1])}
+    assert _retained_station_states(stream) == {
+        STATION: "kernel_dirty",
+        OTHER_STATION: "kernel_dirty",
+    }

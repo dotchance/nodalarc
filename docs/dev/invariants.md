@@ -101,6 +101,8 @@ against actual state, and then calls `_reconcile_links`.
 This invariant keeps the actuator honest. `_actual_links`, capacity counters,
 Node Agent I/O, and LinkUp/LinkDown publication for normal schedule progression all stay behind one door. The one deliberate exception is explicit operator repair: it is operator-initiated, tagged with an intervention id, serialized by the same actuation lock, and must reconcile the GS to current OME authority rather than retry stale work.
 
+A starting Scheduler holds the writer Lease and then, before it sends any command, takes over the record of the Scheduler that last commanded the same session and wiring generation. That record is the retained `ActualLinkSnapshot` at the highest writer epoch. Its links become the new Scheduler's `_actual_links`, and each ground station keeps the actuation state the predecessor retained for it. A station with no retained state is unproven and starts in kernel_dirty. Long-delay contacts are not taken from the record: the long-delay adoption surveys them in the kernel. The first reconcile then takes down the links OME no longer wants and retimes every link it took over.
+
 ## Node Agent Truth Contract
 
 Node Agent commands are fenced by `session_id`, `wiring_generation` and the

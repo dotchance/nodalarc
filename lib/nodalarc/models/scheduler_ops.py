@@ -12,6 +12,7 @@ health payload has its own contract in ``nodalarc.models.vs_api``.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal, TypeIs, get_args
@@ -97,6 +98,27 @@ class RecoveryStatus(BaseModel):
     active_intervention_id: str | None = None
 
 
+class LinkFootprint(BaseModel):
+    """Where a link sits in the kernel: its two nodes in pair order and the interface of each."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pair: list[str] = Field(min_length=2, max_length=2)
+    interfaces: list[str] = Field(min_length=2, max_length=2)
+
+
+class CommandedLink(LinkFootprint):
+    """A link the Node Agents proved up, with the delay commanded on each direction.
+
+    ``netem_ms`` is (a_to_b, b_to_a) in pair order, the substrate compensation already taken
+    off: what the kernel's delay queues were told to hold. A successor Scheduler rebuilds its
+    record of the link from these values, and KernelInventory proves the kernel against them
+    until the successor commands the link's next delays.
+    """
+
+    netem_ms: list[float] = Field(min_length=2, max_length=2)
+
+
 class ActuationOpsDetails(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -115,6 +137,9 @@ class ActuationOpsDetails(BaseModel):
     old_pair: list[str] | None = None
     desired_pairs_for_gs: list[list[str]] = Field(default_factory=list)
     actual_pairs_for_gs: list[list[str]] = Field(default_factory=list)
+    # The station's links that may still hold kernel state and must be down (its stale
+    # footprint), so a successor Scheduler proves and repairs the same footprint.
+    stale_links: list[LinkFootprint] = Field(default_factory=list)
     ome_visible_scheduled_pairs_for_gs: list[list[str]] = Field(default_factory=list)
     node_agent_results: list[dict[str, Any]] = Field(default_factory=list)
     actuation_state_before: ActuationState = ActuationState.UNKNOWN
@@ -184,15 +209,17 @@ class DrainingContact(BaseModel):
 class ActualLinkSnapshot(BaseModel):
     """One Scheduler instance's verified kernel-actual link set, recoverable.
 
-    ``active_pairs`` is ``_actual_links`` — the pairs the Node Agents have
+    ``active_links`` is ``_actual_links`` — the links the Node Agents have
     CONFIRMED active (verified=true proof), i.e. "kernel actual", NOT OME's
     desired/visible model. Published replace-not-merge to a per-instance retained
     subject (``actual_links_subject``) whenever membership changes, so VS-API
     recovers which pairs the kernel actually has up on (re)subscribe — the only
     recoverable kernel-actual source, since LinkUp/LinkDown are NEW-delivered.
-    Each pair is an ordered ``[node_a, node_b]`` list. ``scheduler_instance_id``
-    keys the retained subject so a restart does not clobber a dead predecessor's
-    message; the consumer tracks the current owner (single-owner-per-session).
+    ``scheduler_instance_id`` keys the retained subject so a restart does not
+    clobber a dead predecessor's message. ``writer_epoch`` is the writer Lease
+    epoch the instance commanded at; ``current_actual_links`` picks the current
+    snapshot by it. A restarted Scheduler takes its predecessor's links from the
+    current snapshot before it commands anything.
 
     ``pending_pairs`` carries the Scheduler-owned in_flight -> faulted clock for every
     desired-but-not-kernel-actual pair (see ``PendingActuationPair``); it rides the same
@@ -208,15 +235,45 @@ class ActualLinkSnapshot(BaseModel):
     session_id: str
     wiring_generation: str
     scheduler_instance_id: str
+    writer_epoch: int
     hostname: str
     sim_time: datetime | None = None
     epoch_id: int | None = None
     snapshot_seq: int | None = None
-    active_pairs: list[list[str]] = Field(default_factory=list)
+    active_links: list[CommandedLink]
     pending_pairs: list[PendingActuationPair] = Field(default_factory=list)
-    # Long-delay contacts that stopped admitting and still deliver; never in ``active_pairs``.
+    # Long-delay contacts that stopped admitting and still deliver; never in ``active_links``.
     draining_contacts: list[DrainingContact] = Field(default_factory=list)
     emitted_at: datetime
+
+
+def current_actual_links(
+    snapshots: Iterable[ActualLinkSnapshot], *, session_id: str, wiring_generation: str
+) -> ActualLinkSnapshot | None:
+    """The snapshot of the Scheduler that last commanded a session's wiring generation.
+
+    Each Scheduler instance retains one snapshot on its own subject, at the writer epoch it
+    commanded with. The writer Lease gives each instance that takes it a higher epoch than the
+    one before, so the snapshot at the highest epoch is the last commander's. Arrival order and
+    pod clocks play no part. None when no instance of this generation published one. Two
+    snapshots at one epoch break the Lease's guarantee and raise.
+    """
+    matching = [
+        snapshot
+        for snapshot in snapshots
+        if snapshot.session_id == session_id and snapshot.wiring_generation == wiring_generation
+    ]
+    if not matching:
+        return None
+    top = max(snapshot.writer_epoch for snapshot in matching)
+    current = [snapshot for snapshot in matching if snapshot.writer_epoch == top]
+    if len(current) > 1:
+        raise ValueError(
+            f"session {session_id} generation {wiring_generation}: Scheduler instances "
+            f"{sorted(s.scheduler_instance_id for s in current)} all published at writer epoch "
+            f"{top}; the writer Lease gives each instance its own epoch"
+        )
+    return current[0]
 
 
 class OperatorRepairRequest(BaseModel):

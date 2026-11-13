@@ -73,6 +73,7 @@ from nodalarc.models.scheduler_ops import (
     ActualLinkSnapshot,
     ActuationOpsDetails,
     ActuationState,
+    current_actual_links,
     parse_actuation_state,
 )
 from nodalarc.models.vs_api import (
@@ -304,8 +305,8 @@ class SessionContext:
         self.actuation_latest_by_gs: dict[tuple[str, str], dict] = {}
         # Recoverable kernel-actual + pending state per Scheduler instance, replace-not-
         # merge per instance, from the retained ActualLinkSnapshot. value = {"generation":
-        # str, "pairs": frozenset[ordered pair], "pending": dict[ordered pair, pending_since],
-        # "emitted_at": datetime, "received_at": datetime}. actual_kernel_pairs() unions
+        # str, "snapshot": ActualLinkSnapshot, "pairs": frozenset[ordered pair], "pending":
+        # dict[ordered pair, pending_since], "emitted_at": datetime, "received_at": datetime}. actual_kernel_pairs() unions
         # "pairs" into kernel-actual truth (for kernel_up — NOT ctx.links, OME's model);
         # pending_actuation() turns "pending" into the Scheduler-owned divergence clock.
         # "received_at" (VS-API wall clock at receipt) + "emitted_at" (Scheduler publish
@@ -1276,11 +1277,10 @@ class SessionContext:
         carries ``pending_pairs`` (the Scheduler-owned in_flight -> faulted clock) and
         ``emitted_at``, so the divergence timing recovers atomically with the actual set.
         We stamp ``received_at`` on receipt so ``pending_actuation`` can derive divergence
-        age skew-free. Under the single-Scheduler-owner-per-session model a same-generation
-        peer with a different instance_id is a dead predecessor (instance restart) and is
-        pruned, mirroring ``_update_actuation_notice``'s roster pruning, so a stale set
-        never over-reports kernel-up. N>1 live schedulers per session need the
-        queue-group/leader-election redesign the dispatcher already documents.
+        age skew-free. Of the snapshots of one wiring generation only the current one is kept:
+        ``current_actual_links`` picks it by writer epoch, the rule a restarted Scheduler uses
+        to take over its predecessor's links. A snapshot of an earlier writer is a dead
+        predecessor's and is dropped, so a stale set never over-reports kernel-up.
         """
         try:
             snap = ActualLinkSnapshot.model_validate_json(msg.data)
@@ -1298,7 +1298,7 @@ class SessionContext:
         instance_id = snap.scheduler_instance_id
         if not instance_id:
             return
-        pairs = frozenset(tuple(sorted((p[0], p[1]))) for p in snap.active_pairs if len(p) == 2)
+        pairs = frozenset(tuple(sorted((link.pair[0], link.pair[1]))) for link in snap.active_links)
         pending = {
             tuple(sorted((pp.pair[0], pp.pair[1]))): pp.pending_since
             for pp in snap.pending_pairs
@@ -1306,11 +1306,32 @@ class SessionContext:
         }
         received_at = datetime.now(UTC)
         with self.state_lock:
-            for old_instance, rec in list(self.actual_links_by_instance.items()):
-                if old_instance != instance_id and rec.get("generation") == snap.wiring_generation:
-                    self.actual_links_by_instance.pop(old_instance, None)
+            peers = {
+                old_instance: rec
+                for old_instance, rec in self.actual_links_by_instance.items()
+                if old_instance != instance_id and rec["generation"] == snap.wiring_generation
+            }
+            current = current_actual_links(
+                [*(rec["snapshot"] for rec in peers.values()), snap],
+                session_id=snap.session_id,
+                wiring_generation=snap.wiring_generation,
+            )
+            if current is None:
+                raise RuntimeError(f"no current snapshot among those including {instance_id}'s own")
+            if current is not snap:
+                log.info(
+                    "Ignoring ActualLinkSnapshot of %s at writer epoch %d: %s is current at %d",
+                    instance_id,
+                    snap.writer_epoch,
+                    current.scheduler_instance_id,
+                    current.writer_epoch,
+                )
+                return
+            for old_instance in peers:
+                self.actual_links_by_instance.pop(old_instance, None)
             self.actual_links_by_instance[instance_id] = {
                 "generation": snap.wiring_generation,
+                "snapshot": snap,
                 "pairs": pairs,
                 "pending": pending,
                 "draining": tuple(snap.draining_contacts),

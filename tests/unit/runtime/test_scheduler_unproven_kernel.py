@@ -145,10 +145,10 @@ def test_a_link_the_node_agent_could_not_prove_is_never_reported_up_and_dispatch
     ]
     assert announced_up == [], f"an unproven link was announced as up: {announced_up}"
     shown_active = [
-        message["active_pairs"]
+        message["active_links"]
         for subject, message in published.messages
         if subject.startswith(actual_links_subscribe_subject(SESSION).rstrip(">*"))
-        and message["active_pairs"]
+        and message["active_links"]
     ]
     assert shown_active == [], f"an unproven link was published as kernel-actual: {shown_active}"
     halts = [

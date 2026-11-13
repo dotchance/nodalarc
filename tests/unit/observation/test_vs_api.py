@@ -65,6 +65,16 @@ class _Message:
     metadata: Msg.Metadata
 
 
+def _commanded(pairs) -> list:
+    """Proven links as an ActualLinkSnapshot lists them; VS-API reads only their pairs."""
+    from nodalarc.models.scheduler_ops import CommandedLink
+
+    return [
+        CommandedLink(pair=list(pair), interfaces=["term0", "gnd0"], netem_ms=[2.0, 2.0])
+        for pair in pairs
+    ]
+
+
 def _ops_event_dict(code: str) -> dict:
     """An ops event as a service publishes it."""
     return {
@@ -2150,7 +2160,15 @@ class TestKernelActualRecovery:
     _EMITTED_AT = datetime(2026, 5, 29, 18, 0, 0, tzinfo=UTC)
 
     def _deliver(
-        self, ctx, *, instance: str, pairs, emitted_at, pending=None, generation: str = "gen-1"
+        self,
+        ctx,
+        *,
+        instance: str,
+        pairs,
+        emitted_at,
+        pending=None,
+        generation: str = "gen-1",
+        writer_epoch: int = 1,
     ) -> None:
         import asyncio
 
@@ -2162,8 +2180,9 @@ class TestKernelActualRecovery:
                 session_id="test",
                 wiring_generation=generation,
                 scheduler_instance_id=instance,
+                writer_epoch=writer_epoch,
                 hostname=instance + "-host",
-                active_pairs=[list(p) for p in pairs],
+                active_links=_commanded(pairs),
                 pending_pairs=[
                     PendingActuationPair(pair=list(p), pending_since=since, operation="BatchLinkUp")
                     for p, since in (pending or [])
@@ -2200,26 +2219,28 @@ class TestKernelActualRecovery:
         assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-03")})
 
     def test_restart_supersedes_dead_predecessor_same_generation(self):
-        # Single-owner-per-session: a restart yields a new instance_id with the SAME
-        # wiring generation. The dead predecessor's set must be pruned, not unioned, or
-        # a pair it dropped during the gap would linger as falsely-up — exactly the
-        # masking this fix removes. (Mirrors the roster's _update_actuation_notice.)
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        self._deliver(
-            ctx,
-            instance="sched-old",
-            pairs=[("gs-den", "sat-03")],
-            emitted_at=self._EMITTED_AT,
-        )
-        self._deliver(
-            ctx,
-            instance="sched-new",
-            pairs=[("gs-den", "sat-09")],
-            emitted_at=self._EMITTED_AT,
-        )
-        assert "sched-old" not in ctx.actual_links_by_instance
-        assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-09")})
+        # A restart yields a new instance_id with the SAME wiring generation and a higher
+        # writer epoch. The dead predecessor's set must be dropped, not unioned, or a pair it
+        # dropped during the gap would linger as falsely-up. The writer epoch decides, so the
+        # predecessor's retained set arriving after the successor's does not bring it back.
+        for order in (("sched-old", "sched-new"), ("sched-new", "sched-old")):
+            ctx = SessionContext.__new__(SessionContext)
+            ctx._init_state_only()
+            published = {
+                "sched-old": (1, [("gs-den", "sat-03")]),
+                "sched-new": (2, [("gs-den", "sat-09")]),
+            }
+            for instance in order:
+                epoch, pairs = published[instance]
+                self._deliver(
+                    ctx,
+                    instance=instance,
+                    pairs=pairs,
+                    emitted_at=self._EMITTED_AT,
+                    writer_epoch=epoch,
+                )
+            assert "sched-old" not in ctx.actual_links_by_instance, order
+            assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-09")}), order
 
     def _ctx_with_snapshot_and_clean_roster(self):
 
@@ -2842,9 +2863,10 @@ class TestSessionHistory:
                 session_id=ctx.session_id,
                 wiring_generation="gen-1",
                 scheduler_instance_id="sched-1",
+                writer_epoch=1,
                 hostname="sched-1-host",
                 sim_time=sim_time,
-                active_pairs=[list(p) for p in pairs],
+                active_links=_commanded(pairs),
                 emitted_at=datetime(2026, 9, 23, 12, 0, 6, tzinfo=UTC),
             )
             .model_dump_json()
@@ -3361,8 +3383,9 @@ class TestLongDelayContacts:
                 session_id="test",
                 wiring_generation="gen-1",
                 scheduler_instance_id="sched-1",
+                writer_epoch=1,
                 hostname="sched-1-host",
-                active_pairs=[],
+                active_links=[],
                 draining_contacts=[
                     DrainingContact(
                         pair=["earth-relay", "mars-relay"],

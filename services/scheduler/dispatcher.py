@@ -86,7 +86,9 @@ from nodalarc.nats_channels import (
     STREAM_LINK_EVENTS,
     STREAM_OME_EVENTS,
     actual_links_subject,
+    actual_links_subscribe_subject,
     actuation_state_subject,
+    actuation_state_subscribe_subject,
     ground_link_decision_snapshot_subject,
     latency_update_subject,
     link_down_subject,
@@ -163,6 +165,15 @@ from scheduler.long_delay_adoption import (
 )
 from scheduler.node_agent_batches import LinkUpBatchPlan
 from scheduler.pod_locator import PodLocationMap
+from scheduler.predecessor import (
+    commanded_rows,
+    footprint_rows,
+    inherited_actual_links,
+    inherited_station_state,
+    predecessor_snapshot,
+    predecessor_station_records,
+    read_retained,
+)
 from scheduler.substrate_latency import (
     load_substrate_status_documents,
     resolve_substrate_rtt_ms,
@@ -912,7 +923,7 @@ class Dispatcher:
         # loop-blocking-ok: startup-only — runs once before the dispatch
         # worker begins serving; nothing shares the loop yet.
         self._reload_substrate_status()
-        await self._publish_startup_actuation_roster()
+        await self._publish_startup_actuation_roster(await self._take_over_from_predecessor())
         # The long-delay contacts an earlier Scheduler left in the kernel are adopted before the
         # first baseline, so it shows what the kernel carries.
         await self._adopt_long_delay_state()
@@ -1313,6 +1324,15 @@ class Dispatcher:
             actual_pairs_for_gs=self._pair_rows(set(self._actual_ground_pairs_for_gs(gs_id)))
             if gs_id
             else [],
+            stale_links=footprint_rows(
+                {
+                    pair: info
+                    for pair, info in self._gs_stale_link_infos.items()
+                    if gs_id_for_pair(pair, self._gs_capacities) == gs_id
+                }
+            )
+            if gs_id
+            else [],
             ome_visible_scheduled_pairs_for_gs=self._pair_rows(
                 self._ome_visible_scheduled_pairs_for_gs(gs_id)
             )
@@ -1448,8 +1468,8 @@ class Dispatcher:
         LinkUp/LinkDown are DeliverPolicy.NEW and do not survive a VS-API resubscribe, so
         this retained, replace-not-merge snapshot (MaxMsgsPerSubject=1 on NODALARC_LINKS,
         recovered via LAST_PER_SUBJECT) is the only recoverable source of kernel-actual
-        membership. Edge-triggered by ``_publish_actual_links_if_changed`` so a stable
-        link never re-publishes and never flickers in the recovered set.
+        membership. Edge-triggered by ``_publish_actual_links_if_changed``: a link whose
+        record did not change never re-publishes and never flickers in the recovered set.
         """
         js = getattr(self, "_js", None)
         if js is None:
@@ -1458,11 +1478,12 @@ class Dispatcher:
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
             scheduler_instance_id=self._scheduler_instance_id,
+            writer_epoch=self._writer_epoch,
             hostname=self._hostname,
             sim_time=self._current_sim_time,
             epoch_id=self._last_snapshot_epoch_id,
             snapshot_seq=self._last_snapshot_seq,
-            active_pairs=self._pair_rows(self._open_pairs()),
+            active_links=commanded_rows(self._actual_links, self._open_pairs()),
             pending_pairs=self._pending_pair_rows(),
             draining_contacts=self._draining_contact_rows(),
             emitted_at=self._now(),
@@ -1479,12 +1500,17 @@ class Dispatcher:
         """The actual links that carry traffic: every one but the draining long-delay contacts."""
         return {pair for pair, info in self._actual_links.items() if info.drain is None}
 
-    def _actual_membership(self) -> frozenset[tuple[tuple[str, str], frozenset[str] | None]]:
-        """Each actual link with the ends it still drains (None while open): a stop, or the close
-        of one end, changes what the retained snapshot shows."""
+    def _actual_record(self) -> frozenset[tuple[object, ...]]:
+        """Each actual link with its interfaces, the delays commanded on it and the ends it still
+        drains (None while open): what the retained snapshot shows. A successor Scheduler proves
+        the kernel against the commanded delays it takes over, so a retime that changes them
+        changes the record as a new link, a stop or the close of one end does."""
         return frozenset(
             (
                 pair,
+                info.interface_a,
+                info.interface_b,
+                info.commanded_netem_ms,
                 None if info.drain is None else frozenset(end.node_id for end in info.drain.ends),
             )
             for pair, info in [
@@ -1560,14 +1586,15 @@ class Dispatcher:
 
     async def _publish_actual_links_if_changed(
         self,
-        actual_before: frozenset[tuple[tuple[str, str], frozenset[str] | None]],
+        actual_before: frozenset[tuple[object, ...]],
         pending_before: frozenset[tuple[str, str]],
     ) -> None:
-        """Publish the kernel-actual + pending set only when membership changed.
+        """Publish the kernel-actual + pending set only when the record changed.
 
-        Latency-only updates (same pairs, new netem) are not membership changes and must
-        not re-publish — keeps the retained set edge-triggered, not a heartbeat. The
-        pending set is part of membership: a pair that diverges (enters pending) or
+        The record includes the delays commanded on each link, so a retime that changes them
+        re-publishes: a successor Scheduler proves the kernel against those delays. A
+        reconcile that changes nothing publishes nothing. The
+        pending set is part of the record: a pair that diverges (enters pending) or
         converges (leaves pending) changes the retained snapshot even when ``_actual_links``
         is momentarily unchanged, so both befores gate the trigger. ``pending_since``
         timestamps never mutate once stamped, so comparing the key sets is sufficient.
@@ -1578,7 +1605,7 @@ class Dispatcher:
         change. A stable set with no prior failure is neither changed nor dirty -> no-op.
         """
         if (
-            self._actual_membership() != actual_before
+            self._actual_record() != actual_before
             or frozenset(self._pending_since) != pending_before
         ):
             self._actual_links_publish_dirty = True
@@ -1752,21 +1779,130 @@ class Dispatcher:
             details=details,
         )
 
-    async def _publish_startup_actuation_roster(self) -> None:
-        """Publish a clean baseline for every configured GS at Scheduler start.
+    async def _take_over_from_predecessor(self) -> tuple[str, frozenset[str]] | None:
+        """Take over the record of the Scheduler that last commanded this wiring generation
+        (``scheduler.predecessor``): the links its Node Agents proved up and each station's
+        actuation state with its stale footprint. Runs once the writer Lease is held and before
+        any command. Returns the predecessor's instance id and the stations it left a record for,
+        None when no Scheduler of this generation published a link record (nothing has commanded
+        a local link yet)."""
+        js = self._js
+        snapshot = predecessor_snapshot(
+            await read_retained(
+                js,
+                stream=STREAM_LINK_EVENTS,
+                subjects=actual_links_subscribe_subject(self._session_id),
+            ),
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
+        )
+        if snapshot is None:
+            log.info(
+                "No Scheduler of generation %s recorded links; none to take over",
+                self._wiring_generation,
+            )
+            return None
+        self._actual_links.update(
+            inherited_actual_links(
+                snapshot,
+                interface_map=self._interface_map,
+                gs_capacities=self._gs_capacities,
+                long_delay_pairs=frozenset(self._long_delay_bounds_s),
+            )
+        )
+        for pair, info in self._actual_links.items():
+            self._last_latencies[pair] = info.latencies_ms
+        records = predecessor_station_records(
+            await read_retained(
+                js,
+                stream=STREAM_LINK_EVENTS,
+                subjects=actuation_state_subscribe_subject(self._session_id),
+            ),
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
+        )
+        for gs_id, (code, details) in sorted(records.items()):
+            if gs_id not in self._gs_capacities:
+                raise RuntimeError(
+                    f"retained station record names {gs_id}, not a station of this session"
+                )
+            state, stale = inherited_station_state(gs_id, code, details)
+            self._gs_stale_link_infos.update(stale)
+            if state.state != ActuationState.CLEAN:
+                state = replace(
+                    state,
+                    stale_pairs=frozenset(self._kernel_expected_down_for_gs(gs_id, {})),
+                )
+            self._gs_actuation[gs_id] = state
+        log.info(
+            "Took over %d links and %d station records from Scheduler %s (writer epoch %d)",
+            len(snapshot.active_links),
+            len(records),
+            snapshot.scheduler_instance_id,
+            snapshot.writer_epoch,
+        )
+        return snapshot.scheduler_instance_id, frozenset(records)
+
+    async def _publish_startup_actuation_roster(
+        self, takeover: tuple[str, frozenset[str]] | None
+    ) -> None:
+        """Publish every configured station's state at Scheduler start.
 
         VS-API derives actuation health from Scheduler OpsEvents. If startup
-        does not declare the roster, a missing GS can look healthy by omission.
-        The wiring gate is the proof boundary here: reaching this point means
-        startup verified the generation's managed kernel state.
+        does not declare the roster, a missing station can look healthy by omission.
+        With no predecessor, the wiring gate is the proof boundary: reaching this
+        point means startup verified the generation's managed kernel state, and no
+        Scheduler has commanded a link on it. With a predecessor, each station keeps
+        the state the predecessor recorded. A station the predecessor left no record
+        for is unproven: it enters kernel_dirty and the KernelInventory verify proves
+        it against the links taken over.
         """
         sim_time = self._current_sim_time or self._now()
         for gs_id in sorted(self._gs_capacities):
-            await self._mark_gs_clean(
-                gs_id=gs_id,
-                sim_time=sim_time,
-                reason="scheduler startup roster: wiring gate verified clean kernel state",
-            )
+            if takeover is None:
+                await self._mark_gs_clean(
+                    gs_id=gs_id,
+                    sim_time=sim_time,
+                    reason="scheduler startup roster: wiring gate verified clean kernel state",
+                )
+                continue
+            predecessor, recorded = takeover
+            if gs_id in recorded:
+                state = self._ground_state(gs_id)
+                await self._publish_scheduler_ops(
+                    code=self._actuation_state_code_for(state),
+                    message=(
+                        f"Ground station {gs_id} actuation state {state.state.value} "
+                        f"taken over from Scheduler {predecessor}"
+                    ),
+                    # A failing state was reported when the predecessor entered it.
+                    level="info" if state.state == ActuationState.CLEAN else "warning",
+                    details=self._actuation_details(
+                        gs_id=gs_id,
+                        operation="SchedulerTakeover",
+                        failure_class=ActuationFailureClass.NONE,
+                        affected_pairs=state.affected_pairs,
+                        sim_time=sim_time,
+                        state_before=state,
+                        state_after=state,
+                        reason=f"state recorded by Scheduler {predecessor}",
+                    ),
+                )
+            else:
+                await self._set_gs_nonclean(
+                    gs_id=gs_id,
+                    state_name=ActuationState.KERNEL_DIRTY,
+                    code=SchedulerOpsCode.KERNEL_DIRTY,
+                    operation="SchedulerTakeover",
+                    failure_class=ActuationFailureClass.GROUND_UNKNOWN,
+                    affected_pairs=set(self._actual_ground_pairs_for_gs(gs_id)),
+                    result=None,
+                    sim_time=sim_time,
+                    reason=(
+                        f"Scheduler {predecessor} left no actuation record for this station; "
+                        "its kernel is unproven until KernelInventory proves it"
+                    ),
+                )
 
     async def _set_gs_nonclean(
         self,
@@ -2953,7 +3089,7 @@ class Dispatcher:
         # Repair tears down and rewires _actual_links; capture entry membership so
         # the recoverable kernel-actual set is republished if repair changed it —
         # on success or on a partial-then-failed repair, not just at the next tick.
-        actual_before = self._actual_membership()
+        actual_before = self._actual_record()
         pending_before = frozenset(self._pending_since)
         before = self._repair_original_states.pop(cmd.intervention_id, self._ground_state(gs_id))
         active_recovery = RecoveryStatus(
@@ -3383,7 +3519,7 @@ class Dispatcher:
         # finally, that raise would skip the publish and leave the retained snapshot
         # listing a torn-down pair as still up — the exact masking this fix removes.
         # Mirrors _run_operator_repair_locked, which publishes outside its try/except.
-        actual_before = self._actual_membership()
+        actual_before = self._actual_record()
         pending_before = frozenset(self._pending_since)
         try:
             await self._run_due_kernel_verifications(sim_time=sim_time, include_clean_audit=False)
@@ -3461,7 +3597,7 @@ class Dispatcher:
                 await self._publish_actual_links_if_changed(actual_before, pending_before)
             except Exception:
                 log.exception("Failed to publish pending clock before dispatch awaits")
-            actual_before = self._actual_membership()
+            actual_before = self._actual_record()
             pending_before = frozenset(self._pending_since)
 
             sim_iso = sim_time.isoformat()
@@ -3540,8 +3676,8 @@ class Dispatcher:
             # Recompute the divergence clock against the desired we just reconciled
             # toward, then edge-publish. Both run in finally so a halt-raise still
             # records pending and publishes the corrected set. A no-op when neither the
-            # actual nor the pending membership changed (a stable link never
-            # re-publishes); any committed change is published even on a halt-raise. A
+            # actual record nor the pending set changed; any committed change is
+            # published even on a halt-raise. A
             # publish failure is logged, not raised — it must not mask the in-flight
             # dispatch exception (same guard idiom as _halt_dispatcher).
             self._update_pending_since(desired)

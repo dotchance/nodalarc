@@ -56,62 +56,158 @@ export function solveEccentricAnomaly(
   return eccentricAnomaly;
 }
 
-function perifocalPosition(
+/** The secular rates of a mean-element orbit, in rad/s. */
+export interface SecularRates {
+  raanDot: number;
+  argumentOfPerigeeDot: number;
+  meanAnomalyDot: number;
+}
+
+/** Two-body motion: no node or perigee motion, mean motion from GM alone. */
+function twoBodyRates(semiMajorAxisKm: number, body: BodyMath): SecularRates {
+  const a = semiMajorAxisKm;
+  return {
+    raanDot: 0.0,
+    argumentOfPerigeeDot: 0.0,
+    meanAnomalyDot: Math.sqrt(body.gravitationalParameterKm3S2 / (a * a * a)),
+  };
+}
+
+/** NodalArc's declared first-order secular J2 rates. */
+function j2SecularRates(
+  semiMajorAxisKm: number,
+  eccentricity: number,
+  inclinationRad: number,
+  body: BodyMath,
+): SecularRates {
+  const a = semiMajorAxisKm;
+  const n = Math.sqrt(body.gravitationalParameterKm3S2 / (a * a * a));
+  const cosI = Math.cos(inclinationRad);
+  const p = a * (1.0 - eccentricity * eccentricity);
+  const j2Factor = body.j2 * (body.equatorialRadiusKm / p) ** 2;
+  return {
+    raanDot: -1.5 * j2Factor * n * cosI,
+    argumentOfPerigeeDot:
+      eccentricity === 0 ? 0.0 : 0.75 * j2Factor * n * (5.0 * cosI * cosI - 1.0),
+    meanAnomalyDot:
+      n *
+      (1.0 +
+        0.75 * j2Factor * Math.sqrt(1.0 - eccentricity * eccentricity) * (3.0 * cosI * cosI - 1.0)),
+  };
+}
+
+/**
+ * The secular rates of the orbit model a node declares: the page's one copy of
+ * the backend's `secular_rates` (lib/nodalarc/physics/kepler.py), which the
+ * satellite states parity test holds it to. `keplerian-circular` is two-body
+ * motion.
+ */
+export function secularRates(
+  propagator: string,
+  semiMajorAxisKm: number,
+  eccentricity: number,
+  inclinationRad: number,
+  body: BodyMath,
+): SecularRates {
+  if (propagator === "two-body" || propagator === "keplerian-circular") {
+    return twoBodyRates(semiMajorAxisKm, body);
+  }
+  if (propagator === "j2-mean-elements") {
+    return j2SecularRates(semiMajorAxisKm, eccentricity, inclinationRad, body);
+  }
+  throw new Error(`Unsupported orbit model: ${propagator}`);
+}
+
+function perifocalState(
   semiMajorAxisKm: number,
   eccentricity: number,
   meanAnomalyRad: number,
-): [number, number] {
+  meanAnomalyDot: number,
+): [number, number, number, number] {
   const eccentricAnomaly = solveEccentricAnomaly(meanAnomalyRad, eccentricity);
+  const cosE = Math.cos(eccentricAnomaly);
+  const sinE = Math.sin(eccentricAnomaly);
   const sqrtOneMinusE2 = Math.sqrt(1.0 - eccentricity * eccentricity);
+  const denom = 1.0 - eccentricity * cosE;
+  const eccentricAnomalyDot = meanAnomalyDot / denom;
   return [
-    semiMajorAxisKm * (Math.cos(eccentricAnomaly) - eccentricity),
-    semiMajorAxisKm * sqrtOneMinusE2 * Math.sin(eccentricAnomaly),
+    semiMajorAxisKm * (cosE - eccentricity),
+    semiMajorAxisKm * sqrtOneMinusE2 * sinE,
+    -semiMajorAxisKm * sinE * eccentricAnomalyDot,
+    semiMajorAxisKm * sqrtOneMinusE2 * cosE * eccentricAnomalyDot,
   ];
 }
 
-function rotatePerifocal(
-  xPf: number,
-  yPf: number,
+function rotationTerms(
   raanRad: number,
   inclinationRad: number,
   argumentOfPerigeeRad: number,
-): [number, number, number] {
+): [[number, number], [number, number], [number, number]] {
   const cosRaan = Math.cos(raanRad);
   const sinRaan = Math.sin(raanRad);
   const cosI = Math.cos(inclinationRad);
   const sinI = Math.sin(inclinationRad);
   const cosArgp = Math.cos(argumentOfPerigeeRad);
   const sinArgp = Math.sin(argumentOfPerigeeRad);
-  const r11 = cosRaan * cosArgp - sinRaan * sinArgp * cosI;
-  const r12 = -cosRaan * sinArgp - sinRaan * cosArgp * cosI;
-  const r21 = sinRaan * cosArgp + cosRaan * sinArgp * cosI;
-  const r22 = -sinRaan * sinArgp + cosRaan * cosArgp * cosI;
-  const r31 = sinArgp * sinI;
-  const r32 = cosArgp * sinI;
   return [
-    r11 * xPf + r12 * yPf,
-    r21 * xPf + r22 * yPf,
-    r31 * xPf + r32 * yPf,
+    [cosRaan * cosArgp - sinRaan * sinArgp * cosI,
+      -cosRaan * sinArgp - sinRaan * cosArgp * cosI],
+    [sinRaan * cosArgp + cosRaan * sinArgp * cosI,
+      -sinRaan * sinArgp + cosRaan * cosArgp * cosI],
+    [sinArgp * sinI, cosArgp * sinI],
   ];
 }
 
-function propagateEci(
-  semiMajorAxisKm: number,
-  eccentricity: number,
-  inclinationRad: number,
+function rotationDerivativeTerms(
   raanRad: number,
+  inclinationRad: number,
   argumentOfPerigeeRad: number,
-  meanAnomalyRad: number,
-  dt: number,
-  muKm3S2: number,
-): [number, number, number] {
-  const a = semiMajorAxisKm;
-  const n = Math.sqrt(muKm3S2 / (a * a * a));
-  const [xPf, yPf] = perifocalPosition(a, eccentricity, meanAnomalyRad + n * dt);
-  return rotatePerifocal(xPf, yPf, raanRad, inclinationRad, argumentOfPerigeeRad);
+): [
+  [[number, number], [number, number], [number, number]],
+  [[number, number], [number, number], [number, number]],
+] {
+  const cosRaan = Math.cos(raanRad);
+  const sinRaan = Math.sin(raanRad);
+  const cosI = Math.cos(inclinationRad);
+  const sinI = Math.sin(inclinationRad);
+  const cosArgp = Math.cos(argumentOfPerigeeRad);
+  const sinArgp = Math.sin(argumentOfPerigeeRad);
+  return [
+    [
+      [-sinRaan * cosArgp - cosRaan * sinArgp * cosI,
+        sinRaan * sinArgp - cosRaan * cosArgp * cosI],
+      [cosRaan * cosArgp - sinRaan * sinArgp * cosI,
+        -cosRaan * sinArgp - sinRaan * cosArgp * cosI],
+      [0.0, 0.0],
+    ],
+    [
+      [-cosRaan * sinArgp - sinRaan * cosArgp * cosI,
+        -cosRaan * cosArgp + sinRaan * sinArgp * cosI],
+      [-sinRaan * sinArgp + cosRaan * cosArgp * cosI,
+        -sinRaan * cosArgp - cosRaan * sinArgp * cosI],
+      [cosArgp * sinI, -sinArgp * sinI],
+    ],
+  ];
 }
 
-function propagateEciJ2MeanElements(
+function applyRotation(
+  matrix: [[number, number], [number, number], [number, number]],
+  xPf: number,
+  yPf: number,
+): [number, number, number] {
+  return [
+    matrix[0][0] * xPf + matrix[0][1] * yPf,
+    matrix[1][0] * xPf + matrix[1][1] * yPf,
+    matrix[2][0] * xPf + matrix[2][1] * yPf,
+  ];
+}
+
+/**
+ * Mean elements propagated `dt` seconds at their secular rates: position and
+ * velocity on the body's orbit-element axes. The velocity includes the motion
+ * of the node and of the perigee.
+ */
+export function propagateElementsEci(
   semiMajorAxisKm: number,
   eccentricity: number,
   inclinationRad: number,
@@ -119,30 +215,29 @@ function propagateEciJ2MeanElements(
   argumentOfPerigeeRad: number,
   meanAnomalyRad: number,
   dt: number,
-  muKm3S2: number,
-  j2: number,
-  referenceRadiusKm: number,
-): [number, number, number] {
-  const a = semiMajorAxisKm;
-  const n = Math.sqrt(muKm3S2 / (a * a * a));
-  const cosI = Math.cos(inclinationRad);
-  const p = a * (1.0 - eccentricity * eccentricity);
-  const j2Factor = j2 * (referenceRadiusKm / p) ** 2;
-  const raanDot = -1.5 * j2Factor * n * cosI;
-  const argumentOfPerigeeDot =
-    eccentricity === 0 ? 0.0 : 0.75 * j2Factor * n * (5.0 * cosI * cosI - 1.0);
-  const meanAnomalyDot =
-    n * (1.0 + 0.75 * j2Factor * Math.sqrt(1.0 - eccentricity * eccentricity) *
-      (3.0 * cosI * cosI - 1.0));
-
-  const raan = raanRad + raanDot * dt;
-  const argumentOfPerigee = argumentOfPerigeeRad + argumentOfPerigeeDot * dt;
-  const [xPf, yPf] = perifocalPosition(
-    a,
+  rates: SecularRates,
+): [[number, number, number], [number, number, number]] {
+  const raan = raanRad + rates.raanDot * dt;
+  const argumentOfPerigee = argumentOfPerigeeRad + rates.argumentOfPerigeeDot * dt;
+  const [xPf, yPf, vxPf, vyPf] = perifocalState(
+    semiMajorAxisKm,
     eccentricity,
-    meanAnomalyRad + meanAnomalyDot * dt,
+    meanAnomalyRad + rates.meanAnomalyDot * dt,
+    rates.meanAnomalyDot,
   );
-  return rotatePerifocal(xPf, yPf, raan, inclinationRad, argumentOfPerigee);
+  const rotation = rotationTerms(raan, inclinationRad, argumentOfPerigee);
+  const [dRaan, dArgp] = rotationDerivativeTerms(raan, inclinationRad, argumentOfPerigee);
+  const baseVel = applyRotation(rotation, vxPf, vyPf);
+  const raanVel = applyRotation(dRaan, xPf, yPf);
+  const argpVel = applyRotation(dArgp, xPf, yPf);
+  return [
+    applyRotation(rotation, xPf, yPf),
+    [
+      baseVel[0] + rates.raanDot * raanVel[0] + rates.argumentOfPerigeeDot * argpVel[0],
+      baseVel[1] + rates.raanDot * raanVel[1] + rates.argumentOfPerigeeDot * argpVel[1],
+      baseVel[2] + rates.raanDot * raanVel[2] + rates.argumentOfPerigeeDot * argpVel[2],
+    ],
+  ];
 }
 
 /**
@@ -238,45 +333,25 @@ export function propagateToSceneXYZ(
   rotation: Matrix3,
 ): [number, number, number] {
   const body = elements.body;
-  const referenceRadiusKm = body.equatorialRadiusKm;
   const dt = simTimeUnix - epochUnix;
-  const propagator = elements.propagator ?? "two-body";
-  if (
-    propagator !== "two-body" &&
-    propagator !== "keplerian-circular" &&
-    propagator !== "j2-mean-elements"
-  ) {
-    throw new Error(`Unsupported render propagator: ${String(propagator)}`);
-  }
-
   const inclinationRad = elements.inclination_deg * DEG2RAD;
-  const raanRad = elements.raan_deg * DEG2RAD;
-  const argumentOfPerigeeRad = elements.argument_of_perigee_deg * DEG2RAD;
-  const meanAnomalyRad = elements.mean_anomaly_deg * DEG2RAD;
-  const posEci =
-    propagator === "j2-mean-elements"
-      ? propagateEciJ2MeanElements(
-          elements.semi_major_axis_km,
-          elements.eccentricity,
-          inclinationRad,
-          raanRad,
-          argumentOfPerigeeRad,
-          meanAnomalyRad,
-          dt,
-          body.gravitationalParameterKm3S2,
-          body.j2,
-          referenceRadiusKm,
-        )
-      : propagateEci(
-          elements.semi_major_axis_km,
-          elements.eccentricity,
-          inclinationRad,
-          raanRad,
-          argumentOfPerigeeRad,
-          meanAnomalyRad,
-          dt,
-          body.gravitationalParameterKm3S2,
-        );
+  const rates = secularRates(
+    elements.propagator ?? "two-body",
+    elements.semi_major_axis_km,
+    elements.eccentricity,
+    inclinationRad,
+    body,
+  );
+  const [posEci] = propagateElementsEci(
+    elements.semi_major_axis_km,
+    elements.eccentricity,
+    inclinationRad,
+    elements.raan_deg * DEG2RAD,
+    elements.argument_of_perigee_deg * DEG2RAD,
+    elements.mean_anomaly_deg * DEG2RAD,
+    dt,
+    rates,
+  );
 
   const posEcef = elementsToBodyFixed(posEci, body, rotation);
   if (body.bodyId !== "earth") {
@@ -327,19 +402,13 @@ export function sampleOrbitPathSceneXYZ(
   const a = elements.semi_major_axis_km;
   const e = elements.eccentricity;
   const inclinationRad = elements.inclination_deg * DEG2RAD;
-  let raanRad = elements.raan_deg * DEG2RAD;
-  let argumentOfPerigeeRad = elements.argument_of_perigee_deg * DEG2RAD;
-
-  if ((elements.propagator ?? "two-body") === "j2-mean-elements") {
-    // Same secular drift the live position propagation applies.
-    const n = Math.sqrt(body.gravitationalParameterKm3S2 / (a * a * a));
-    const cosI = Math.cos(inclinationRad);
-    const p = a * (1.0 - e * e);
-    const j2Factor = body.j2 * (body.equatorialRadiusKm / p) ** 2;
-    raanRad += -1.5 * j2Factor * n * cosI * dt;
-    argumentOfPerigeeRad +=
-      e === 0 ? 0.0 : 0.75 * j2Factor * n * (5.0 * cosI * cosI - 1.0) * dt;
-  }
+  // Same secular drift the live position propagation applies.
+  const rates = secularRates(elements.propagator ?? "two-body", a, e, inclinationRad, body);
+  const rotationAtSeed = rotationTerms(
+    elements.raan_deg * DEG2RAD + rates.raanDot * dt,
+    inclinationRad,
+    elements.argument_of_perigee_deg * DEG2RAD + rates.argumentOfPerigeeDot * dt,
+  );
 
   const sqrtOneMinusE2 = Math.sqrt(1.0 - e * e);
   const positions = new Float32Array((samples + 1) * 3);
@@ -347,7 +416,7 @@ export function sampleOrbitPathSceneXYZ(
     const eccentricAnomaly = (i * 2 * Math.PI) / samples;
     const xPf = a * (Math.cos(eccentricAnomaly) - e);
     const yPf = a * sqrtOneMinusE2 * Math.sin(eccentricAnomaly);
-    const eci = rotatePerifocal(xPf, yPf, raanRad, inclinationRad, argumentOfPerigeeRad);
+    const eci = applyRotation(rotationAtSeed, xPf, yPf);
     const ecef = elementsToBodyFixed(eci, body, rotation);
     let scene: [number, number, number];
     if (body.bodyId !== "earth") {

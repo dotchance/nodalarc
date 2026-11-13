@@ -24,7 +24,8 @@ import {
   elementsToBodyFixed,
   elementsToIcrf,
   ellipsoidE2,
-  solveEccentricAnomaly,
+  propagateElementsEci,
+  secularRates,
   type BodyMath,
 } from "./orbitalMath";
 
@@ -79,162 +80,6 @@ function deg2rad(deg: number): number {
 
 function rad2deg(rad: number): number {
   return (rad * 180.0) / Math.PI;
-}
-
-function perifocalState(
-  semiMajorAxisKm: number,
-  eccentricity: number,
-  meanAnomalyRad: number,
-  meanAnomalyDot: number,
-): [number, number, number, number] {
-  const eccentricAnomaly = solveEccentricAnomaly(meanAnomalyRad, eccentricity);
-  const cosE = Math.cos(eccentricAnomaly);
-  const sinE = Math.sin(eccentricAnomaly);
-  const sqrtOneMinusE2 = Math.sqrt(1.0 - eccentricity * eccentricity);
-  const denom = 1.0 - eccentricity * cosE;
-  const eccentricAnomalyDot = meanAnomalyDot / denom;
-  return [
-    semiMajorAxisKm * (cosE - eccentricity),
-    semiMajorAxisKm * sqrtOneMinusE2 * sinE,
-    -semiMajorAxisKm * sinE * eccentricAnomalyDot,
-    semiMajorAxisKm * sqrtOneMinusE2 * cosE * eccentricAnomalyDot,
-  ];
-}
-
-function rotationTerms(
-  raanRad: number,
-  inclinationRad: number,
-  argumentOfPerigeeRad: number,
-): [[number, number], [number, number], [number, number]] {
-  const cosRaan = Math.cos(raanRad);
-  const sinRaan = Math.sin(raanRad);
-  const cosI = Math.cos(inclinationRad);
-  const sinI = Math.sin(inclinationRad);
-  const cosArgp = Math.cos(argumentOfPerigeeRad);
-  const sinArgp = Math.sin(argumentOfPerigeeRad);
-  return [
-    [cosRaan * cosArgp - sinRaan * sinArgp * cosI,
-      -cosRaan * sinArgp - sinRaan * cosArgp * cosI],
-    [sinRaan * cosArgp + cosRaan * sinArgp * cosI,
-      -sinRaan * sinArgp + cosRaan * cosArgp * cosI],
-    [sinArgp * sinI, cosArgp * sinI],
-  ];
-}
-
-function rotationDerivativeTerms(
-  raanRad: number,
-  inclinationRad: number,
-  argumentOfPerigeeRad: number,
-): [
-  [[number, number], [number, number], [number, number]],
-  [[number, number], [number, number], [number, number]],
-] {
-  const cosRaan = Math.cos(raanRad);
-  const sinRaan = Math.sin(raanRad);
-  const cosI = Math.cos(inclinationRad);
-  const sinI = Math.sin(inclinationRad);
-  const cosArgp = Math.cos(argumentOfPerigeeRad);
-  const sinArgp = Math.sin(argumentOfPerigeeRad);
-  return [
-    [
-      [-sinRaan * cosArgp - cosRaan * sinArgp * cosI,
-        sinRaan * sinArgp - cosRaan * cosArgp * cosI],
-      [cosRaan * cosArgp - sinRaan * sinArgp * cosI,
-        -cosRaan * sinArgp - sinRaan * cosArgp * cosI],
-      [0.0, 0.0],
-    ],
-    [
-      [-cosRaan * sinArgp - sinRaan * cosArgp * cosI,
-        -cosRaan * cosArgp + sinRaan * sinArgp * cosI],
-      [-sinRaan * sinArgp + cosRaan * cosArgp * cosI,
-        -sinRaan * cosArgp - cosRaan * sinArgp * cosI],
-      [cosArgp * sinI, -sinArgp * sinI],
-    ],
-  ];
-}
-
-function applyRotation(
-  matrix: [[number, number], [number, number], [number, number]],
-  xPf: number,
-  yPf: number,
-): [number, number, number] {
-  return [
-    matrix[0][0] * xPf + matrix[0][1] * yPf,
-    matrix[1][0] * xPf + matrix[1][1] * yPf,
-    matrix[2][0] * xPf + matrix[2][1] * yPf,
-  ];
-}
-
-function propagateEci(
-  semiMajorAxisKm: number,
-  eccentricity: number,
-  inclinationRad: number,
-  raanRad: number,
-  argumentOfPerigeeRad: number,
-  meanAnomalyRad: number,
-  dt: number,
-  body: BodyMath,
-): [[number, number, number], [number, number, number]] {
-  const a = semiMajorAxisKm;
-  const n = Math.sqrt(body.gravitationalParameterKm3S2 / (a * a * a));
-  const [xPf, yPf, vxPf, vyPf] = perifocalState(
-    a,
-    eccentricity,
-    meanAnomalyRad + n * dt,
-    n,
-  );
-  const rotation = rotationTerms(raanRad, inclinationRad, argumentOfPerigeeRad);
-
-  return [
-    applyRotation(rotation, xPf, yPf),
-    applyRotation(rotation, vxPf, vyPf),
-  ];
-}
-
-function propagateEciJ2MeanElements(
-  semiMajorAxisKm: number,
-  eccentricity: number,
-  inclinationRad: number,
-  raanRad: number,
-  argumentOfPerigeeRad: number,
-  meanAnomalyRad: number,
-  dt: number,
-  body: BodyMath,
-): [[number, number, number], [number, number, number]] {
-  const a = semiMajorAxisKm;
-  const n = Math.sqrt(body.gravitationalParameterKm3S2 / (a * a * a));
-  const cosI = Math.cos(inclinationRad);
-  const p = a * (1.0 - eccentricity * eccentricity);
-  const j2Factor = body.j2 * (body.equatorialRadiusKm / p) ** 2;
-  const raanDot = -1.5 * j2Factor * n * cosI;
-  const argumentOfPerigeeDot =
-    eccentricity === 0 ? 0.0 : 0.75 * j2Factor * n * (5.0 * cosI * cosI - 1.0);
-  const meanAnomalyDot =
-    n * (1.0 + 0.75 * j2Factor * Math.sqrt(1.0 - eccentricity * eccentricity) *
-      (3.0 * cosI * cosI - 1.0));
-
-  const raan = raanRad + raanDot * dt;
-  const argumentOfPerigee = argumentOfPerigeeRad + argumentOfPerigeeDot * dt;
-  const [xPf, yPf, vxPf, vyPf] = perifocalState(
-    a,
-    eccentricity,
-    meanAnomalyRad + meanAnomalyDot * dt,
-    meanAnomalyDot,
-  );
-  const rotation = rotationTerms(raan, inclinationRad, argumentOfPerigee);
-  const [dRaan, dArgp] = rotationDerivativeTerms(raan, inclinationRad, argumentOfPerigee);
-  const baseVel = applyRotation(rotation, vxPf, vyPf);
-  const raanVel = applyRotation(dRaan, xPf, yPf);
-  const argpVel = applyRotation(dArgp, xPf, yPf);
-
-  return [
-    applyRotation(rotation, xPf, yPf),
-    [
-      baseVel[0] + raanDot * raanVel[0] + argumentOfPerigeeDot * argpVel[0],
-      baseVel[1] + raanDot * raanVel[1] + argumentOfPerigeeDot * argpVel[1],
-      baseVel[2] + raanDot * raanVel[2] + argumentOfPerigeeDot * argpVel[2],
-    ],
-  ];
 }
 
 /**
@@ -336,42 +181,18 @@ export function propagateNode(
     );
   }
 
-  if (
-    node.propagator !== "two-body" &&
-    node.propagator !== "keplerian-circular" &&
-    node.propagator !== "j2-mean-elements"
-  ) {
-    throw new Error(`propagateNode does not support ${String(node.propagator)}`);
-  }
-
   const iRad = deg2rad(node.inclination_deg);
-  const raanRad = deg2rad(node.raan_deg);
-  const argumentOfPerigeeRad = deg2rad(node.argument_of_perigee_deg);
-  const meanAnomalyRad = deg2rad(node.mean_anomaly_deg);
-  const dt = simTimeUnix - epochUnix;
-
-  const [posEci, velEci] =
-    node.propagator === "j2-mean-elements"
-      ? propagateEciJ2MeanElements(
-          node.semi_major_axis_km,
-          node.eccentricity,
-          iRad,
-          raanRad,
-          argumentOfPerigeeRad,
-          meanAnomalyRad,
-          dt,
-          body,
-        )
-      : propagateEci(
-          node.semi_major_axis_km,
-          node.eccentricity,
-          iRad,
-          raanRad,
-          argumentOfPerigeeRad,
-          meanAnomalyRad,
-          dt,
-          body,
-        );
+  const rates = secularRates(node.propagator, node.semi_major_axis_km, node.eccentricity, iRad, body);
+  const [posEci, velEci] = propagateElementsEci(
+    node.semi_major_axis_km,
+    node.eccentricity,
+    iRad,
+    deg2rad(node.raan_deg),
+    deg2rad(node.argument_of_perigee_deg),
+    deg2rad(node.mean_anomaly_deg),
+    simTimeUnix - epochUnix,
+    rates,
+  );
   const posEcef = elementsToBodyFixed(posEci, body, orientation.rotation);
   const velEcef = elementsVelocityToBodyFixed(posEci, velEci, body, orientation);
   const geo = ecefToGeodetic(posEcef[0], posEcef[1], posEcef[2], body);

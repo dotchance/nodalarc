@@ -10,7 +10,7 @@ from collections.abc import Iterator
 import pytest
 
 from .harness.client import Operator, vs_api_base_url
-from .harness.network import Clock, read_clock
+from .harness.network import Clock, read_clock, records_history
 
 _PASSED = pytest.StashKey[bool]()
 
@@ -36,6 +36,17 @@ def created(operator: Operator) -> Iterator[list[str]]:
         operator.run_session(found)
     for ref in reversed(refs):  # a session before the objects it refers to
         operator.delete_user_object(ref)
+
+
+@pytest.fixture
+def recorded_session(operator: Operator) -> Iterator[None]:
+    """The running session, deployed again with recording. Afterward it runs as it was found."""
+    found = next(session for session in operator.sessions() if session.get("active"))
+    was_recording = records_history(operator)
+    operator.wait_for_session(found, operator.switch(found, record_history=True))
+    yield
+    if not was_recording:
+        operator.run_session(found)
 
 
 @pytest.fixture

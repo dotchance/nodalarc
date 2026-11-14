@@ -11,47 +11,14 @@ to say so.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
 from .harness.client import Operator, Refused
-from .harness.network import Clock, ground_links
+from .harness.network import Clock, ground_links, recorded_link_events, records_history
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(1800)]
-
-
-@pytest.fixture
-def recorded_session(operator: Operator) -> Iterator[None]:
-    """The running session, deployed again with recording. Afterward it runs as it was found."""
-    found = next(session for session in operator.sessions() if session.get("active"))
-    was_recording = _records(operator)
-    operator.wait_for_session(found, operator.switch(found, record_history=True))
-    yield
-    if not was_recording:
-        operator.run_session(found)
-
-
-def _records(operator: Operator) -> bool:
-    recording = operator.state()["history_recording"]  # None for a session without recording
-    return recording is not None and recording["state"] == "recording"
-
-
-def _recorded_link_events(operator: Operator, **filters: str) -> list[dict[str, Any]]:
-    """Every page of the recorded link events that match."""
-    events: list[dict[str, Any]] = []
-    cursor: dict[str, str] = {}
-    while True:
-        page = operator.get("/api/v1/links", **filters, **cursor)
-        events.extend(page["events"])
-        assert page["returned"] == len(page["events"]) <= 200
-        if page["next_cursor"] is None:
-            assert len({event["id"] for event in events}) == len(events) == page["total"], (
-                f"the pages hold {len(events)} events, {page['total']} match"
-            )
-            return events
-        cursor = {"cursor": page["next_cursor"]}
 
 
 def test_the_recorded_link_history_is_what_the_session_showed(
@@ -83,7 +50,7 @@ def test_the_recorded_link_history_is_what_the_session_showed(
     ground_pairs = {pair for _, pair in shown} | ground_links(snapshots[0])
     recorded = [
         (event["event_type"], pair)
-        for event in _recorded_link_events(operator, start=started, end=ended)
+        for event in recorded_link_events(operator, start=started, end=ended)
         if event["event_type"] in ("LinkUp", "LinkDown")
         and event["sim_time"] > started
         and (pair := (event["node_a"], event["node_b"])) in ground_pairs
@@ -107,7 +74,7 @@ def test_the_recorded_link_history_is_what_the_session_showed(
 
 
 def test_a_session_deployed_without_recording_says_it_has_no_history(operator: Operator) -> None:
-    if _records(operator):
+    if records_history(operator):
         pytest.skip("did not run: the running session records its history")
     with pytest.raises(Refused) as refusal:
         operator.get("/api/v1/links")

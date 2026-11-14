@@ -443,6 +443,28 @@ class ReferencePositions:
         return origin + states.position_icrf_km[0]
 
 
+def records_history(operator: Operator) -> bool:
+    """Whether the running session records its history."""
+    recording = operator.state()["history_recording"]  # None for a session without recording
+    return recording is not None and recording["state"] == "recording"
+
+
+def recorded_link_events(operator: Operator, **filters: str) -> list[dict[str, Any]]:
+    """Every page of the recorded link events that match."""
+    events: list[dict[str, Any]] = []
+    cursor: dict[str, str] = {}
+    while True:
+        page = operator.get("/api/v1/links", **filters, **cursor)
+        events.extend(page["events"])
+        assert page["returned"] == len(page["events"]) <= 200
+        if page["next_cursor"] is None:
+            assert len({event["id"] for event in events}) == len(events) == page["total"], (
+                f"the pages hold {len(events)} events, {page['total']} match"
+            )
+            return events
+        cursor = {"cursor": page["next_cursor"]}
+
+
 def ground_links(snapshot: dict[str, Any]) -> set[tuple[str, str]]:
     return {
         link_key(link)

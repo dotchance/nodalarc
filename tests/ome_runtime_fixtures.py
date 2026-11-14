@@ -118,6 +118,7 @@ def allocate_ground_scenario(
             sat_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
         ),
         stating_nodes=set(ground_station_ids) | set(gs_terminal_indices),
+        rule_n={},
         selection_policies=gs_selection_policies,
         min_elevations=gs_min_elevations,
         handover_policies=gs_handover_policies,

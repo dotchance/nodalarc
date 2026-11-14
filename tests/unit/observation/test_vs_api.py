@@ -1718,6 +1718,11 @@ def _decision_snapshot_payload() -> dict:
                 "unscheduled_reason": "hysteresis_hold",
                 "incumbent_pair": ["gs-den", "sat-a"],
                 "capacity_constraint": None,
+                "node_id": None,
+                "cap": None,
+                "held_pairs": None,
+                "range_km": None,
+                "incumbent_range_km": None,
             }
         ],
         "policy_audit": {
@@ -1957,6 +1962,11 @@ class TestDecisionTimelineEndpoint:
                 "unscheduled_reason": "gs_capacity",
                 "incumbent_pair": None,
                 "capacity_constraint": "gs-den:terminals",
+                "node_id": None,
+                "cap": None,
+                "held_pairs": None,
+                "range_km": None,
+                "incumbent_range_km": None,
             }
         )
         second = _Message()

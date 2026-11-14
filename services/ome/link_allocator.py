@@ -10,14 +10,21 @@ physics, and it does not publish NATS events.
 
 The allocator knows nodes, named terminal pools, caps, held links, handovers in progress and
 the session's rank order. It does not know what a ground station or a satellite is. Who chooses
-a pair is read from the configuration: the nodes the caller names as stating scheduling. A node
-that states scheduling chooses among its candidates by its selection policy and gives up a held
-link by its handover policy and mode. The other node of such a pair does not choose: contention
-for its terminals is resolved in the session's rank order, and a link it gives up is released at
-once.
+a pair is read from the configuration: the nodes the caller names as stating scheduling.
 
-Both nodes of a pair run one routine (``check_end``). The two cases differ only in what they
-pass to it: the score the displacement rule compares, and how the held link ends.
+- A pair with one node that states scheduling is chosen by that node: by its selection policy
+  among its candidates, and by its handover policy and mode when it gives up a held link. The
+  other node does not choose. Contention for its terminals is resolved in the session's rank
+  order, and a link it gives up is released at once.
+- A pair whose nodes state no scheduling is chosen by NodalArc: nearest first, and a held link
+  gives way only to a strictly nearer pair. A node makes before it breaks when it has a
+  terminal beyond its cap. Such pairs never take the place of a link a stated policy chose.
+
+Stated always beats derived: every pair with a stated chooser is placed before any pair NodalArc
+chooses.
+
+Both nodes of a pair run one routine (``check_end``). The cases differ only in what they pass
+to it: the score the displacement rule compares, and how the held link ends.
 """
 
 from __future__ import annotations
@@ -47,7 +54,7 @@ from nodalarc.models.link_decisions import (
 )
 
 from ome.handover_policies import HandoverContext, evaluate_handover, strictly_higher
-from ome.selection_policies import SelectionContext, score_candidate
+from ome.selection_policies import SelectionContext, nearest_score, score_candidate
 from ome.types import (
     MbbTeardown,
     MbbTeardownLifecycleEvent,
@@ -56,6 +63,16 @@ from ome.types import (
     ReceiveWindows,
 )
 from ome.visibility import GroundVisibility
+
+# The order NodalArc considers the pairs it chooses itself: ascending range, ties by node pair.
+# These are two of the session's own ranking components applied to the nearest-first score.
+_DEFAULT_RANKING: tuple[RankingComponent, ...] = ("selection_score", "lex_pair")
+
+# How long a node that states no scheduling keeps its old link once the new one is scheduled.
+# The rule for such a node states an order (new link up, then old link down) and no length, so
+# the overlap is the shortest the handover state machine has. A node that needs a longer
+# overlap states its scheduling.
+_DEFAULT_OVERLAP_TICKS = 1
 
 
 class UsablePair(NamedTuple):
@@ -107,15 +124,20 @@ class LinkAllocationResult:
 @dataclass(frozen=True)
 class _Candidate:
     pair: tuple[str, str]
-    # The node whose terminal index comes first in the association: the node that chooses the
-    # pair. ``peer`` is the other node.
+    # "stated": one node of the pair states scheduling and chooses it. "default": neither
+    # node states scheduling and NodalArc chooses it.
+    kind: Literal["stated", "default"]
+    # The node whose terminal index comes first in the association: the node that chooses a
+    # stated pair, and the first node in node-pair order otherwise. ``peer`` is the other node.
     lead: str
     peer: str
     lead_pool: str
     peer_pool: str
     rule_id: str | None
-    # The lead's view of the pair, which its policies score.
-    visibility: GroundVisibility
+    range_km: float
+    # The lead's view of a stated pair, which its policies score. A default pair has none.
+    visibility: GroundVisibility | None
+    # Higher is better: the lead's stated selection score, or the nearest-first score.
     selection_score: float
     service_priority: int
     # The pair's rank among the lead's own candidates (ranking component ``per_gs_rank``).
@@ -131,6 +153,11 @@ class _Rejected:
     reason: GroundUnscheduledReason
     incumbent_pair: tuple[str, str] | None
     capacity_constraint: str | None
+    node_id: str | None = None
+    cap: int | None = None
+    held_pairs: tuple[tuple[str, str], ...] | None = None
+    range_km: float | None = None
+    incumbent_range_km: float | None = None
 
 
 # Terminal handover failure/release reasons are final for the tick. Later
@@ -147,11 +174,12 @@ _LOCKED_REJECTION_REASONS: frozenset[GroundUnscheduledReason] = frozenset(
 
 
 def _lead_and_peer(pair: tuple[str, str], stating_nodes: AbstractSet[str]) -> tuple[str, str]:
-    """Return ``(lead, peer)`` for a pair: the node that chooses it, then the other node.
+    """Return ``(lead, peer)`` for a pair.
 
-    The lead is the pair's one node that states scheduling. It needs no listing of this tick's
-    usable pairs, so a held pair that is no longer usable still has an orientation for its
-    terminal indices and its events.
+    The lead is the pair's one node that states scheduling. When neither node states
+    scheduling it is the first node in node-pair order. Either way it needs no listing of this
+    tick's usable pairs, so a held pair that is no longer usable still has an orientation for
+    its terminal indices and its events.
     """
 
     a_states = pair[0] in stating_nodes
@@ -161,13 +189,9 @@ def _lead_and_peer(pair: tuple[str, str], stating_nodes: AbstractSet[str]) -> tu
             f"Pair {pair!r} has scheduling stated at both of its nodes; the allocator has no "
             "rule for that yet"
         )
-    if a_states:
-        return pair[0], pair[1]
     if b_states:
         return pair[1], pair[0]
-    raise ValueError(
-        f"Pair {pair!r} has no node that states scheduling; the allocator has no rule for that yet"
-    )
+    return pair[0], pair[1]
 
 
 def _handing_node(old_pair: tuple[str, str], successor_pair: tuple[str, str]) -> str:
@@ -233,9 +257,10 @@ def _build_candidates(
     pools: Mapping[str, Mapping[str, Sequence[int]]],
     ranking_order: Sequence[RankingComponent],
 ) -> tuple[list[_Candidate], dict[tuple[str, str], _Candidate], set[tuple[str, str]]]:
-    # One row per usable pair: (item, lead, peer, view, score). The candidate itself is built
-    # once, after the lead's own ranking is known.
+    # One row per stated pair: (item, peer, view, score). The candidate itself is built once,
+    # after the lead's own ranking is known.
     by_lead: dict[str, list[tuple[UsablePair, str, GroundVisibility, float]]] = {}
+    default_items: list[UsablePair] = []
     usable_set: set[tuple[str, str]] = set()
 
     for item in usable:
@@ -246,6 +271,9 @@ def _build_candidates(
             raise ValueError(f"Duplicate usable candidate for pair {pair!r}")
         usable_set.add(pair)
         lead, peer = _lead_and_peer(pair, stating_nodes)
+        if lead not in stating_nodes:
+            default_items.append(item)
+            continue
         view = item.view_a if lead == pair[0] else item.view_b
         if view is None:
             raise ValueError(
@@ -277,27 +305,65 @@ def _build_candidates(
             peer_pool_size = len(pools.get(peer, {}).get(peer_pool, ()))
             candidate = _Candidate(
                 pair=item.pair,
+                kind="stated",
                 lead=lead,
                 peer=peer,
                 lead_pool=item.pool_a if lead_is_a else item.pool_b,
                 peer_pool=peer_pool,
                 rule_id=item.rule_id,
+                range_km=item.range_km,
                 visibility=view,
                 selection_score=score,
                 service_priority=service_priorities[lead],
                 lead_rank=lead_rank,
                 peer_pool_size=peer_pool_size,
-                rank_key=_rank_key(
-                    ranking_order=ranking_order,
-                    pair=item.pair,
-                    selection_score=score,
-                    service_priority=service_priorities[lead],
-                    lead_rank=lead_rank,
-                    peer_pool_size=peer_pool_size,
+                # Every stated pair ranks before every pair NodalArc chooses.
+                rank_key=(
+                    0,
+                    *_rank_key(
+                        ranking_order=ranking_order,
+                        pair=item.pair,
+                        selection_score=score,
+                        service_priority=service_priorities[lead],
+                        lead_rank=lead_rank,
+                        peer_pool_size=peer_pool_size,
+                    ),
                 ),
             )
             candidates.append(candidate)
             candidate_by_pair[candidate.pair] = candidate
+
+    for item in default_items:
+        score = nearest_score(item.range_km)
+        peer_pool_size = len(pools.get(item.pair[1], {}).get(item.pool_b, ()))
+        candidate = _Candidate(
+            pair=item.pair,
+            kind="default",
+            lead=item.pair[0],
+            peer=item.pair[1],
+            lead_pool=item.pool_a,
+            peer_pool=item.pool_b,
+            rule_id=item.rule_id,
+            range_km=item.range_km,
+            visibility=None,
+            selection_score=score,
+            service_priority=0,
+            lead_rank=0,
+            peer_pool_size=peer_pool_size,
+            rank_key=(
+                1,
+                *_rank_key(
+                    ranking_order=_DEFAULT_RANKING,
+                    pair=item.pair,
+                    selection_score=score,
+                    service_priority=0,
+                    lead_rank=0,
+                    peer_pool_size=peer_pool_size,
+                ),
+            ),
+        )
+        candidates.append(candidate)
+        candidate_by_pair[candidate.pair] = candidate
 
     candidates.sort(key=lambda c: c.rank_key)
     return candidates, candidate_by_pair, usable_set
@@ -430,6 +496,7 @@ def allocate_links(
     pending_teardowns: MbbTeardownState,
     terminal_pools: Mapping[str, Mapping[str, Sequence[int]]],
     stating_nodes: AbstractSet[str],
+    rule_n: Mapping[str, int],
     selection_policies: Mapping[str, SelectionPolicySpec],
     min_elevations: Mapping[str, float],
     handover_policies: Mapping[str, HandoverPolicySpec],
@@ -459,6 +526,10 @@ def allocate_links(
     ``stating_nodes`` names the nodes that state scheduling. The per-node policy maps hold
     their stated values; ``terminal_pools`` holds every node's named terminal pools. Within a
     node, terminal indices are one index space across its pools.
+
+    ``rule_n`` holds the ``n`` a link rule states: the most links a node holds at once on that
+    rule. A node's cap on a rule is ``n`` when the rule states it, and otherwise the pool's
+    terminals less the make-before-break reserve the node states.
 
     Terminal selection: surviving links keep their indices (sticky). New
     links take the lowest free allowed index, preferring indices that
@@ -502,6 +573,9 @@ def allocate_links(
     order = _validate_ranking_order(ranking_order)
     stating = frozenset(stating_nodes)
     pools = _normalize_terminal_pools(terminal_pools=terminal_pools, stating_nodes=stating)
+    for rule_id, stated_n in rule_n.items():
+        if stated_n < 1:
+            raise ValueError(f"Rule {rule_id!r} states n={stated_n}; n must be at least 1")
 
     for label, mapping in (
         ("handover mode", handover_modes),
@@ -577,12 +651,13 @@ def allocate_links(
             "Link allocator is missing reference_body for "
             f"{', '.join(missing_body)}; every unscheduled pair needs a body anchor"
         )
-    missing_handover = sorted(leads - set(handover_policies))
+    stating_leads = leads & stating
+    missing_handover = sorted(stating_leads - set(handover_policies))
     if missing_handover:
         raise ValueError(
             f"Link allocator is missing handover_policy for {', '.join(missing_handover)}"
         )
-    missing_min_elevation = sorted(leads - set(min_elevations))
+    missing_min_elevation = sorted(stating_leads - set(min_elevations))
     if missing_min_elevation:
         raise ValueError(
             f"Link allocator is missing min elevation for {', '.join(missing_min_elevation)}"
@@ -611,9 +686,33 @@ def allocate_links(
         pools=pools,
         ranking_order=order,
     )
-    # A pair's place in the session's rank order. The end that does not choose compares
+    # A pair's place in the tick's rank order. The end that does not choose compares
     # places: a lower place is a better rank.
     rank_place = {candidate.pair: place for place, candidate in enumerate(candidates)}
+
+    # A rule's `n` and a node's stated make-before-break reserve must fit the node's pool
+    # together: the reserve is the terminal the node keeps free beyond its cap.
+    reserve_checked: set[tuple[str, str, str]] = set()
+    for candidate in candidates:
+        if candidate.rule_id is None or candidate.rule_id not in rule_n:
+            continue
+        for node_id, pool_name in (
+            (candidate.lead, candidate.lead_pool),
+            (candidate.peer, candidate.peer_pool),
+        ):
+            if node_id not in stating or handover_modes[node_id] != "mbb":
+                continue
+            reserve_key = (node_id, pool_name, candidate.rule_id)
+            if reserve_key in reserve_checked:
+                continue
+            reserve_checked.add(reserve_key)
+            size = len(pools.get(node_id, {}).get(pool_name, ()))
+            if rule_n[candidate.rule_id] + mbb_reserve[node_id] > size:
+                raise ValueError(
+                    f"Rule {candidate.rule_id!r} states n={rule_n[candidate.rule_id]} and "
+                    f"{node_id} states mbb_reserve={mbb_reserve[node_id]}; together they exceed "
+                    f"the {size} terminal(s) of {node_id}.{pool_name}"
+                )
 
     occupied: dict[str, set[int]] = {}
     # Which association held each terminal index in the previously published authority
@@ -812,22 +911,30 @@ def allocate_links(
         rejected.pop(candidate.pair, None)
         return True
 
-    def handover_mode_for(node_id: str) -> Literal["bbm", "mbb"]:
-        try:
-            return handover_modes[node_id]
-        except KeyError:
-            raise ValueError(f"Node {node_id} states no handover mode") from None
-
-    def mbb_overlap_ticks_for(node_id: str) -> int:
-        return mbb_overlap_ticks[node_id] if handover_mode_for(node_id) == "mbb" else 0
-
-    def cap_of(node_id: str, pool_name: str) -> int:
-        """A node's cap on a rule: the pool's terminals, less the make-before-break reserve
-        the node states."""
+    def cap_of(node_id: str, pool_name: str, rule_id: str | None) -> int:
+        """A node's cap on a rule: the rule's `n` when it states one, and otherwise the
+        pool's terminals less the make-before-break reserve the node states."""
+        if rule_id is not None and rule_id in rule_n:
+            return rule_n[rule_id]
         size = len(pool_of(node_id, pool_name))
         if node_id in stating and handover_modes[node_id] == "mbb":
             return size - mbb_reserve[node_id]
         return size
+
+    def end_mode(node_id: str, pool_name: str, rule_id: str | None) -> Literal["bbm", "mbb"]:
+        """How a choosing node ends a held link. A node that states scheduling uses its stated
+        mode. A node that states none brings the new link up first when its pool has a
+        terminal beyond its cap, and takes the old link down first otherwise."""
+        if node_id in stating:
+            return handover_modes[node_id]
+        if len(pool_of(node_id, pool_name)) > cap_of(node_id, pool_name, rule_id):
+            return "mbb"
+        return "bbm"
+
+    def overlap_ticks_for(node_id: str) -> int:
+        if node_id in stating:
+            return mbb_overlap_ticks[node_id] if handover_modes[node_id] == "mbb" else 0
+        return _DEFAULT_OVERLAP_TICKS
 
     def rejection_locked(pair: tuple[str, str]) -> bool:
         rejection = rejected.get(pair)
@@ -856,7 +963,7 @@ def allocate_links(
                 and _handing_node(pair, new_pending_teardowns[pair].successor_pair) == node_id
             )
         ]
-        cap_reached = len(steady) >= cap_of(node_id, pool_name)
+        cap_reached = len(steady) >= cap_of(node_id, pool_name, candidate.rule_id)
         return occupants, steady, cap_reached, has_free_terminal(node_id, pool_name)
 
     def worst_of(pairs: Sequence[tuple[str, str]]) -> _Candidate | None:
@@ -873,8 +980,9 @@ def allocate_links(
         room) and a rejection (``None`` when the candidate may link at this end).
 
         Every case decides with the one base rule, a strictly higher score. A node that
-        chooses the pair applies its handover policy to its own scores. A node that does not
-        choose compares places in the session's rank order.
+        chooses a stated pair applies its handover policy to its own scores. A node that does
+        not choose compares places in the tick's rank order. A node of a pair NodalArc
+        chooses compares the nearest-first scores, which is comparing the two ranges.
 
         A capacity refusal is published as ``gs_capacity`` at a node that chooses and as
         ``sat_capacity`` at a node that does not. Both names are part of the published reason
@@ -887,19 +995,69 @@ def allocate_links(
         capacity_text = f"{node_id}.{pool_name}"
         # The links whose release would make room: the node's links of the same rule when its
         # cap is reached, and any occupant of the pool when only the terminals are used up.
-        # A link in a handover cannot be taken, and no link of another tenant.
+        relevant = steady if cap_reached else occupants
+        # A link in a handover cannot be taken, and no link of another tenant. A pair NodalArc
+        # chooses takes only a link NodalArc chose: it never displaces a stated choice.
         takeable = [
             pair
-            for pair in (steady if cap_reached else occupants)
+            for pair in relevant
             if pair not in protected
             and tenant_ids[candidate_for(pair).lead] == tenant_ids[candidate.lead]
+            and (candidate.kind == "stated" or candidate_for(pair).kind == "default")
         ]
         incumbent = worst_of(takeable)
 
-        if chooses:
+        if not chooses:
+            # A refusal names the pool's worst-ranked occupant, whether or not that link
+            # could be taken.
+            if incumbent is None or not strictly_higher(
+                -rank_place[candidate.pair], -rank_place[incumbent.pair]
+            ):
+                blocker = worst_of(occupants)
+                return None, _Rejected(
+                    reason="sat_capacity",
+                    incumbent_pair=blocker.pair if blocker is not None else None,
+                    capacity_constraint=capacity_text,
+                )
+            return incumbent, None
+
+        if candidate.kind == "default":
+            if incumbent is None:
+                stated_links = [pair for pair in relevant if candidate_for(pair).kind == "stated"]
+                stated_holder = worst_of(stated_links)
+                if stated_holder is not None:
+                    return None, _Rejected(
+                        reason="taken_by_stated_choice",
+                        incumbent_pair=stated_holder.pair,
+                        capacity_constraint=capacity_text,
+                        node_id=node_id,
+                    )
+                return None, _Rejected(
+                    reason="cap_full",
+                    incumbent_pair=None,
+                    capacity_constraint=capacity_text,
+                    node_id=node_id,
+                    cap=cap_of(node_id, pool_name, candidate.rule_id),
+                    held_pairs=tuple(sorted(relevant)),
+                )
+            if not strictly_higher(candidate.selection_score, incumbent.selection_score):
+                return None, _Rejected(
+                    reason="not_strictly_nearer",
+                    incumbent_pair=incumbent.pair,
+                    capacity_constraint=None,
+                    range_km=candidate.range_km,
+                    incumbent_range_km=incumbent.range_km,
+                )
+        else:
             if incumbent is None:
                 return None, _Rejected(
                     reason="gs_capacity", incumbent_pair=None, capacity_constraint=capacity_text
+                )
+            if candidate.visibility is None or incumbent.visibility is None:
+                raise ValueError(
+                    f"Internal allocator invariant violated: {node_id} chooses "
+                    f"{candidate.pair!r} against {incumbent.pair!r} by a stated policy, but "
+                    "one of the two pairs carries no view"
                 )
             handover_policy = handover_policies[node_id]
             decision = evaluate_handover(
@@ -932,23 +1090,11 @@ def allocate_links(
                     f"Handover policy {handover_policy.name!r} returned unknown action "
                     f"{decision.action!r}"
                 )
-            if handover_mode_for(node_id) == "mbb" and not terminal_free:
-                return None, _Rejected(
-                    reason="bbm_no_spare",
-                    incumbent_pair=incumbent.pair,
-                    capacity_constraint=capacity_text,
-                )
-            return incumbent, None
 
-        # The node does not choose the pair. A refusal names the pool's worst-ranked occupant,
-        # whether or not that link could be taken.
-        if incumbent is None or not strictly_higher(
-            -rank_place[candidate.pair], -rank_place[incumbent.pair]
-        ):
-            blocker = worst_of(occupants)
+        if end_mode(node_id, pool_name, candidate.rule_id) == "mbb" and not terminal_free:
             return None, _Rejected(
-                reason="sat_capacity",
-                incumbent_pair=blocker.pair if blocker is not None else None,
+                reason="bbm_no_spare",
+                incumbent_pair=incumbent.pair,
                 capacity_constraint=capacity_text,
             )
         return incumbent, None
@@ -1051,7 +1197,10 @@ def allocate_links(
         successor_visible = successor in usable_set
         successor_current = successor in current_associations and successor not in pending_teardowns
         elapsed = step - teardown.start_step
-        if handover_mode_for(handing_node) != "mbb":
+        # A node that states its mode must state make before break to be in a handover. A
+        # node that states none has its mode derived from its pool and cap, which do not
+        # change during a session.
+        if handing_node in stating and handover_modes[handing_node] != "mbb":
             raise ValueError(
                 f"Pending MBB teardown {pair!r} exists for {handing_node}, which hands over "
                 "break before make; runtime handover policy and allocator state are "
@@ -1138,7 +1287,7 @@ def allocate_links(
                 )
             continue
 
-        if elapsed >= mbb_overlap_ticks_for(handing_node) or not pair_visible:
+        if elapsed >= overlap_ticks_for(handing_node) or not pair_visible:
             drop_current_pairs.add(pair)
             released(pair, "teardown_completed")
             completion_message = (
@@ -1197,88 +1346,83 @@ def allocate_links(
             continue
         add_existing(pair, indices)
 
-    # Fail-safe convergence cap. Typical ticks complete in one or two passes;
-    # the cap prevents a logic bug from spinning forever.
-    max_candidate_passes = max(
-        1,
-        len(candidates) + len(current_associations) + len(pending_teardowns) + 1,
-    )
-    for _pass_idx in range(max_candidate_passes):
-        progress = False
-        for candidate in candidates:
-            if candidate.pair in new_associations or rejection_locked(candidate.pair):
-                continue
+    def consider(candidate: _Candidate) -> bool:
+        """Consider one candidate pair. Returns whether the tick's link set changed."""
+        if candidate.pair in new_associations or rejection_locked(candidate.pair):
+            return False
 
+        if candidate.kind == "stated":
             # The node that does not choose is checked first, then the node that chooses, so
             # a pair refused at both ends carries the first end's reason.
             ends = (
                 (candidate.peer, candidate.peer_pool, False),
                 (candidate.lead, candidate.lead_pool, True),
             )
+        else:
+            # NodalArc chooses the pair, and both of its nodes apply that choice.
+            ends = (
+                (candidate.lead, candidate.lead_pool, True),
+                (candidate.peer, candidate.peer_pool, True),
+            )
 
-            # A node in a handover of its own takes no other link until the handover ends,
-            # whether or not it has room.
-            locked = False
-            for node_id, pool_name in (
-                (candidate.lead, candidate.lead_pool),
-                (candidate.peer, candidate.peer_pool),
-            ):
-                handover_pair = lock_by_node.get(node_id)
-                if handover_pair is not None:
-                    _record_rejection(
-                        rejected,
-                        candidate.pair,
-                        reason="mbb_overlap_locked",
-                        incumbent_pair=handover_pair,
-                        capacity_constraint=f"{node_id}.{pool_name}",
-                    )
-                    locked = True
-                    break
-            if locked:
-                continue
-
-            # Both ends decide before any link is released.
-            displaced: list[tuple[str, str, bool, _Candidate]] = []
-            rejection: _Rejected | None = None
-            for node_id, pool_name, chooses in ends:
-                incumbent, rejection = check_end(candidate, node_id, pool_name, chooses=chooses)
-                if rejection is not None:
-                    break
-                if incumbent is not None:
-                    displaced.append((node_id, pool_name, chooses, incumbent))
-            if rejection is not None:
+        # A node in a handover of its own takes no other link until the handover ends,
+        # whether or not it has room.
+        for node_id, pool_name in (
+            (candidate.lead, candidate.lead_pool),
+            (candidate.peer, candidate.peer_pool),
+        ):
+            handover_pair = lock_by_node.get(node_id)
+            if handover_pair is not None:
                 _record_rejection(
                     rejected,
                     candidate.pair,
-                    reason=rejection.reason,
-                    incumbent_pair=rejection.incumbent_pair,
-                    capacity_constraint=rejection.capacity_constraint,
+                    reason="mbb_overlap_locked",
+                    incumbent_pair=handover_pair,
+                    capacity_constraint=f"{node_id}.{pool_name}",
                 )
-                continue
+                return False
 
-            # A choosing node that breaks before it makes releases its held link now. That
-            # link is final for the tick.
-            for node_id, _pool_name, chooses, incumbent in displaced:
-                if chooses and handover_mode_for(node_id) == "bbm":
-                    released(incumbent.pair, "bbm_gap")
-                    remove_association(incumbent.pair)
-                    if incumbent.pair in usable_set:
-                        _record_rejection(
-                            rejected,
-                            incumbent.pair,
-                            reason="replaced_by_successor",
-                            incumbent_pair=candidate.pair,
-                            capacity_constraint=None,
-                        )
-                    emit_bbm_gap(incumbent, candidate)
-                    progress = True
+        # Both ends decide before any link is released.
+        displaced: list[tuple[str, str, bool, _Candidate]] = []
+        for node_id, pool_name, chooses in ends:
+            incumbent, rejection = check_end(candidate, node_id, pool_name, chooses=chooses)
+            if rejection is not None:
+                rejected[candidate.pair] = rejection
+                return False
+            if incumbent is not None:
+                displaced.append((node_id, pool_name, chooses, incumbent))
 
-            # A node that does not choose releases its held link at once. That link's pair
-            # may be considered again in this tick.
-            for node_id, pool_name, chooses, incumbent in displaced:
-                if not chooses:
-                    released(incumbent.pair, "sat_capacity")
-                    remove_association(incumbent.pair)
+        # A choosing node that breaks before it makes releases its held link now. That
+        # link is final for the tick.
+        for node_id, pool_name, chooses, incumbent in displaced:
+            if chooses and end_mode(node_id, pool_name, candidate.rule_id) == "bbm":
+                released(incumbent.pair, "bbm_gap")
+                remove_association(incumbent.pair)
+                if incumbent.pair in usable_set:
+                    _record_rejection(
+                        rejected,
+                        incumbent.pair,
+                        reason="replaced_by_successor",
+                        incumbent_pair=candidate.pair,
+                        capacity_constraint=None,
+                    )
+                emit_bbm_gap(incumbent, candidate)
+
+        # A node that does not choose releases its held link at once. That link's pair may
+        # be considered again in this tick. A link NodalArc chose gives way to the stated
+        # choice that took its room.
+        for node_id, pool_name, chooses, incumbent in displaced:
+            if not chooses:
+                released(incumbent.pair, "sat_capacity")
+                remove_association(incumbent.pair)
+                if incumbent.kind == "default":
+                    rejected[incumbent.pair] = _Rejected(
+                        reason="taken_by_stated_choice",
+                        incumbent_pair=candidate.pair,
+                        capacity_constraint=f"{node_id}.{pool_name}",
+                        node_id=node_id,
+                    )
+                else:
                     _record_rejection(
                         rejected,
                         incumbent.pair,
@@ -1286,48 +1430,66 @@ def allocate_links(
                         incumbent_pair=candidate.pair,
                         capacity_constraint=f"{node_id}.{pool_name}",
                     )
-                    progress = True
 
-            if not allocate_new(candidate):
-                raise ValueError(
-                    f"Allocator selected {candidate.pair!r} after capacity arbitration "
-                    "but could not allocate endpoint terminal indices"
+        if not allocate_new(candidate):
+            raise ValueError(
+                f"Allocator selected {candidate.pair!r} after capacity arbitration "
+                "but could not allocate endpoint terminal indices"
+            )
+
+        # A choosing node that makes before it breaks keeps its held link for the overlap.
+        for node_id, pool_name, chooses, incumbent in displaced:
+            if chooses and end_mode(node_id, pool_name, candidate.rule_id) == "mbb":
+                new_pending_teardowns[incumbent.pair] = MbbTeardown(
+                    start_step=step,
+                    successor_pair=candidate.pair,
                 )
-            progress = True
-
-            # A choosing node that makes before it breaks keeps its held link for the overlap.
-            for node_id, _pool_name, chooses, incumbent in displaced:
-                if chooses and handover_mode_for(node_id) == "mbb":
-                    new_pending_teardowns[incumbent.pair] = MbbTeardown(
-                        start_step=step,
+                rebuild_handover_index()
+                allocation_events.append(
+                    _make_event(
+                        category="mbb_overlap_started",
+                        pair=incumbent.pair,
+                        lead=candidate.lead,
+                        tenant_ids=tenant_ids,
+                        reference_bodies=reference_bodies,
+                        message=(
+                            f"MBB overlap started for incumbent {incumbent.pair!r} "
+                            f"with successor {candidate.pair!r}; "
+                            f"overlap_ticks={overlap_ticks_for(node_id)}"
+                        ),
                         successor_pair=candidate.pair,
+                        challenger_pair=candidate.pair,
+                        policy_kind="handover_mode",
+                        policy_name="mbb",
                     )
-                    rebuild_handover_index()
-                    allocation_events.append(
-                        _make_event(
-                            category="mbb_overlap_started",
-                            pair=incumbent.pair,
-                            lead=candidate.lead,
-                            tenant_ids=tenant_ids,
-                            reference_bodies=reference_bodies,
-                            message=(
-                                f"MBB overlap started for incumbent {incumbent.pair!r} "
-                                f"with successor {candidate.pair!r}; "
-                                f"overlap_ticks={mbb_overlap_ticks_for(node_id)}"
-                            ),
-                            successor_pair=candidate.pair,
-                            challenger_pair=candidate.pair,
-                            policy_kind="handover_mode",
-                            policy_name="mbb",
-                        )
-                    )
+                )
+        return True
 
+    # Stated always beats derived. Every pair with a stated chooser is placed first: the walk
+    # repeats while a pass changes the link set, because a release in one pass can make room
+    # for a pair refused earlier in it. The cap on passes is a fail-safe; typical ticks
+    # complete in one or two.
+    stated_candidates = [candidate for candidate in candidates if candidate.kind == "stated"]
+    max_candidate_passes = max(
+        1,
+        len(candidates) + len(current_associations) + len(pending_teardowns) + 1,
+    )
+    for _pass_idx in range(max_candidate_passes):
+        progress = False
+        for candidate in stated_candidates:
+            if consider(candidate):
+                progress = True
         if not progress:
             break
     else:
         raise ValueError(
             "Link allocator did not converge after deterministic capacity arbitration passes"
         )
+
+    # NodalArc then fills what is left: each remaining pair is considered once, nearest first.
+    for candidate in candidates:
+        if candidate.kind == "default":
+            consider(candidate)
 
     unscheduled: list[UnscheduledPair] = []
     for pair in sorted(usable_set - set(new_associations)):
@@ -1338,7 +1500,7 @@ def allocate_links(
                 "visibility and allocation inputs are inconsistent"
             )
         rejection = rejected.get(pair)
-        if rejection is None:
+        if rejection is None and candidate.kind == "stated":
             peer_occupants, _steady, _cap_reached, peer_terminal_free = end_load(
                 candidate, candidate.peer, candidate.peer_pool
             )
@@ -1359,12 +1521,12 @@ def allocate_links(
                     incumbent_pair=incumbent.pair if incumbent else None,
                     capacity_constraint=f"{candidate.lead}.{candidate.lead_pool}",
                 )
-            else:
-                raise ValueError(
-                    f"Allocator could not attribute rejection reason for {pair!r}. "
-                    "This is an allocator logic bug; fix attribution rather than "
-                    "emitting a generic reason."
-                )
+        if rejection is None:
+            raise ValueError(
+                f"Allocator could not attribute rejection reason for {pair!r}. "
+                "This is an allocator logic bug; fix attribution rather than "
+                "emitting a generic reason."
+            )
         unscheduled.append(
             UnscheduledPair(
                 pair=pair,
@@ -1373,6 +1535,11 @@ def allocate_links(
                 unscheduled_reason=rejection.reason,
                 incumbent_pair=rejection.incumbent_pair,
                 capacity_constraint=rejection.capacity_constraint,
+                node_id=rejection.node_id,
+                cap=rejection.cap,
+                held_pairs=rejection.held_pairs,
+                range_km=rejection.range_km,
+                incumbent_range_km=rejection.incumbent_range_km,
             )
         )
 

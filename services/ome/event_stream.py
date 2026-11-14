@@ -1068,6 +1068,8 @@ def compute_step(
             pending_teardowns=mbb_pending_teardowns,
             terminal_pools=ctx.terminal_pools,
             stating_nodes=ctx.gs_positions.keys(),
+            # No session can state `n` on a rule yet.
+            rule_n={},
             selection_policies=ctx.gs_selection_policies,
             min_elevations=ctx.gs_min_elevations,
             handover_policies=ctx.gs_handover_policies,

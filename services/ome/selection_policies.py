@@ -108,6 +108,18 @@ SCORE_FUNCTIONS: dict[str, ScoreFunction] = {
 }
 
 
+def nearest_score(range_km: float) -> float:
+    """NodalArc's own score, for a pair whose nodes state no scheduling: nearer is higher.
+
+    It is the negated range, so comparing two scores is exactly comparing two ranges; a
+    reciprocal or an offset would round. No user can state it: it is not a name in the
+    grammar's policy vocabulary, and it is not in the table above, which holds exactly
+    those names. The non-negative check in ``score_candidate`` applies to the stated
+    policies only.
+    """
+    return -range_km
+
+
 def score_candidate(
     *,
     policy: SelectionPolicySpec,

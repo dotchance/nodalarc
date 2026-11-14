@@ -90,8 +90,16 @@ type GroundUnscheduledReason = Literal[
     "successor_aborted",
     "failed_successor",
     "failed_acquire",
+    "cap_full",
+    "taken_by_stated_choice",
+    "not_strictly_nearer",
 ]
 """Allocation reason a visible GROUND pair is not currently scheduled.
+
+The last three belong to a pair whose nodes state no scheduling, which NodalArc chooses
+nearest first. `cap_full`: a node holds its cap and has no link the pair may take.
+`taken_by_stated_choice`: a link chosen by a stated policy holds the room.
+`not_strictly_nearer`: the node's farthest link of that kind is at least as near.
 
 The ISL allocator's `isl_terminal_capacity` is intentionally absent
 from this enum. `UnscheduledPair` lives in the ground-decision
@@ -480,6 +488,15 @@ class GroundVisibilityDecisionWire(BaseModel):
         return self
 
 
+# The fields each reason of a pair with no stated chooser carries beyond `incumbent_pair`
+# and `capacity_constraint`. A reason that is not listed carries none of them.
+_UNSCHEDULED_REASON_NAMES: dict[str, frozenset[str]] = {
+    "cap_full": frozenset({"node_id", "cap", "held_pairs"}),
+    "taken_by_stated_choice": frozenset({"node_id"}),
+    "not_strictly_nearer": frozenset({"range_km", "incumbent_range_km"}),
+}
+
+
 class UnscheduledPair(BaseModel):
     """A pair that was visible but not scheduled, with the reason.
 
@@ -496,6 +513,12 @@ class UnscheduledPair(BaseModel):
     `incumbent_held`). `capacity_constraint` is populated when the
     reason names a specific resource that ran out (e.g., the sat
     ground-terminal id).
+
+    The last five fields state what the reasons of a pair with no stated
+    chooser name. `cap_full` names the node, its cap and the links it holds.
+    `taken_by_stated_choice` names the node, with the stated-chosen link in
+    `incumbent_pair`. `not_strictly_nearer` names both ranges, with the held
+    link in `incumbent_pair`. Every other reason leaves all five empty.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -506,6 +529,39 @@ class UnscheduledPair(BaseModel):
     unscheduled_reason: GroundUnscheduledReason
     incumbent_pair: tuple[str, str] | None
     capacity_constraint: str | None
+    node_id: str | None
+    cap: int | None
+    held_pairs: tuple[tuple[str, str], ...] | None
+    range_km: float | None
+    incumbent_range_km: float | None
+
+    @model_validator(mode="after")
+    def _reason_carries_what_it_names(self) -> UnscheduledPair:
+        named = {
+            "node_id": self.node_id,
+            "cap": self.cap,
+            "held_pairs": self.held_pairs,
+            "range_km": self.range_km,
+            "incumbent_range_km": self.incumbent_range_km,
+        }
+        required = _UNSCHEDULED_REASON_NAMES.get(self.unscheduled_reason, frozenset())
+        missing = sorted(name for name in required if named[name] is None)
+        extra = sorted(
+            name for name, value in named.items() if value is not None and name not in required
+        )
+        if missing or extra:
+            raise ValueError(
+                f"unscheduled_reason={self.unscheduled_reason!r} for {self.pair!r} must carry "
+                f"exactly {sorted(required)!r}; missing={missing!r}, unexpected={extra!r}"
+            )
+        if self.unscheduled_reason in ("taken_by_stated_choice", "not_strictly_nearer") and (
+            self.incumbent_pair is None
+        ):
+            raise ValueError(
+                f"unscheduled_reason={self.unscheduled_reason!r} for {self.pair!r} must name "
+                "the held link in incumbent_pair"
+            )
+        return self
 
 
 class GroundLinkDecisionSnapshot(BaseModel):

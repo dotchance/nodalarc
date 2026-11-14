@@ -82,6 +82,9 @@ _UNSCHEDULED_GATE: dict[GroundUnscheduledReason, FunnelGate] = {
     "successor_aborted": "handover_policy",
     "failed_successor": "handover_policy",
     "failed_acquire": "handover_policy",
+    "cap_full": "capacity",
+    "taken_by_stated_choice": "capacity",
+    "not_strictly_nearer": "handover_policy",
 }
 
 if set(_REJECT_GATE) != set(get_args(GroundVisibilityRejectReason.__value__)) - {"ok"}:

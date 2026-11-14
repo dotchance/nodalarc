@@ -239,6 +239,11 @@ class TestUnscheduledPair:
                 **kwargs,
                 incumbent_pair=None,
                 capacity_constraint=None,
+                node_id=None,
+                cap=None,
+                held_pairs=None,
+                range_km=None,
+                incumbent_range_km=None,
             )
 
     def test_teardown_explicitly_not_an_unscheduled_reason(self) -> None:
@@ -254,6 +259,11 @@ class TestUnscheduledPair:
                     **kwargs,
                     incumbent_pair=None,
                     capacity_constraint=None,
+                    node_id=None,
+                    cap=None,
+                    held_pairs=None,
+                    range_km=None,
+                    incumbent_range_km=None,
                 )
 
 
@@ -315,6 +325,11 @@ class TestLinkDecisionSnapshot:
             unscheduled_reason="gs_capacity",
             incumbent_pair=None,
             capacity_constraint=None,
+            node_id=None,
+            cap=None,
+            held_pairs=None,
+            range_km=None,
+            incumbent_range_km=None,
         )
         return {
             "sim_time": datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC),

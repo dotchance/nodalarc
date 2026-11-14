@@ -192,6 +192,11 @@ def test_viable_but_withheld_dominates_and_is_flagged():
                 unscheduled_reason="gs_capacity",
                 incumbent_pair=None,
                 capacity_constraint="gs-denver.terminals",
+                node_id=None,
+                cap=None,
+                held_pairs=None,
+                range_km=None,
+                incumbent_range_km=None,
             )
         ],
     )
@@ -402,6 +407,11 @@ def test_pair_inspector_composes_the_requested_pair_not_the_auto_focal():
                 unscheduled_reason="gs_capacity",
                 incumbent_pair=None,
                 capacity_constraint="gs-denver.terminals",
+                node_id=None,
+                cap=None,
+                held_pairs=None,
+                range_km=None,
+                incumbent_range_km=None,
             )
         ],
     )

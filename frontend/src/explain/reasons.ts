@@ -253,6 +253,33 @@ export const REASON_REGISTRY: Record<ReasonCode, ReasonRecord> = {
     sentence: "The allocator could not acquire this candidate within the handover window.",
     producer: "ome_allocator",
   }),
+  cap_full: rec({
+    code: "cap_full",
+    gate: "capacity",
+    family: "eligible_unselected",
+    severity: "info",
+    label: "Node at its cap",
+    sentence: "A node holds as many links as its cap allows and has none this pair may take.",
+    producer: "ome_allocator",
+  }),
+  taken_by_stated_choice: rec({
+    code: "taken_by_stated_choice",
+    gate: "capacity",
+    family: "eligible_unselected",
+    severity: "info",
+    label: "Taken by a stated choice",
+    sentence: "A link chosen by a stated scheduling policy holds the room.",
+    producer: "ome_allocator",
+  }),
+  not_strictly_nearer: rec({
+    code: "not_strictly_nearer",
+    gate: "handover_policy",
+    family: "eligible_unselected",
+    severity: "info",
+    label: "Not strictly nearer",
+    sentence: "The node keeps a held link that is at least as near as this candidate.",
+    producer: "ome_allocator",
+  }),
 
   // --- Allocation events (OME allocator) — transitions / lifecycle ---
   mbb_overlap_started: rec({

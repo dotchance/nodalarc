@@ -277,11 +277,10 @@ def _merge_agent_results(
     # failure from consumers and defeats transport-only detection.
     precedence = [
         ActuationFailureClass.FENCE,
-        ActuationFailureClass.GROUND_KERNEL_DIRTY,
-        ActuationFailureClass.GROUND_UNKNOWN,
+        ActuationFailureClass.KERNEL_DIRTY,
+        ActuationFailureClass.UNKNOWN_OUTCOME,
         ActuationFailureClass.AGENT_UNREACHABLE,
-        ActuationFailureClass.GROUND_CLEAN_FAILURE,
-        ActuationFailureClass.ISL_FAILURE,
+        ActuationFailureClass.CLEAN_FAILURE,
     ]
     failure_class = ActuationFailureClass.NONE
     for candidate in precedence:

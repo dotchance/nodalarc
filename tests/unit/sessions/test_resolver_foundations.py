@@ -822,3 +822,65 @@ def test_routing_areas_are_resolved_for_area_protocol_routers_only() -> None:
         static.area_id_for(gs)
     with pytest.raises(ValueError, match="is not a member of routing domain 'leo_domain'"):
         ospf.area_id_for(gs)
+
+
+def test_scheduling_stated_at_both_nodes_of_a_pair_is_refused_through_the_support_gate() -> None:
+    """A pair with scheduling at both of its nodes is defined and not built. The gate names
+    the rule, the pair and where each node's scheduling is stated."""
+    from nodalarc.models.segments import GroundScheduling
+    from nodalarc.resolve_session import _refuse_scheduling_at_both_nodes
+    from nodalarc.runtime_support import UnsupportedFeatureError
+
+    scheduling = GroundScheduling(handover_mode="bbm", mbb_overlap_ticks=0, mbb_reserve=0)
+    stated = (("handover_mode", "apply of ground segment 'ground'"),)
+    left = _ground("ground-denver-router").model_copy(
+        update={"ground_scheduling": scheduling, "scheduling_stated_at": stated}
+    )
+    right = _ground("ground-berlin-router").model_copy(
+        update={"ground_scheduling": scheduling, "scheduling_stated_at": stated}
+    )
+    candidate = ResolvedLinkCandidate(
+        rule_id="trunk",
+        kind="access",
+        terminal_roles=("access", "access"),
+        terminal_medium="rf",
+        node_a=left.node_id,
+        node_b=right.node_id,
+        topology_mode="visible_candidates",
+        priority=0,
+        endpoint_segments=("ground", "ground"),
+        delay_class="local",
+        longest_delay_s=0.05,
+    )
+    rule = ResolvedLinkRule(
+        rule_id="trunk",
+        kind="access",
+        enabled=True,
+        endpoints=(
+            ResolvedEndpoint(segment_id="ground", terminal_role="access", node_ids=(left.node_id,)),
+            ResolvedEndpoint(
+                segment_id="ground", terminal_role="access", node_ids=(right.node_id,)
+            ),
+        ),
+        topology=VisibleCandidatesTopology(mode="visible_candidates"),
+    )
+    resolved = _resolved_session(
+        nodes=(left, right), link_rules=(rule,), link_candidates=(candidate,)
+    )
+
+    with pytest.raises(UnsupportedFeatureError) as refusal:
+        _refuse_scheduling_at_both_nodes(resolved)
+
+    (feature,) = refusal.value.features
+    assert feature.value == "scheduling_at_both_nodes"
+    assert "'trunk'" in feature.message
+    assert f"{left.node_id}<->{right.node_id}" in feature.message
+    assert "apply of ground segment 'ground'" in feature.message
+
+    # Scheduling at one node only is every station's case today and passes the gate.
+    one_side = _resolved_session(
+        nodes=(left, right.model_copy(update={"ground_scheduling": None})),
+        link_rules=(rule,),
+        link_candidates=(candidate,),
+    )
+    _refuse_scheduling_at_both_nodes(one_side)

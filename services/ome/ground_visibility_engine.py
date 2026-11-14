@@ -553,13 +553,9 @@ def evaluate_ground_visibility(
     decisions: dict[tuple[str, str], GroundVisibilityDecision] = {}
     visible_per_station: dict[str, list[GroundVisibility]] = {}
 
+    # The selection policy of each station that states one. A station that states no
+    # scheduling has none: NodalArc's default chooses its links by range.
     selection_policy_names = gs_selection_policy_names or {}
-    if gs_selection_policy_names is not None:
-        missing_policies = sorted(set(gs_positions) - set(gs_selection_policy_names))
-        if missing_policies:
-            raise ValueError(
-                f"Ground visibility is missing selection policy name for {', '.join(missing_policies)}"
-            )
     missing_min_elev = sorted(set(gs_positions) - set(gs_min_elevations))
     if missing_min_elev:
         raise ValueError(

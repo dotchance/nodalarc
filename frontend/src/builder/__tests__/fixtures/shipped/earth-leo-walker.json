@@ -3638,6 +3638,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3657,6 +3658,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3747,6 +3749,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3766,6 +3769,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3856,6 +3860,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3875,6 +3880,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3965,6 +3971,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3984,6 +3991,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4074,6 +4082,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4093,6 +4102,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4183,6 +4193,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4202,6 +4213,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4292,6 +4304,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4311,6 +4324,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4401,6 +4415,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4420,6 +4435,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4510,6 +4526,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4529,6 +4546,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4619,6 +4637,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4638,6 +4657,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4728,6 +4748,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4747,6 +4768,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4837,6 +4859,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4856,6 +4879,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4946,6 +4970,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4965,6 +4990,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5055,6 +5081,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5074,6 +5101,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5164,6 +5192,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5183,6 +5212,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5273,6 +5303,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5292,6 +5323,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5382,6 +5414,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5401,6 +5434,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5491,6 +5525,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5510,6 +5545,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5600,6 +5636,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5619,6 +5656,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5709,6 +5747,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5728,6 +5767,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5818,6 +5858,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5837,6 +5878,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5927,6 +5969,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5946,6 +5989,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6036,6 +6080,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6055,6 +6100,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6145,6 +6191,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6164,6 +6211,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6254,6 +6302,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6273,6 +6322,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6363,6 +6413,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6382,6 +6433,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6472,6 +6524,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6491,6 +6544,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6581,6 +6635,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6600,6 +6655,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6690,6 +6746,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6709,6 +6766,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6799,6 +6857,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6818,6 +6877,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6908,6 +6968,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -6927,6 +6988,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7017,6 +7079,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7036,6 +7099,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7126,6 +7190,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7145,6 +7210,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7235,6 +7301,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7254,6 +7321,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7344,6 +7412,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7363,6 +7432,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7453,6 +7523,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7472,6 +7543,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7562,6 +7634,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7581,6 +7654,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7671,6 +7745,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7690,6 +7765,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7780,6 +7856,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7799,6 +7876,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7889,6 +7967,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7908,6 +7987,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -7998,6 +8078,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8017,6 +8098,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8107,6 +8189,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8126,6 +8209,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8216,6 +8300,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8235,6 +8320,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8325,6 +8411,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8344,6 +8431,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8434,6 +8522,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8453,6 +8542,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8543,6 +8633,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8562,6 +8653,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8652,6 +8744,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8671,6 +8764,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8761,6 +8855,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8780,6 +8875,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8870,6 +8966,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8889,6 +8986,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8979,6 +9077,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -8998,6 +9097,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9088,6 +9188,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9107,6 +9208,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9197,6 +9299,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9216,6 +9319,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9306,6 +9410,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9325,6 +9430,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9415,6 +9521,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9434,6 +9541,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9524,6 +9632,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9543,6 +9652,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9633,6 +9743,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9652,6 +9763,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9742,6 +9854,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9761,6 +9874,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9851,6 +9965,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9870,6 +9985,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9960,6 +10076,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -9979,6 +10096,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10069,6 +10187,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10088,6 +10207,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10178,6 +10298,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10197,6 +10318,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10287,6 +10409,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10306,6 +10429,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10396,6 +10520,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10415,6 +10540,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10505,6 +10631,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10524,6 +10651,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10614,6 +10742,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10633,6 +10762,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10723,6 +10853,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10742,6 +10873,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10832,6 +10964,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10851,6 +10984,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10941,6 +11075,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -10960,6 +11095,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11050,6 +11186,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11069,6 +11206,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11159,6 +11297,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11178,6 +11317,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11268,6 +11408,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11287,6 +11428,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11377,6 +11519,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11396,6 +11539,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11486,6 +11630,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11505,6 +11650,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11595,6 +11741,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11614,6 +11761,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11704,6 +11852,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11723,6 +11872,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11813,6 +11963,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11832,6 +11983,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11922,6 +12074,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -11941,6 +12094,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12031,6 +12185,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12050,6 +12205,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12140,6 +12296,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12159,6 +12316,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12249,6 +12407,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12268,6 +12427,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12358,6 +12518,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12377,6 +12538,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12467,6 +12629,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12486,6 +12649,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12576,6 +12740,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12595,6 +12760,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12685,6 +12851,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12704,6 +12871,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12794,6 +12962,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12813,6 +12982,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12903,6 +13073,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -12922,6 +13093,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13012,6 +13184,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13031,6 +13204,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13121,6 +13295,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13140,6 +13315,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13230,6 +13406,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13249,6 +13426,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13339,6 +13517,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13358,6 +13537,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13448,6 +13628,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13467,6 +13648,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13557,6 +13739,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13576,6 +13759,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13666,6 +13850,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13685,6 +13870,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13775,6 +13961,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13794,6 +13981,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13884,6 +14072,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13903,6 +14092,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -13993,6 +14183,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14012,6 +14203,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14102,6 +14294,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14121,6 +14314,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14211,6 +14405,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14230,6 +14425,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14320,6 +14516,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14339,6 +14536,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14429,6 +14627,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14448,6 +14647,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14538,6 +14738,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14557,6 +14758,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14647,6 +14849,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14666,6 +14869,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14756,6 +14960,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14775,6 +14980,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14865,6 +15071,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14884,6 +15091,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14974,6 +15182,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -14993,6 +15202,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15083,6 +15293,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15102,6 +15313,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15192,6 +15404,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15211,6 +15424,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15301,6 +15515,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15320,6 +15535,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15410,6 +15626,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15429,6 +15646,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15519,6 +15737,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15538,6 +15757,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15628,6 +15848,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15647,6 +15868,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15737,6 +15959,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15756,6 +15979,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15846,6 +16070,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15865,6 +16090,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15955,6 +16181,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -15974,6 +16201,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16064,6 +16292,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16083,6 +16312,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16173,6 +16403,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16192,6 +16423,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16282,6 +16514,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16301,6 +16534,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16391,6 +16625,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16410,6 +16645,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16500,6 +16736,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16519,6 +16756,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16609,6 +16847,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16628,6 +16867,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16718,6 +16958,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16737,6 +16978,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16827,6 +17069,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16846,6 +17089,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16936,6 +17180,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -16955,6 +17200,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17045,6 +17291,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17064,6 +17311,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17154,6 +17402,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17173,6 +17422,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17263,6 +17513,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17282,6 +17533,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17372,6 +17624,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17391,6 +17644,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17481,6 +17735,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17500,6 +17755,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17590,6 +17846,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17609,6 +17866,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17699,6 +17957,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17718,6 +17977,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17808,6 +18068,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17827,6 +18088,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17917,6 +18179,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -17936,6 +18199,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18026,6 +18290,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18045,6 +18310,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18135,6 +18401,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18154,6 +18421,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18244,6 +18512,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18263,6 +18532,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18353,6 +18623,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18372,6 +18643,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18462,6 +18734,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18481,6 +18754,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18571,6 +18845,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18590,6 +18865,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18680,6 +18956,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18699,6 +18976,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18789,6 +19067,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18808,6 +19087,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18898,6 +19178,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -18917,6 +19198,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19007,6 +19289,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19026,6 +19309,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19116,6 +19400,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19135,6 +19420,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19225,6 +19511,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19244,6 +19531,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19334,6 +19622,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19353,6 +19642,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19443,6 +19733,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19462,6 +19753,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19552,6 +19844,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19571,6 +19864,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19661,6 +19955,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19680,6 +19975,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19770,6 +20066,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19789,6 +20086,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19879,6 +20177,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19898,6 +20197,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -19988,6 +20288,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20007,6 +20308,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20097,6 +20399,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20116,6 +20419,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20206,6 +20510,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20225,6 +20530,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20315,6 +20621,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20334,6 +20641,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20424,6 +20732,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20443,6 +20752,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20533,6 +20843,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20552,6 +20863,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20642,6 +20954,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20661,6 +20974,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20751,6 +21065,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20770,6 +21085,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20860,6 +21176,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20879,6 +21196,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20969,6 +21287,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -20988,6 +21307,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21078,6 +21398,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21097,6 +21418,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21187,6 +21509,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21206,6 +21529,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21296,6 +21620,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21315,6 +21640,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21405,6 +21731,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21424,6 +21751,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21514,6 +21842,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21533,6 +21862,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21623,6 +21953,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21642,6 +21973,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21732,6 +22064,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21751,6 +22084,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21841,6 +22175,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21860,6 +22195,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21950,6 +22286,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -21969,6 +22306,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22059,6 +22397,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22078,6 +22417,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22168,6 +22508,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22187,6 +22528,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22277,6 +22619,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22296,6 +22639,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22386,6 +22730,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22405,6 +22750,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22495,6 +22841,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22514,6 +22861,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22604,6 +22952,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22623,6 +22972,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22713,6 +23063,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22732,6 +23083,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -22853,6 +23205,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-hawthorne-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -22959,6 +23312,7 @@
                 "mode": "local_vertical"
               },
               "count": 4,
+              "count_stated_at": "the site installation of 'earth-us-co-denver-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -23049,6 +23403,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-us-co-denver-gw2'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,
@@ -23147,6 +23502,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-us-va-ashburn-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -23245,6 +23601,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-de-frankfurt-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -23366,6 +23723,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-loring-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -23487,6 +23845,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-cass-county-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -23608,6 +23967,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-redmond-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -23729,6 +24089,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-conrad-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -23850,6 +24211,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-manistique-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -23947,6 +24309,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-gb-london-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -24045,6 +24408,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-nl-amsterdam-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -24143,6 +24507,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-pl-warsaw-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -24241,6 +24606,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-de-berlin-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -24339,6 +24705,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-fk-stanley-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,

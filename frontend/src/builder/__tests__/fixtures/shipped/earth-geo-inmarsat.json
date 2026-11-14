@@ -288,6 +288,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -307,6 +308,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -326,6 +328,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -406,6 +409,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -425,6 +429,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -444,6 +449,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -524,6 +530,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -543,6 +550,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -562,6 +570,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -642,6 +651,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -661,6 +671,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -680,6 +691,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -785,6 +797,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-it-fucino-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 170.0,
               "installed_min_elevation_deg": 5.0,
@@ -812,6 +825,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-it-fucino-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -917,6 +931,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-us-ca-goldstone-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 170.0,
               "installed_min_elevation_deg": 5.0,
@@ -944,6 +959,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-us-ca-goldstone-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -1049,6 +1065,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-jp-yamaguchi-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 170.0,
               "installed_min_elevation_deg": 5.0,
@@ -1076,6 +1093,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-jp-yamaguchi-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -1165,6 +1183,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-jp-yamaguchi-gw2'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,

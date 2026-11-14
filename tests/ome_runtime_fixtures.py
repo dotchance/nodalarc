@@ -112,6 +112,10 @@ def allocate_ground_scenario(
         usable=ground_usable_pairs(
             visible_per_station=visible_per_station,
             gs_reference_bodies=gs_reference_bodies,
+            # Every station of the scenario states scheduling, and the scenario names no
+            # link rule.
+            stating_nodes=set(ground_station_ids) | set(gs_terminal_indices),
+            pair_pools=None,
         ),
         terminal_pools=ground_terminal_pools(
             gs_terminal_indices=gs_terminal_indices,

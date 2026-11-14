@@ -1577,6 +1577,7 @@ export interface ResolvedTerminalBlock {
   readonly source_terminal_id: string | null;
   readonly link_role: string | null;
   readonly count: number;
+  readonly count_stated_at: string | null;
   readonly tracking_capacity: number;
   readonly max_range_km: number;
   readonly min_elevation_deg: number;

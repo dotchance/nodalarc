@@ -368,6 +368,7 @@
                 "target_body": "mars"
               },
               "count": 3,
+              "count_stated_at": "node model 'mars-areostationary-ion-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -387,6 +388,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'mars-areostationary-ion-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -406,6 +408,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'mars-areostationary-ion-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -541,6 +544,7 @@
                 "target_body": "mars"
               },
               "count": 1,
+              "count_stated_at": "node model 'mars-ion-relay-mro'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -560,6 +564,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'mars-ion-relay-mro'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -695,6 +700,7 @@
                 "target_body": "mars"
               },
               "count": 1,
+              "count_stated_at": "node model 'mars-ion-relay-tgo'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -714,6 +720,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'mars-ion-relay-tgo'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -852,6 +859,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'mars-jezero-ion-base-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,
@@ -988,6 +996,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'mars-gale-ion-base-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,
@@ -1124,6 +1133,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'mars-arcadia-ion-base-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,

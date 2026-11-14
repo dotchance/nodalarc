@@ -115,9 +115,14 @@ class Endpoint(BaseModel):
 
 
 class VisibleCandidatesTopology(BaseModel):
+    """Every pair the endpoints select is a candidate; which usable ones link is chosen as the
+    geometry changes. ``n`` is the most links a node holds at once on the rule; without it a
+    node holds as many as its matched terminals allow."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: Literal["visible_candidates"]
+    n: PositiveInteger | None = None
 
 
 class NearestStartTopology(BaseModel):

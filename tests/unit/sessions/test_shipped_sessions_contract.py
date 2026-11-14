@@ -67,6 +67,9 @@ def _shipped_step_context(path: Path):
     ctx = build_step_context(
         long_delay_access_pairs=cfg.long_delay_access_pairs,
         assigned_space_pairs=cfg.assigned_space_pairs,
+        ground_pair_pools=cfg.ground_pair_pools,
+        ground_rule_pools=cfg.ground_rule_pools,
+        rule_n=cfg.rule_n,
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,
@@ -487,3 +490,74 @@ def test_a_mount_drawn_on_by_a_fixed_rule_and_an_assigned_rule_is_refused() -> N
     assert (
         "'relay_x'" in message and "'lmo_pair'" in message and "'mars_relay_crosslink'" in message
     )
+
+
+def _steps_of_a_changed_session(tmp_path: Path, change, steps: int = 31):
+    """Run a shipped session with one change through OME's real step loop; yields each tick's
+    context and result."""
+    import yaml
+    from nodalarc.models.session import session_epoch_unix
+    from ome.event_stream import compute_step
+
+    raw = load_configuration_yaml((SESSIONS_DIR / "earth-leo-simple.yaml").read_text())
+    change(raw)
+    path = tmp_path / "earth-leo-simple.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    cfg, ctx = _shipped_step_context(path)
+    epoch_unix = session_epoch_unix(cfg.resolved.time)
+    step_seconds = float(cfg.resolved.time.step_seconds)
+    isl_state: dict = {}
+    gs_state: dict = {}
+    associations: dict = {}
+    teardowns: dict = {}
+    for step in range(steps):
+        result = compute_step(
+            ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state, associations, teardowns
+        )
+        associations = result.associations
+        teardowns = result.pending_teardowns
+        _assert_tick_round_trips(cfg, ctx, result, step, step_seconds)
+        yield ctx, result
+
+
+def _ground_segment_of(raw: dict) -> dict:
+    return next(segment for segment in raw["segments"] if "placement" in segment)
+
+
+def test_stations_that_state_no_scheduling_are_linked_by_nodalarcs_default(tmp_path) -> None:
+    """With no scheduling stated, no station is a stating node and none has a policy; the
+    default chooser still links each station to satellites it can see."""
+
+    def change(raw: dict) -> None:
+        del _ground_segment_of(raw)["apply"]["scheduling"]
+
+    linked: set[str] = set()
+    for ctx, result in _steps_of_a_changed_session(tmp_path, change):
+        assert ctx.stating_nodes == frozenset()
+        assert not ctx.gs_selection_policies and not ctx.gs_handover_modes
+        for pair in result.ground_allocation.scheduled_pairs:
+            linked.update(node for node in pair if node in ctx.gs_positions)
+    assert linked, "no station was linked in thirty ticks"
+
+
+def test_a_rule_that_states_n_holds_each_node_to_n_links(tmp_path) -> None:
+    """``n: 1`` on the access rule: no station and no satellite holds more than one link of
+    the rule at once, whatever number of terminals it has."""
+
+    def change(raw: dict) -> None:
+        del _ground_segment_of(raw)["apply"]["scheduling"]
+        access = next(rule for rule in raw["link_rules"] if rule["id"] == "leo_access")
+        access["topology"] = {"mode": "visible_candidates", "n": 1}
+
+    linked = 0
+    for ctx, result in _steps_of_a_changed_session(tmp_path, change):
+        assert ctx.rule_n == {"leo_access": 1}
+        held: dict[str, int] = defaultdict(int)
+        for pair in result.ground_allocation.scheduled_pairs:
+            if pair in result.pending_teardowns:
+                continue
+            for node in pair:
+                held[node] += 1
+        assert all(count <= 1 for count in held.values()), dict(held)
+        linked += len(held)
+    assert linked, "no link of the rule came up in thirty ticks"

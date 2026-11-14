@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
 from nodalarc.link_metadata import LinkRuleMetadata
-from nodalarc.models.addressing import AssignedSpacePair
+from nodalarc.models.addressing import AssignedPairPools, AssignedSpacePair
 from nodalarc.models.events import (
     OpsEvent,
     PlaybackControlAccepted,
@@ -101,6 +101,9 @@ class _SessionBundle(NamedTuple):
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
     long_delay_access_pairs: frozenset[tuple[str, str]]
     assigned_space_pairs: tuple[AssignedSpacePair, ...]
+    ground_pair_pools: dict[tuple[str, str], AssignedPairPools]
+    ground_rule_pools: dict[str, dict[str, tuple[int, ...]]]
+    rule_n: dict[str, int]
     ground_scheduling: GroundSchedulingConfig
     ground_link_model: str
     node_metadata: dict[str, dict[str, object]]
@@ -180,6 +183,9 @@ def _session_bundle_from_resolution(resolution: SessionResolution) -> _SessionBu
         ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
         long_delay_access_pairs=runtime.long_delay_access_pairs,
         assigned_space_pairs=runtime.assigned_space_pairs,
+        ground_pair_pools=runtime.ground_pair_pools,
+        ground_rule_pools=runtime.ground_rule_pools,
+        rule_n=runtime.rule_n,
         ground_scheduling=runtime.ground_scheduling,
         ground_link_model=runtime.ground_link_model,
         node_metadata=runtime.node_metadata,
@@ -493,6 +499,9 @@ def run(
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         long_delay_access_pairs=cfg.long_delay_access_pairs,
         assigned_space_pairs=cfg.assigned_space_pairs,
+        ground_pair_pools=cfg.ground_pair_pools,
+        ground_rule_pools=cfg.ground_rule_pools,
+        rule_n=cfg.rule_n,
         body_frames=cfg.body_frames,
         physics=cfg.physics,
         active_bodies=cfg.active_bodies,
@@ -1046,6 +1055,9 @@ def _run_pacing(
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         long_delay_access_pairs=cfg.long_delay_access_pairs,
         assigned_space_pairs=cfg.assigned_space_pairs,
+        ground_pair_pools=cfg.ground_pair_pools,
+        ground_rule_pools=cfg.ground_rule_pools,
+        rule_n=cfg.rule_n,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
         physics=cfg.physics,

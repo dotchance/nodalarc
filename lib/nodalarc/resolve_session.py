@@ -12,7 +12,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -102,7 +102,8 @@ class SessionResolutionError(ValueError):
     A raise site that knows which authored object failed may attach its
     persisted object or segment identity so authoring clients can associate the
     refusal with the responsible input. Raise sites without that context remain
-    valid unscoped semantic failures.
+    valid unscoped semantic failures. ``code`` is the refusal's typed code, where the
+    grammar names one.
     """
 
     def __init__(
@@ -113,12 +114,14 @@ class SessionResolutionError(ValueError):
         subject_id: str | None = None,
         segment_id: str | None = None,
         node_id: str | None = None,
+        code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.subject_kind = subject_kind
         self.subject_id = subject_id
         self.segment_id = segment_id
         self.node_id = node_id
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -282,8 +285,10 @@ def resolve_session_with_assets(
         time=base_resolved.time,
         source_context=base_resolved.source_context,
     )
+    _refuse_scheduling_at_both_nodes(resolved)
     _validate_access_ground_scheduling(resolved)
     _validate_allocator_wide_scheduling(resolved)
+    _refuse_caps_beyond_terminals(resolved)
     _refuse_divergent_bfd_on_shared_interfaces(resolved)
     _refuse_ospf_instances_without_a_contiguous_backbone(resolved)
     workload_profiles = {
@@ -956,16 +961,31 @@ def _check_ground_scheduling_support(
         raise UnsupportedFeatureError(unsupported)
 
 
+def _stated_places(node: ResolvedNode, fields: Iterable[str]) -> str:
+    """Where a ground node's named scheduling fields were stated, for a refusal."""
+    places = dict(node.scheduling_stated_at)
+    return ", ".join(
+        f"{field} in {places[field]}" if field in places else f"{field} (place not recorded)"
+        for field in fields
+    )
+
+
 def _validate_access_ground_scheduling(resolved: ResolvedSession) -> None:
+    """A ground node may omit scheduling: NodalArc then chooses its links. A ground node that
+    states scheduling states every field, effective after precedence, and its handover mode
+    agrees with its overlap and reserve."""
     required_ground_ids = set(resolved.ground_candidate_satellites_by_gs())
     nodes = {node.node_id: node for node in resolved.nodes}
     for node_id in sorted(required_ground_ids):
-        scheduling = nodes[node_id].ground_scheduling
+        node = nodes[node_id]
+        scheduling = node.ground_scheduling
         if scheduling is None:
-            raise SessionResolutionError(
-                f"ground station {node_id!r} participates in access candidates and "
-                "requires explicit ground scheduling"
-            )
+            continue
+        stated = [
+            field
+            for field in _REQUIRED_ACCESS_GROUND_SCHEDULING_FIELDS
+            if getattr(scheduling, field) is not None
+        ]
         missing = [
             field
             for field in _REQUIRED_ACCESS_GROUND_SCHEDULING_FIELDS
@@ -973,8 +993,13 @@ def _validate_access_ground_scheduling(resolved: ResolvedSession) -> None:
         ]
         if missing:
             raise SessionResolutionError(
-                f"ground station {node_id!r} participates in access candidates and has "
-                f"incomplete ground scheduling; missing: {', '.join(missing)}"
+                f"ground station {node_id!r} states scheduling ({_stated_places(node, stated)}) "
+                f"but not every field; missing: {', '.join(missing)}. A node that states "
+                "scheduling states every field, or states none and NodalArc chooses its links",
+                subject_kind="node",
+                subject_id=node_id,
+                segment_id=node.segment_id,
+                node_id=node_id,
             )
         mode = scheduling.handover_mode
         overlap_ticks = scheduling.mbb_overlap_ticks
@@ -983,29 +1008,32 @@ def _validate_access_ground_scheduling(resolved: ResolvedSession) -> None:
             raise SessionResolutionError(
                 f"ground station {node_id!r} has incomplete handover scheduling"
             )
+        places = _stated_places(node, ("handover_mode", "mbb_overlap_ticks", "mbb_reserve"))
         if mode == "bbm":
             if overlap_ticks != 0 or reserve != 0:
                 raise SessionResolutionError(
                     f"ground station {node_id!r} uses BBM and requires "
-                    "mbb_overlap_ticks=0 and mbb_reserve=0"
+                    f"mbb_overlap_ticks=0 and mbb_reserve=0; it states "
+                    f"mbb_overlap_ticks={overlap_ticks} and mbb_reserve={reserve} ({places})"
                 )
         elif overlap_ticks <= 0 or reserve <= 0:
             raise SessionResolutionError(
                 f"ground station {node_id!r} uses MBB and requires positive "
-                "mbb_overlap_ticks and mbb_reserve"
+                f"mbb_overlap_ticks and mbb_reserve; it states "
+                f"mbb_overlap_ticks={overlap_ticks} and mbb_reserve={reserve} ({places})"
             )
 
 
 def _validate_allocator_wide_scheduling(resolved: ResolvedSession) -> None:
     """Allocator-wide scheduling knobs must be uniform across every ground
-    node at resolve time.
+    node that states scheduling, at resolve time.
 
-    The OME allocator is a single decision-maker for ground nodes that
+    The OME allocator is a single decision-maker for the nodes that
     participate in access candidates. Per-node divergence of these fields has
     no runtime meaning and previously died late at OME-input build.
     """
     baseline: dict[str, Any] | None = None
-    baseline_node: str | None = None
+    baseline_node: ResolvedNode | None = None
     required_ground_ids = set(resolved.ground_candidate_satellites_by_gs())
     for node in resolved.nodes:
         if node.node_id not in required_ground_ids or node.ground_scheduling is None:
@@ -1014,15 +1042,115 @@ def _validate_allocator_wide_scheduling(resolved: ResolvedSession) -> None:
             field: getattr(node.ground_scheduling, field)
             for field in _ALLOCATOR_WIDE_SCHEDULING_FIELDS
         }
-        if baseline is None:
-            baseline, baseline_node = values, node.node_id
+        if baseline is None or baseline_node is None:
+            baseline, baseline_node = values, node
             continue
         diffs = sorted(field for field in values if values[field] != baseline[field])
         if diffs:
-            raise SessionResolutionError(
-                f"allocator-wide scheduling fields must be uniform across ground nodes; "
-                f"{node.node_id!r} differs from {baseline_node!r} on: {', '.join(diffs)}"
+            detail = "; ".join(
+                f"{field}: {node.node_id!r} states {values[field]!r} "
+                f"({_stated_places(node, (field,))}), {baseline_node.node_id!r} states "
+                f"{baseline[field]!r} ({_stated_places(baseline_node, (field,))})"
+                for field in diffs
             )
+            raise SessionResolutionError(
+                "allocator-wide scheduling fields must be uniform across the ground nodes "
+                f"that state scheduling; {detail}"
+            )
+
+
+def _refuse_caps_beyond_terminals(resolved: ResolvedSession) -> None:
+    """``n`` plus a stated make-before-break reserve may not exceed a node's installed
+    terminals of the mounts the rule selects there: such a rule cannot run as written. The
+    refusal names the rule, the node, the mounts, the numbers and where each was stated."""
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    for rule in resolved.link_rules:
+        n = getattr(rule.topology, "n", None)
+        if not rule.enabled or rule.topology.mode != "visible_candidates" or n is None:
+            continue
+        for endpoint in rule.endpoints:
+            for node_id in endpoint.node_ids:
+                node = node_by_id[node_id]
+                blocks = [
+                    block for block in node.terminal_inventory if endpoint.matches_terminal(block)
+                ]
+                installed = sum(block.count for block in blocks)
+                scheduling = node.ground_scheduling
+                reserve = (
+                    scheduling.mbb_reserve
+                    if scheduling is not None and scheduling.mbb_reserve is not None
+                    else 0
+                )
+                if n + reserve <= installed:
+                    continue
+                mounts = ", ".join(
+                    f"{block.terminal_id!r} ({block.count}, stated in {block.count_stated_at})"
+                    for block in blocks
+                )
+                reserve_text = (
+                    f"mbb_reserve {reserve} ({_stated_places(node, ('mbb_reserve',))})"
+                    if reserve
+                    else "no make-before-break reserve"
+                )
+                raise SessionResolutionError(
+                    f"link rule {rule.rule_id!r} states n={n} (in the rule's topology) and "
+                    f"{node_id!r} states {reserve_text}, but the rule's terminals installed on "
+                    f"{node_id!r} are {installed}: {mounts}. {n} links plus {reserve} spare "
+                    f"cannot be held on {installed} terminals: lower n or the reserve, or "
+                    "install more terminals of the mount",
+                    subject_kind="link_rule",
+                    subject_id=rule.rule_id,
+                    segment_id=node.segment_id,
+                    node_id=node_id,
+                    code="link_rule.cap_exceeds_terminals",
+                )
+
+
+def _refuse_scheduling_at_both_nodes(resolved: ResolvedSession) -> None:
+    """A candidate pair with scheduling stated at both of its nodes is defined (each node
+    takes its own choices and the pair links only when both took it) and is not built: the
+    session is refused through the support gate, naming the rule, each such pair and where
+    each node's scheduling is stated."""
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    by_rule: dict[str, list[ResolvedLinkCandidate]] = {}
+    for candidate in resolved.link_candidates:
+        if (
+            node_by_id[candidate.node_a].ground_scheduling is not None
+            and node_by_id[candidate.node_b].ground_scheduling is not None
+        ):
+            by_rule.setdefault(candidate.rule_id, []).append(candidate)
+    if not by_rule:
+        return
+    unsupported = []
+    for rule_id, candidates in sorted(by_rule.items()):
+        shown = candidates[:20]
+        pairs = "; ".join(f"{candidate.node_a}<->{candidate.node_b}" for candidate in shown)
+        if len(candidates) > len(shown):
+            pairs += f"; and {len(candidates) - len(shown)} more"
+        stating = sorted({node_id for candidate in candidates for node_id in candidate.pair})
+        places = "; ".join(
+            f"{node_id}: "
+            + (
+                ", ".join(
+                    sorted({place for _field, place in node_by_id[node_id].scheduling_stated_at})
+                )
+                or "place not recorded"
+            )
+            for node_id in stating[:20]
+        )
+        unsupported.append(
+            UnsupportedFeature(
+                category=FeatureCategory.GROUND_SCHEDULING,
+                value="scheduling_at_both_nodes",
+                message=(
+                    f"link rule {rule_id!r} has {len(candidates)} candidate pair(s) with "
+                    f"scheduling stated at both nodes: {pairs}. Scheduling is stated at: "
+                    f"{places}. Remove scheduling from one side of the rule"
+                ),
+                support_note="future runtime capability",
+            )
+        )
+    raise UnsupportedFeatureError(unsupported)
 
 
 def _site_override_for(segment: GroundSegment, site_id: str) -> GroundOverride | None:
@@ -1037,8 +1165,9 @@ def _site_override_for(segment: GroundSegment, site_id: str) -> GroundOverride |
 
 def _effective_site_policy(
     segment: GroundSegment, site_id: str
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None, tuple[str, ...]]:
-    """One placing group's effective (scheduling, originated, tags) for a site.
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, tuple[str, ...], str | None]:
+    """One placing group's effective (scheduling, originated, tags) for a site, and the place
+    its scheduling was stated.
 
     GroundOverride is the session author's per-site word and wins over the
     group-level apply. Returned scheduling/prefixes are plain dumps so they
@@ -1047,10 +1176,13 @@ def _effective_site_policy(
     override = _site_override_for(segment, site_id)
     apply = segment.apply
     scheduling = None
+    stated_at = None
     if override is not None and override.scheduling is not None:
         scheduling = override.scheduling.model_dump(mode="python")
+        stated_at = f"the override for site {site_id!r} in ground segment {segment.id!r}"
     elif apply is not None and apply.scheduling is not None:
         scheduling = apply.scheduling.model_dump(mode="python")
+        stated_at = f"apply of ground segment {segment.id!r}"
     originated = None
     if override is not None and override.originated_prefixes is not None:
         originated = override.originated_prefixes.model_dump(mode="python")
@@ -1061,7 +1193,27 @@ def _effective_site_policy(
         tags.extend(apply.tags)
     if override is not None and override.tags:
         tags.extend(override.tags)
-    return scheduling, originated, tuple(tags)
+    return scheduling, originated, tuple(tags), stated_at
+
+
+def _scheduling_stated_at(
+    site_value: dict[str, Any] | None,
+    base: dict[str, Any] | None,
+    *,
+    site_place: str,
+    base_place: str | None,
+) -> tuple[tuple[str, str], ...]:
+    """Where each field of a ground node's merged scheduling was stated: the site node's own
+    value wins field by field (``_merge_ground_scheduling``); every other stated field comes
+    from the placing group."""
+    places: dict[str, str] = {}
+    for name, value in (base or {}).items():
+        if value is not None and base_place is not None:
+            places[name] = base_place
+    for name, value in (site_value or {}).items():
+        if value is not None:
+            places[name] = site_place
+    return tuple(sorted(places.items()))
 
 
 def _expand_site_placement(
@@ -1076,11 +1228,11 @@ def _expand_site_placement(
     # originate two different prefix sets. Tags union; everything else is
     # identical-or-reject.
     policies = [_effective_site_policy(segment, site_id) for segment in placement.segments]
-    base_scheduling, base_originated, _ = policies[0]
+    base_scheduling, base_originated, _, base_scheduling_place = policies[0]
     clocks = tuple(segment.clock or SegmentClock() for segment in placement.segments)
     base_clock = clocks[0]
     for index in range(1, len(policies)):
-        scheduling, originated, _ = policies[index]
+        scheduling, originated, _, _ = policies[index]
         if (
             scheduling != base_scheduling
             or originated != base_originated
@@ -1093,7 +1245,7 @@ def _expand_site_placement(
                 "originated_prefixes must be identical"
             )
     tags: set[str] = set()
-    for _, _, group_tags in policies:
+    for _, _, group_tags, _ in policies:
         tags.update(group_tags)
     tags.update(site.get("tags") or ())
 
@@ -1146,11 +1298,18 @@ def _expand_site_placement(
         node_tags = set(tags)
         node_tags.update(site_node.get("tags") or ())
         scheduling = _merge_ground_scheduling(site_node.get("scheduling"), base_scheduling)
+        scheduling_stated_at = _scheduling_stated_at(
+            site_node.get("scheduling"),
+            base_scheduling,
+            site_place=f"site node {site_node['id']!r} of site {site_id!r}",
+            base_place=base_scheduling_place,
+        )
         # Ground scheduling governs access-contact allocation; a node with
         # no terminal mounts (a processing host) participates in no access
         # rule and holds no scheduling state.
         if not site_node.get("terminals"):
             scheduling = None
+            scheduling_stated_at = ()
         originated = _merge_originated_prefixes(
             site_node.get("originated_prefixes"),
             source_node.get("originated_prefixes"),
@@ -1204,6 +1363,7 @@ def _expand_site_placement(
                     profile_level=profile_level,
                     service_priority=site_node.get("service_priority"),
                     ground_scheduling=scheduling,
+                    scheduling_stated_at=scheduling_stated_at,
                     clock=base_clock,
                 ),
                 body_facts=(_body_facts_from_catalog(body),),
@@ -1530,6 +1690,11 @@ def _terminal_blocks_for_node(
                 medium=terminal["medium"],
                 source_terminal_id=terminal["id"],
                 count=count,
+                count_stated_at=(
+                    f"the site installation of {runtime_id!r}"
+                    if "installed_count" in installed
+                    else f"node model {source_node['id']!r}"
+                ),
                 tracking_capacity=int(
                     capabilities.get("tracking_capacity", terminal["tracking_capacity"])
                 ),
@@ -3256,13 +3421,13 @@ def _aim_satellite_access_terminals(
 def _validate_access_terminal_bindings(
     cfg: SegmentSessionConfig, resolved: ResolvedSession
 ) -> None:
-    """Ground terminal blocks bind to exactly one access rule.
+    """A terminal mount whose node chooses by policy binds to at most one enabled rule.
 
     Terminal compatibility is authored, never inferred: the rule's terminal
-    selector is the binding declaration, and one ground terminal serving two
-    constellations is an authoring ambiguity the allocator must never be
-    asked to arbitrate. Satellite access terminals serve whichever ground
-    station the allocator assigns and are deliberately not bound.
+    selector is the binding declaration, and one terminal serving two
+    constellations is an authoring ambiguity a node's own policy must never be
+    asked to arbitrate. A node that states no scheduling is not bound: its
+    terminals serve whichever peer NodalArc's default assigns.
     """
     selectors = _terminal_selectors_by_rule(cfg)
     node_by_id = {node.node_id: node for node in resolved.nodes}
@@ -3273,7 +3438,10 @@ def _validate_access_terminal_bindings(
         for endpoint, selector in zip(rule.endpoints, selectors[rule.rule_id], strict=True):
             for node_id in endpoint.node_ids:
                 node = node_by_id[node_id]
-                if node.kind != "ground_station":
+                # A node that chooses by its own policy chooses per rule: its mount serves
+                # one rule. A node that states no scheduling is chosen for by NodalArc's
+                # default, which shares a mount's terminals among every rule drawing on it.
+                if node.ground_scheduling is None:
                     continue
                 for block in node.terminal_inventory:
                     if not _terminal_matches(block, selector):

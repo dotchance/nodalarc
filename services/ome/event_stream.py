@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path
@@ -30,7 +30,12 @@ from nodalarc.ground_terminals import (
     terminal_physics_profile,
     terminal_physics_profiles,
 )
-from nodalarc.models.addressing import AssignedSpacePair, NeighborAssignment, neighbors_by_node
+from nodalarc.models.addressing import (
+    AssignedPairPools,
+    AssignedSpacePair,
+    NeighborAssignment,
+    neighbors_by_node,
+)
 from nodalarc.models.events import (
     ClockTick,
     EphemerisNodeFixed,
@@ -152,12 +157,18 @@ def ground_usable_pairs(
     *,
     visible_per_station: Mapping[str, Sequence[GroundVisibility]],
     gs_reference_bodies: Mapping[str, str],
+    stating_nodes: Collection[str],
+    pair_pools: Mapping[tuple[str, str], AssignedPairPools] | None,
 ) -> list[UsablePair]:
     """The allocator's usable pairs for one tick of ground visibility.
 
-    The station is the node that states scheduling, so the pair carries the station's view.
-    The satellite's pool is the one that serves the station's body. The declared ground
-    candidates reach OME without their link rule, so the pairs name none.
+    A station that states scheduling chooses by its policy, so the pair carries the station's
+    view; a station that states none has no view, and NodalArc's default chooses for it.
+
+    ``pair_pools`` names each pair's link rule and the pool it draws on at each node. ``None``
+    is a context built with no link rules (``build_step_context``): its pairs name no rule,
+    the station's pool is its every terminal and the satellite's is the one that serves the
+    station's body.
     """
     usable: list[UsablePair] = []
     for gs_id, visibles in sorted(visible_per_station.items()):
@@ -169,33 +180,43 @@ def ground_usable_pairs(
                 f"Ground station {gs_id} has no reference_body; the pool its satellites "
                 "serve it from cannot be named"
             )
-        served_pool = satellite_ground_pool(reference_body)
+        states = gs_id in stating_nodes
         for visibility in visibles:
             sat_id = visibility.sat_id
-            if gs_id < sat_id:
-                usable.append(
-                    UsablePair(
-                        pair=(gs_id, sat_id),
-                        rule_id=None,
-                        pool_a=GROUND_STATION_POOL,
-                        pool_b=served_pool,
-                        range_km=visibility.range_km,
-                        view_a=visibility,
-                        view_b=None,
-                    )
+            station_first = gs_id < sat_id
+            pair = (gs_id, sat_id) if station_first else (sat_id, gs_id)
+            if pair_pools is None:
+                station_pool, satellite_pool = (
+                    GROUND_STATION_POOL,
+                    satellite_ground_pool(reference_body),
+                )
+                rule_id = None
+                pool_a, pool_b = (
+                    (station_pool, satellite_pool)
+                    if station_first
+                    else (satellite_pool, station_pool)
                 )
             else:
-                usable.append(
-                    UsablePair(
-                        pair=(sat_id, gs_id),
-                        rule_id=None,
-                        pool_a=served_pool,
-                        pool_b=GROUND_STATION_POOL,
-                        range_km=visibility.range_km,
-                        view_a=None,
-                        view_b=visibility,
-                    )
+                try:
+                    stated = pair_pools[pair]
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Ground pair {pair} is usable but the session states no link rule "
+                        "and terminal pools for it"
+                    ) from exc
+                rule_id, pool_a, pool_b = stated
+            view = visibility if states else None
+            usable.append(
+                UsablePair(
+                    pair=pair,
+                    rule_id=rule_id,
+                    pool_a=pool_a,
+                    pool_b=pool_b,
+                    range_km=visibility.range_km,
+                    view_a=view if station_first else None,
+                    view_b=None if station_first else view,
                 )
+            )
     return usable
 
 
@@ -393,6 +414,13 @@ class StepContext:
     long_delay_access_pairs: frozenset[tuple[str, str]]
     # The candidate pairs between two space nodes whose terminals OME assigns per pass.
     assigned_space_pairs: tuple[AssignedSpacePair, ...]
+    # The ground stations that state scheduling. Every other station's links are chosen by
+    # NodalArc's default.
+    stating_nodes: frozenset[str]
+    # Each ground pair's link rule and pools; None in a context built with no link rules.
+    ground_pair_pools: dict[tuple[str, str], AssignedPairPools] | None
+    # The ``n`` each link rule states.
+    rule_n: dict[str, int]
     ground_pair_terminal_types: dict[tuple[str, str], str]
     node_metadata: dict[str, dict[str, object]]
     by_node: dict[str, list[NeighborAssignment]]
@@ -654,8 +682,22 @@ def build_step_context(
     active_bodies: frozenset[str] | None = None,
     long_delay_access_pairs: frozenset[tuple[str, str]] | None = None,
     assigned_space_pairs: Sequence[AssignedSpacePair] | None = None,
+    ground_pair_pools: Mapping[tuple[str, str], AssignedPairPools] | None = None,
+    ground_rule_pools: Mapping[str, Mapping[str, Sequence[int]]] | None = None,
+    rule_n: Mapping[str, int] | None = None,
 ) -> StepContext:
-    """Build the per-session-constant context for compute_step()."""
+    """Build the per-session-constant context for compute_step().
+
+    A session's context states each ground pair's link rule and terminal pools
+    (``ground_pair_pools`` with ``ground_rule_pools``) and each rule's ``n`` (``rule_n``). A
+    context built from stations and satellites alone states none: its ground pairs name no
+    rule, a station's pool is its every terminal and a satellite's pools are by target body.
+    """
+    if (ground_pair_pools is None) != (ground_rule_pools is None):
+        raise ValueError(
+            "build_step_context takes each ground pair's rule and pools together with the "
+            "pools' terminals, or neither"
+        )
     if long_delay_access_pairs is None:
         raise ValueError(
             "build_step_context requires the session's long-delay pairs on assigned terminals "
@@ -765,13 +807,6 @@ def build_step_context(
                 if station.min_elevation_deg is not None
                 else gs_file.default_min_elevation_deg
             )
-            station_resolution = resolve_station_ground_scheduling(
-                ground_scheduling,
-                gs_file,
-                station,
-                apply_ground_defaults=not ground_defaults_applied,
-            )
-            station_scheduling = station_resolution.scheduling
             gs_terminal_types[node_id] = station_ground_terminal_type(gs_file, station)
             effective_terminals = station.terminals or gs_file.default_terminals
             gs_terminal_indices[node_id] = ground_terminal_interface_indices(
@@ -790,6 +825,19 @@ def build_step_context(
                     profile_id=f"{node_id}.terminals",
                     endpoint="ground",
                 )
+            gs_service_priorities[node_id] = station.service_priority
+            gs_tenant_ids[node_id] = station.tenant_id
+            gs_reference_bodies[node_id] = station.reference_body
+            if not station.states_scheduling:
+                # NodalArc's default chooses this station's links: it has no policy of its
+                # own, and takes none from another station or from a default.
+                continue
+            station_scheduling = resolve_station_ground_scheduling(
+                ground_scheduling,
+                gs_file,
+                station,
+                apply_ground_defaults=not ground_defaults_applied,
+            ).scheduling
             selection_policy = station_scheduling.selection_policy.model_copy(deep=True)
             handover_policy = _normalize_handover_policy(station_scheduling.handover_policy)
             gs_selection_policies[node_id] = selection_policy
@@ -804,9 +852,6 @@ def build_step_context(
             gs_mbb_reserve[node_id] = (
                 station_scheduling.mbb_reserve if station_scheduling.handover_mode == "mbb" else 0
             )
-            gs_service_priorities[node_id] = station.service_priority
-            gs_tenant_ids[node_id] = station.tenant_id
-            gs_reference_bodies[node_id] = station.reference_body
 
         if ground_candidate_satellites_by_gs is None:
             raise ValueError(
@@ -866,6 +911,9 @@ def build_step_context(
         gs_terminal_indices=gs_terminal_indices,
         sat_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
     )
+    for node_id, rule_pools in (ground_rule_pools or {}).items():
+        for pool_name, indices in rule_pools.items():
+            terminal_pools.setdefault(node_id, {})[pool_name] = tuple(indices)
     for item in assigned_space_pairs:
         for node_id, end in zip(item.pair, (item.end_a, item.end_b), strict=True):
             if node_id not in sat_isl_terminals:
@@ -909,6 +957,9 @@ def build_step_context(
         ground_candidate_satellites_by_gs=declared_ground_candidates,
         long_delay_access_pairs=frozenset(long_delay_access_pairs),
         assigned_space_pairs=tuple(assigned_space_pairs),
+        stating_nodes=frozenset(gs_handover_modes),
+        ground_pair_pools=dict(ground_pair_pools) if ground_pair_pools is not None else None,
+        rule_n=dict(rule_n or {}),
         ground_pair_terminal_types=ground_pair_terminal_types,
         node_metadata=node_metadata_map,
         by_node=by_node,
@@ -1198,8 +1249,8 @@ def compute_step(
     }
 
     # 8. Scored, hysteresis-aware link allocation of every usable pair on assigned terminals.
-    # A ground station states its scheduling; no space node does, so NodalArc's default
-    # chooses among the pairs between two space nodes.
+    # A ground station that states scheduling chooses by its policy. NodalArc's default
+    # chooses for every other station and among the pairs between two space nodes.
     with timings.measure(SEG_ALLOCATOR):
         ground_allocation = allocate_links(
             step=step,
@@ -1207,15 +1258,16 @@ def compute_step(
                 *ground_usable_pairs(
                     visible_per_station=ground_visibility.visible_per_station,
                     gs_reference_bodies=ctx.gs_reference_bodies,
+                    stating_nodes=ctx.stating_nodes,
+                    pair_pools=ctx.ground_pair_pools,
                 ),
                 *space_usable_pairs(pairs=ctx.assigned_space_pairs, feasibility=space_feasibility),
             ],
             current_associations=current_associations,
             pending_teardowns=mbb_pending_teardowns,
             terminal_pools=ctx.terminal_pools,
-            stating_nodes=ctx.gs_positions.keys(),
-            # No session can state `n` on a rule yet.
-            rule_n={},
+            stating_nodes=ctx.stating_nodes,
+            rule_n=ctx.rule_n,
             selection_policies=ctx.gs_selection_policies,
             min_elevations=ctx.gs_min_elevations,
             handover_policies=ctx.gs_handover_policies,
@@ -1392,6 +1444,9 @@ def precompute_timeline_window(
     active_bodies: frozenset[str] | None = None,
     long_delay_access_pairs: frozenset[tuple[str, str]] | None = None,
     assigned_space_pairs: Sequence[AssignedSpacePair] | None = None,
+    ground_pair_pools: Mapping[tuple[str, str], AssignedPairPools] | None = None,
+    ground_rule_pools: Mapping[str, Mapping[str, Sequence[int]]] | None = None,
+    rule_n: Mapping[str, int] | None = None,
 ) -> TimelineWindowResult:
     """Precompute a single window of the timeline (batch mode).
 
@@ -1416,6 +1471,9 @@ def precompute_timeline_window(
         active_bodies=active_bodies,
         long_delay_access_pairs=long_delay_access_pairs,
         assigned_space_pairs=assigned_space_pairs,
+        ground_pair_pools=ground_pair_pools,
+        ground_rule_pools=ground_rule_pools,
+        rule_n=rule_n,
     )
     return precompute_timeline_window_from_context(
         ctx,
@@ -1452,6 +1510,9 @@ def precompute_timeline(
     active_bodies: frozenset[str] | None = None,
     long_delay_access_pairs: frozenset[tuple[str, str]] | None = None,
     assigned_space_pairs: Sequence[AssignedSpacePair] | None = None,
+    ground_pair_pools: Mapping[tuple[str, str], AssignedPairPools] | None = None,
+    ground_rule_pools: Mapping[str, Mapping[str, Sequence[int]]] | None = None,
+    rule_n: Mapping[str, int] | None = None,
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
 
@@ -1477,6 +1538,9 @@ def precompute_timeline(
         active_bodies=active_bodies,
         long_delay_access_pairs=long_delay_access_pairs,
         assigned_space_pairs=assigned_space_pairs,
+        ground_pair_pools=ground_pair_pools,
+        ground_rule_pools=ground_rule_pools,
+        rule_n=rule_n,
     )
     return result.events
 

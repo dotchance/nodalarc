@@ -235,6 +235,9 @@ class ResolvedTerminalBlock(BaseModel):
     source_terminal_id: NonEmptyReference | None = None
     link_role: NonEmptyReference | None = None
     count: int = Field(gt=0)
+    # Where the installed count was stated: the node model, or the site installation. A
+    # refusal names it.
+    count_stated_at: str | None = None
     tracking_capacity: int = Field(gt=0)
     max_range_km: float = Field(gt=0, allow_inf_nan=False)
     # The lowest elevation the terminal can point to: its catalog pointing range,
@@ -625,8 +628,12 @@ class ResolvedNode(BaseModel):
     service_priority: int | None = Field(default=None, gt=0)
     plane: int | None = Field(default=None, ge=0)
     slot: int | None = Field(default=None, ge=0)
-    # Complete resolved policy for ground stations; None for space nodes.
+    # The scheduling a ground node states, effective after precedence; None for a ground node
+    # that states none (NodalArc then chooses its links) and for every space node.
     ground_scheduling: GroundScheduling | None = None
+    # Where each stated scheduling field was stated, as (field, place): the segment's apply,
+    # a site override, or the site node. A refusal names it.
+    scheduling_stated_at: tuple[tuple[str, str], ...] = ()
     clock: SegmentClock = SegmentClock()
 
     @property

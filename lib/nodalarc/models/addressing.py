@@ -42,6 +42,15 @@ class AssignedSpaceEnd(NamedTuple):
     central_body: str
 
 
+class AssignedPairPools(NamedTuple):
+    """The link rule of a candidate pair on assigned terminals and the terminal pool the pair
+    draws on at each node, in node-pair order."""
+
+    rule_id: str
+    pool_a: str
+    pool_b: str
+
+
 class AssignedSpacePair(NamedTuple):
     """One candidate pair between two space nodes whose terminals OME assigns per pass, in
     node-pair order."""

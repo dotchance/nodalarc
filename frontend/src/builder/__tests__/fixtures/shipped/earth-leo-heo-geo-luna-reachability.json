@@ -1970,6 +1970,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -1989,6 +1990,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2071,6 +2073,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2090,6 +2093,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2172,6 +2176,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2191,6 +2196,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2273,6 +2279,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2292,6 +2299,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2374,6 +2382,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2393,6 +2402,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2475,6 +2485,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2494,6 +2505,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2576,6 +2588,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2595,6 +2608,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2677,6 +2691,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2696,6 +2711,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2778,6 +2794,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2797,6 +2814,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2879,6 +2897,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2898,6 +2917,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2980,6 +3000,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -2999,6 +3020,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3081,6 +3103,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3100,6 +3123,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3182,6 +3206,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3201,6 +3226,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3283,6 +3309,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3302,6 +3329,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3384,6 +3412,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3403,6 +3432,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3485,6 +3515,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3504,6 +3535,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3586,6 +3618,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3605,6 +3638,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3687,6 +3721,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3706,6 +3741,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3788,6 +3824,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3807,6 +3844,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3889,6 +3927,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3908,6 +3947,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -3990,6 +4030,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4009,6 +4050,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4091,6 +4133,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4110,6 +4153,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4192,6 +4236,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4211,6 +4256,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4293,6 +4339,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4312,6 +4359,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4394,6 +4442,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4413,6 +4462,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4495,6 +4545,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4514,6 +4565,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4596,6 +4648,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4615,6 +4668,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4697,6 +4751,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4716,6 +4771,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4798,6 +4854,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4817,6 +4874,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4899,6 +4957,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -4918,6 +4977,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5000,6 +5060,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5019,6 +5080,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5101,6 +5163,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5120,6 +5183,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5202,6 +5266,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5221,6 +5286,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5303,6 +5369,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5322,6 +5389,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5404,6 +5472,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5423,6 +5492,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5505,6 +5575,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5524,6 +5595,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'starlink-v2-mesh'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": null,
@@ -5606,6 +5678,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -5625,6 +5698,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -5644,6 +5718,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -5726,6 +5801,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -5745,6 +5821,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -5764,6 +5841,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -5846,6 +5924,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -5865,6 +5944,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -5884,6 +5964,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -5966,6 +6047,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -5985,6 +6067,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -6004,6 +6087,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -6090,6 +6174,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -6109,6 +6194,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -6128,6 +6214,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -6210,6 +6297,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -6229,6 +6317,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -6248,6 +6337,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -6330,6 +6420,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -6349,6 +6440,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -6368,6 +6460,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -6454,6 +6547,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -6473,6 +6567,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -6492,6 +6587,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -6574,6 +6670,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -6593,6 +6690,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -6612,6 +6710,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -6694,6 +6793,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -6713,6 +6813,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -6732,6 +6833,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -6814,6 +6916,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -6833,6 +6936,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -6852,6 +6956,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -6934,6 +7039,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -6953,6 +7059,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -6972,6 +7079,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -7054,6 +7162,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -7073,6 +7182,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -7092,6 +7202,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -7174,6 +7285,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -7193,6 +7305,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -7212,6 +7325,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -7294,6 +7408,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -7313,6 +7428,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -7332,6 +7448,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -7414,6 +7531,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -7433,6 +7551,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -7452,6 +7571,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -7534,6 +7654,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -7553,6 +7674,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -7572,6 +7694,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -7654,6 +7777,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -7673,6 +7797,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -7692,6 +7817,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -7774,6 +7900,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -7793,6 +7920,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -7812,6 +7940,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -7894,6 +8023,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -7913,6 +8043,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -7932,6 +8063,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -8014,6 +8146,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -8033,6 +8166,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -8052,6 +8186,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -8134,6 +8269,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -8153,6 +8289,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -8172,6 +8309,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -8254,6 +8392,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -8273,6 +8412,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -8292,6 +8432,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -8374,6 +8515,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -8393,6 +8535,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -8412,6 +8555,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -8494,6 +8638,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -8513,6 +8658,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -8532,6 +8678,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -8614,6 +8761,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -8633,6 +8781,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -8652,6 +8801,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -8734,6 +8884,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -8753,6 +8904,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -8772,6 +8924,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -8854,6 +9007,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -8873,6 +9027,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -8892,6 +9047,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -8974,6 +9130,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -8993,6 +9150,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -9012,6 +9170,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -9094,6 +9253,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -9113,6 +9273,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -9132,6 +9293,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -9214,6 +9376,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -9233,6 +9396,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -9252,6 +9416,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -9338,6 +9503,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -9357,6 +9523,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -9376,6 +9543,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -9458,6 +9626,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -9477,6 +9646,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -9496,6 +9666,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -9578,6 +9749,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -9597,6 +9769,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -9616,6 +9789,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -9698,6 +9872,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -9717,6 +9892,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -9736,6 +9912,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -9818,6 +9995,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -9837,6 +10015,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -9856,6 +10035,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'leo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -9934,6 +10114,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -9953,6 +10134,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -9972,6 +10154,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -10046,6 +10229,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -10065,6 +10249,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -10084,6 +10269,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -10162,6 +10348,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -10181,6 +10368,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -10200,6 +10388,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -10274,6 +10463,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -10293,6 +10483,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -10312,6 +10503,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -10390,6 +10582,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -10409,6 +10602,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -10428,6 +10622,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -10502,6 +10697,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -10521,6 +10717,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -10540,6 +10737,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -10618,6 +10816,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -10637,6 +10836,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -10656,6 +10856,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -10730,6 +10931,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -10749,6 +10951,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -10768,6 +10971,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -10846,6 +11050,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -10865,6 +11070,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -10884,6 +11090,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -10958,6 +11165,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -10977,6 +11185,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -10996,6 +11205,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -11074,6 +11284,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -11093,6 +11304,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -11112,6 +11324,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -11186,6 +11399,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -11205,6 +11419,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -11224,6 +11439,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -11298,6 +11514,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -11317,6 +11534,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -11336,6 +11554,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -11410,6 +11629,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -11429,6 +11649,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -11448,6 +11669,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -11522,6 +11744,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -11541,6 +11764,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -11560,6 +11784,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -11634,6 +11859,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -11653,6 +11879,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -11672,6 +11899,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -11746,6 +11974,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -11765,6 +11994,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -11784,6 +12014,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -11862,6 +12093,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -11881,6 +12113,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -11900,6 +12133,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -11974,6 +12208,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -11993,6 +12228,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -12012,6 +12248,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -12090,6 +12327,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -12109,6 +12347,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -12128,6 +12367,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -12202,6 +12442,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -12221,6 +12462,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -12240,6 +12482,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -12314,6 +12557,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -12333,6 +12577,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -12352,6 +12597,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -12426,6 +12672,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -12445,6 +12692,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -12464,6 +12712,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -12538,6 +12787,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -12557,6 +12807,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -12576,6 +12827,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'meo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -12666,6 +12918,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'heo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -12685,6 +12938,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'heo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -12704,6 +12958,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'heo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -12794,6 +13049,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'heo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -12813,6 +13069,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'heo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -12832,6 +13089,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'heo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -12922,6 +13180,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'heo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -12941,6 +13200,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'heo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -12960,6 +13220,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'heo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -13046,6 +13307,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -13065,6 +13327,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -13084,6 +13347,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -13174,6 +13438,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -13193,6 +13458,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -13212,6 +13478,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -13298,6 +13565,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -13317,6 +13585,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -13336,6 +13605,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -13422,6 +13692,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -13441,6 +13712,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -13460,6 +13732,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -13550,6 +13823,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -13569,6 +13843,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -13588,6 +13863,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -13674,6 +13950,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -13693,6 +13970,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -13712,6 +13990,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -13798,6 +14077,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -13817,6 +14097,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -13836,6 +14117,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -13926,6 +14208,7 @@
                 "target_body": "earth"
               },
               "count": 1,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -13945,6 +14228,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -13964,6 +14248,7 @@
             {
               "boresight": null,
               "count": 4,
+              "count_stated_at": "node model 'geo-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -14042,6 +14327,7 @@
                 "target_body": "luna"
               },
               "count": 1,
+              "count_stated_at": "node model 'luna-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -14061,6 +14347,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'luna-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -14080,6 +14367,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'luna-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -14158,6 +14446,7 @@
                 "target_body": "luna"
               },
               "count": 1,
+              "count_stated_at": "node model 'luna-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -14177,6 +14466,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'luna-relay'",
               "endpoint_role": "isl",
               "field_of_regard_deg": 340.0,
               "installed_min_elevation_deg": null,
@@ -14196,6 +14486,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'luna-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -14302,6 +14593,7 @@
                 "mode": "local_vertical"
               },
               "count": 4,
+              "count_stated_at": "the site installation of 'earth-us-co-denver-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -14400,6 +14692,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-us-co-denver-gw2'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,
@@ -14502,6 +14795,7 @@
                 "mode": "local_vertical"
               },
               "count": 3,
+              "count_stated_at": "the site installation of 'earth-cl-santiago-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -14600,6 +14894,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-cl-santiago-gw2'",
               "endpoint_role": "access",
               "field_of_regard_deg": 170.0,
               "installed_min_elevation_deg": 5.0,
@@ -14702,6 +14997,7 @@
                 "mode": "local_vertical"
               },
               "count": 3,
+              "count_stated_at": "the site installation of 'earth-au-perth-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -14800,6 +15096,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-au-perth-gw2'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,
@@ -14902,6 +15199,7 @@
                 "mode": "local_vertical"
               },
               "count": 3,
+              "count_stated_at": "the site installation of 'earth-es-madrid-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -15004,6 +15302,7 @@
                 "mode": "local_vertical"
               },
               "count": 3,
+              "count_stated_at": "the site installation of 'earth-br-sao-paulo-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -15106,6 +15405,7 @@
                 "mode": "local_vertical"
               },
               "count": 3,
+              "count_stated_at": "the site installation of 'earth-nz-christchurch-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -15208,6 +15508,7 @@
                 "mode": "local_vertical"
               },
               "count": 3,
+              "count_stated_at": "the site installation of 'earth-us-hi-honolulu-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -15330,6 +15631,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-wa-brewster-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -15452,6 +15754,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-hitterdal-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -15574,6 +15877,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-slope-county-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -15696,6 +16000,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-colburn-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -15794,6 +16099,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-dj-djibouti-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -15896,6 +16202,7 @@
                 "mode": "local_vertical"
               },
               "count": 3,
+              "count_stated_at": "the site installation of 'earth-sg-singapore-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -15998,6 +16305,7 @@
                 "mode": "local_vertical"
               },
               "count": 3,
+              "count_stated_at": "the site installation of 'earth-za-cape-town-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -16100,6 +16408,7 @@
                 "mode": "local_vertical"
               },
               "count": 3,
+              "count_stated_at": "the site installation of 'earth-jp-tokyo-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -16222,6 +16531,7 @@
                 "mode": "local_vertical"
               },
               "count": 8,
+              "count_stated_at": "the site installation of 'earth-us-prudhoe-bay-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 120.0,
               "installed_min_elevation_deg": 30.0,
@@ -16319,6 +16629,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-us-nm-white-sands-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 150.0,
               "installed_min_elevation_deg": 15.0,
@@ -16417,6 +16728,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-sj-svalbard-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 150.0,
               "installed_min_elevation_deg": 15.0,
@@ -16507,6 +16819,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-sj-svalbard-gw2'",
               "endpoint_role": "access",
               "field_of_regard_deg": 130.0,
               "installed_min_elevation_deg": 25.0,
@@ -16604,6 +16917,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-au-canberra-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 150.0,
               "installed_min_elevation_deg": 15.0,
@@ -16709,6 +17023,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-it-fucino-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 170.0,
               "installed_min_elevation_deg": 5.0,
@@ -16736,6 +17051,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-it-fucino-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -16841,6 +17157,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-us-ca-goldstone-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 170.0,
               "installed_min_elevation_deg": 5.0,
@@ -16868,6 +17185,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-us-ca-goldstone-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -16973,6 +17291,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-jp-yamaguchi-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 170.0,
               "installed_min_elevation_deg": 5.0,
@@ -17000,6 +17319,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-jp-yamaguchi-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -17089,6 +17409,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'earth-jp-yamaguchi-gw2'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,
@@ -17186,6 +17507,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'luna-artemis-base-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,

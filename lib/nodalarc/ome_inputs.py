@@ -19,6 +19,7 @@ from typing import Literal
 from nodalarc.body_frames import BodyFrame
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.addressing import (
+    AssignedPairPools,
     AssignedSpaceEnd,
     AssignedSpacePair,
     IslPlaneRelation,
@@ -33,6 +34,7 @@ from nodalarc.models.resolved_session import (
     ResolvedTerminalSelection,
 )
 from nodalarc.models.session import GroundSchedulingConfig, session_epoch_unix
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 from nodalarc.ome_runtime import (
     PASS_SAMPLE_CHUNK_TICKS,
     GroundStation,
@@ -90,6 +92,13 @@ class ResolvedOmeInputs:
     long_delay_access_pairs: frozenset[tuple[str, str]]
     # The candidate pairs between two space nodes whose terminals OME assigns per pass.
     assigned_space_pairs: tuple[AssignedSpacePair, ...]
+    # Each ground candidate pair's link rule and the pool it draws on at each node, in
+    # node-pair order, with every such pool's terminal indices by node.
+    ground_pair_pools: dict[tuple[str, str], AssignedPairPools]
+    ground_rule_pools: dict[str, dict[str, tuple[int, ...]]]
+    # The ``n`` each ``visible_candidates`` rule states: the most links a node holds at once
+    # on the rule.
+    rule_n: dict[str, int]
     node_metadata: dict[str, dict[str, object]]
     ground_scheduling: GroundSchedulingConfig
     ground_link_model: GroundLinkModel
@@ -194,6 +203,7 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         for sat in satellites
     )
     ground_scheduling = _allocator_wide_ground_scheduling(ground_nodes)
+    ground_pair_pools, ground_rule_pools = _ground_pair_pools(resolved)
     active_bodies = session_active_bodies(resolved)
     return ResolvedOmeInputs(
         satellites=satellites,
@@ -212,6 +222,13 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
             if candidate.assigned_terminals and candidate.delay_class == "long_delay"
         ),
         assigned_space_pairs=_assigned_space_pairs(resolved),
+        ground_pair_pools=ground_pair_pools,
+        ground_rule_pools=ground_rule_pools,
+        rule_n={
+            rule.rule_id: rule.topology.n
+            for rule in resolved.link_rules
+            if rule.enabled and rule.topology.mode == "visible_candidates" and rule.topology.n
+        },
         node_metadata=_node_metadata(resolved),
         ground_scheduling=ground_scheduling,
         ground_link_model=(
@@ -358,12 +375,15 @@ def _ground_file_from_resolved(
     for node in nodes:
         if node.surface_position is None:
             raise ValueError(f"ground node {node.node_id!r} is missing surface position")
-        if node.ground_scheduling is None:
-            raise ValueError(f"ground node {node.node_id!r} is missing ground scheduling")
         access_selections = selected_access.get(node.node_id, ())
         if not access_selections:
             continue
-        scheduling = _ground_scheduling_config(node.ground_scheduling)
+        # A station that states no scheduling carries no policy: NodalArc chooses its links.
+        scheduling = (
+            _ground_scheduling_config(node.ground_scheduling)
+            if node.ground_scheduling is not None
+            else None
+        )
         reference_body = _node_reference_body(node)
         floor = min_elevation_by_gs[node.node_id]
         dip = _horizon_dip_deg(node.surface_position.alt_m, radius_km_by_body[reference_body])
@@ -384,11 +404,17 @@ def _ground_file_from_resolved(
                 tenant_id=node.tenant_id,
                 reference_body=reference_body,
                 service_priority=node.service_priority or 10,
-                selection_policy=scheduling.selection_policy,
-                handover_policy=scheduling.handover_policy,
-                handover_mode=scheduling.handover_mode,
-                mbb_overlap_ticks=scheduling.mbb_overlap_ticks,
-                mbb_reserve=scheduling.mbb_reserve,
+                **(
+                    {
+                        "selection_policy": scheduling.selection_policy,
+                        "handover_policy": scheduling.handover_policy,
+                        "handover_mode": scheduling.handover_mode,
+                        "mbb_overlap_ticks": scheduling.mbb_overlap_ticks,
+                        "mbb_reserve": scheduling.mbb_reserve,
+                    }
+                    if scheduling is not None
+                    else {"states_scheduling": False}
+                ),
             )
         )
     if not stations:
@@ -444,6 +470,68 @@ def _neighbors_from_resolved(
             )
         )
     return frozenset(assignments)
+
+
+def _ground_pair_pools(
+    resolved: ResolvedSession,
+) -> tuple[dict[tuple[str, str], AssignedPairPools], dict[str, dict[str, tuple[int, ...]]]]:
+    """Each ground candidate pair's link rule and terminal pools, and every pool's indices.
+
+    A rule's pool at a node is the terminals of the mounts its endpoint selects there. At the
+    satellite it is narrowed to the mounts aimed at the station's body, since a terminal aimed
+    at another body cannot serve the station. A station's mounts bind to one access rule each,
+    so its pools hold separate terminals.
+    """
+    nodes_by_id = {node.node_id: node for node in resolved.nodes}
+    selections = resolved.assigned_terminal_selections_by_node()
+    rules = {rule.rule_id: rule for rule in resolved.link_rules}
+    pools: dict[str, dict[str, tuple[int, ...]]] = {}
+
+    def pool(node: ResolvedNode, rule_id: str, body: str | None) -> str:
+        name = f"rule:{rule_id}" if body is None else f"rule:{rule_id}:{body}"
+        known = pools.setdefault(node.node_id, {})
+        if name in known:
+            return name
+        endpoints = [
+            endpoint for endpoint in rules[rule_id].endpoints if node.node_id in endpoint.node_ids
+        ]
+        indices = tuple(
+            index
+            for item in selections[node.node_id]
+            if any(endpoint.matches_terminal(item.block) for endpoint in endpoints)
+            and (
+                body is None
+                or (
+                    isinstance(item.block.boresight, SatGroundTerminalBoresight)
+                    and item.block.boresight.target_body == body
+                )
+            )
+            for index in item.interface_indices
+        )
+        if not indices:
+            raise ValueError(
+                f"link rule {rule_id!r} selects no terminal on {node.node_id!r}"
+                + ("" if body is None else f" aimed at {body}")
+            )
+        known[name] = indices
+        return name
+
+    pair_pools: dict[tuple[str, str], AssignedPairPools] = {}
+    for candidate in resolved.link_candidates:
+        if candidate.kind != "access":
+            continue
+        first, second = sorted(
+            (nodes_by_id[candidate.node_a], nodes_by_id[candidate.node_b]),
+            key=lambda node: node.node_id,
+        )
+        station = first if first.kind == "ground_station" else second
+        station_body = _node_reference_body(station)
+        pair_pools[(first.node_id, second.node_id)] = AssignedPairPools(
+            rule_id=candidate.rule_id,
+            pool_a=pool(first, candidate.rule_id, None if first is station else station_body),
+            pool_b=pool(second, candidate.rule_id, None if second is station else station_body),
+        )
+    return pair_pools, pools
 
 
 def _assigned_space_pairs(resolved: ResolvedSession) -> tuple[AssignedSpacePair, ...]:
@@ -695,13 +783,14 @@ def coverage_requirement(resolved: ResolvedSession) -> CoverageRequirement:
             apoapsis = sat.elements.semi_major_axis_km * (1.0 + sat.elements.eccentricity)
             reach_km[sat.central_body] = max(reach_km.get(sat.central_body, 0.0), apoapsis)
         elif node.node_id in access_ground_ids and selected_access.get(node.node_id):
-            if node.surface_position is None or node.ground_scheduling is None:
-                raise ValueError(
-                    f"ground node {node.node_id!r} is missing its surface position or scheduling"
-                )
+            if node.surface_position is None:
+                raise ValueError(f"ground node {node.node_id!r} is missing its surface position")
             body = _node_reference_body(node)
             radius = body_frames[body].equatorial_radius_km + node.surface_position.alt_m / 1000.0
             reach_km[body] = max(reach_km.get(body, 0.0), radius)
+            if node.ground_scheduling is None:
+                # NodalArc's default chooses by range and looks at no future pass.
+                continue
             policy = _ground_scheduling_config(node.ground_scheduling).selection_policy
             if policy.name == "longest-remaining-pass":
                 horizon_ticks = max(horizon_ticks, int(policy.params["lookahead_horizon_ticks"]))

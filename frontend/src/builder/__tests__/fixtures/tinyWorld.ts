@@ -30,6 +30,7 @@ function block(
     source_terminal_id: null,
     link_role: null,
     count: 1,
+    count_stated_at: null,
     tracking_capacity: 1,
     max_range_km: 5000,
     min_elevation_deg: elev,

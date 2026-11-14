@@ -105,13 +105,57 @@ def test_asset_paths_reject_noncanonical_or_uncontained_forms(path: str) -> None
         TypeAdapter(RelativeAssetPath).validate_python(path)
 
 
-def test_access_candidate_requires_complete_explicit_ground_scheduling() -> None:
+def test_a_station_that_states_scheduling_states_every_field() -> None:
     document = _simple_session()
     scheduling = _ground_segment(document)["apply"]["scheduling"]
     del scheduling["ranking_order"]
 
-    with pytest.raises(SessionResolutionError, match="incomplete ground scheduling.*ranking_order"):
+    with pytest.raises(SessionResolutionError) as refusal:
         resolve_session(document, catalog=shipped_read_view())
+
+    message = str(refusal.value)
+    # The refusal names what is missing and where the stated fields were stated.
+    assert "missing: ranking_order" in message
+    assert "handover_mode in apply of ground segment 'ground'" in message
+
+
+def test_a_station_may_state_no_scheduling_and_nodalarc_chooses_its_links() -> None:
+    document = _simple_session()
+    del _ground_segment(document)["apply"]["scheduling"]
+
+    resolved = resolve_session(document, catalog=shipped_read_view())
+
+    stations = [node for node in resolved.nodes if node.kind == "ground_station"]
+    assert stations and all(node.ground_scheduling is None for node in stations)
+    assert resolved.ground_candidate_satellites_by_gs()
+
+
+def test_n_plus_a_stated_reserve_above_the_installed_terminals_is_refused() -> None:
+    """earth-leo-simple's stations state mbb_reserve 1. A rule cap that leaves no terminal for
+    the reserve cannot run as written; the refusal names the rule, the node, the mount, the
+    numbers and where each was stated."""
+    document = _simple_session()
+    access = next(rule for rule in document["link_rules"] if rule["id"] == "leo_access")
+    resolved = resolve_session(document, catalog=shipped_read_view())
+    # The station with the fewest access terminals sets the largest cap the rule can state.
+    installed = min(
+        sum(block.count for block in node.terminal_inventory if block.endpoint_role == "access")
+        for node in resolved.nodes
+        if node.kind == "ground_station"
+    )
+    access["topology"] = {"mode": "visible_candidates", "n": installed}
+
+    with pytest.raises(SessionResolutionError) as refusal:
+        resolve_session(document, catalog=shipped_read_view())
+
+    assert refusal.value.code == "link_rule.cap_exceeds_terminals"
+    message = str(refusal.value)
+    assert f"n={installed}" in message and "mbb_reserve 1" in message
+    assert "apply of ground segment 'ground'" in message
+    assert "stated in" in message
+
+    access["topology"] = {"mode": "visible_candidates", "n": installed - 1}
+    resolve_session(document, catalog=shipped_read_view())
 
 
 def test_ground_without_access_candidates_does_not_require_scheduling() -> None:

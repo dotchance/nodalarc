@@ -611,6 +611,7 @@
                 "target_body": "mars"
               },
               "count": 3,
+              "count_stated_at": "node model 'mars-areostationary-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -630,6 +631,7 @@
             {
               "boresight": null,
               "count": 2,
+              "count_stated_at": "node model 'mars-areostationary-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -649,6 +651,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'mars-areostationary-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -784,6 +787,7 @@
                 "target_body": "mars"
               },
               "count": 1,
+              "count_stated_at": "node model 'mars-relay-mro'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -803,6 +807,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'mars-relay-mro'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -938,6 +943,7 @@
                 "target_body": "mars"
               },
               "count": 1,
+              "count_stated_at": "node model 'mars-relay-tgo'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -957,6 +963,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'mars-relay-tgo'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -1090,6 +1097,7 @@
                 "target_body": "earth"
               },
               "count": 2,
+              "count_stated_at": "node model 'lcrd-deep-space-relay'",
               "endpoint_role": "access",
               "field_of_regard_deg": 180.0,
               "installed_min_elevation_deg": null,
@@ -1109,6 +1117,7 @@
             {
               "boresight": null,
               "count": 1,
+              "count_stated_at": "node model 'lcrd-deep-space-relay'",
               "endpoint_role": "crosslink",
               "field_of_regard_deg": 360.0,
               "installed_min_elevation_deg": null,
@@ -1246,6 +1255,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'mars-jezero-dtn-base-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,
@@ -1382,6 +1392,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'mars-gale-dtn-base-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,
@@ -1518,6 +1529,7 @@
                 "mode": "local_vertical"
               },
               "count": 2,
+              "count_stated_at": "the site installation of 'mars-arcadia-dtn-base-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 160.0,
               "installed_min_elevation_deg": 10.0,
@@ -1650,6 +1662,7 @@
                 "mode": "local_vertical"
               },
               "count": 1,
+              "count_stated_at": "the site installation of 'earth-us-ca-table-mountain-dtn-ogs-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 140.0,
               "installed_min_elevation_deg": 20.0,
@@ -1782,6 +1795,7 @@
                 "mode": "local_vertical"
               },
               "count": 1,
+              "count_stated_at": "the site installation of 'earth-us-hi-haleakala-dtn-ogs-gw1'",
               "endpoint_role": "access",
               "field_of_regard_deg": 140.0,
               "installed_min_elevation_deg": 20.0,

@@ -706,14 +706,14 @@ GroundScheduling = MappingBegin,
 If `ranking_order` is present and non-null, its values are unique and its final
 value is `lex_pair`.
 
-Every ground node participating in an enabled access-link candidate must have
-non-null effective values for every `GroundScheduling` field. A `bbm` node
-requires `mbb_overlap_ticks: 0` and `mbb_reserve: 0`; an `mbb` node requires
-both values to be positive. The effective values of `handover_concurrency`,
+A ground node that states scheduling must state every `GroundScheduling`
+field, effective after precedence. A `bbm` node requires
+`mbb_overlap_ticks: 0` and `mbb_reserve: 0`; an `mbb` node requires both
+values to be positive. The effective values of `handover_concurrency`,
 `ranking_order`, `mbb_preemption`, `successor_abort_policy`,
-`cross_tenant_displacement`, and `bbm_acquire_timeout_ticks` must be uniform
-across those access-candidate ground nodes. Ground nodes outside enabled
-access-link candidates may omit scheduling.
+`cross_tenant_displacement` and `bbm_acquire_timeout_ticks` must be uniform
+across the nodes that state scheduling. A node may omit scheduling; NodalArc
+then chooses as `visible_candidates` defines.
 
 ## Site
 
@@ -1195,6 +1195,7 @@ EndpointPair = SequenceBegin, Endpoint, Endpoint, SequenceEnd ;
 
 VisibleCandidatesTopology = MappingBegin,
                             "mode", "visible_candidates",
+                            [ "n", ( PositiveInteger | Null ) ],
                             MappingEnd ;
 
 NearestStartTopology = MappingBegin,
@@ -1269,18 +1270,92 @@ is invalid. A mask below the horizon dip at the station's altitude is invalid.
 `ExplicitPair.a` and `ExplicitPair.b` are local node ids within the two resolved
 endpoint segments, not resolver-derived runtime node ids. Ground local ids are
 site-qualified. Every pair must resolve inside the rule's selected endpoint
-sets. `nearest_start` applies a deterministic, physical-distance-ranked greedy
+sets.
+
+A link rule's topology fixes its candidate pairs. `explicit_pairs` lists them.
+`nearest_start` applies a deterministic, physical-distance-ranked greedy
 degree cap to the positions at the session start: no selected node has more
-than `n` declared candidates, and a node may receive fewer when the peer's cap
-has already been filled. The pairs stay fixed for the session; physics decides
-when each one is usable.
+than `n` candidates, and a node may receive fewer when the peer's cap has
+already been filled. `visible_candidates` takes every pair its endpoints
+select. Physics decides when each candidate is usable.
+
+**Stated always beats derived.** What a user states takes precedence over
+what NodalArc derives, everywhere in this section.
+
+Resolution refuses a session before it runs when `n` plus a stated
+make-before-break reserve exceeds the matched installed terminals on any
+node. The runtime-support gate refuses a session in which any candidate pair
+has scheduling stated at both of its nodes, until that is built. Each refusal
+is explicit (see "Refusals and reasons"). The rules below apply only to a
+resolved session.
+
+A node's cap on a rule is `n` when the rule states it. Otherwise it is the
+matched installed terminals, less any make-before-break reserve the node's
+scheduling states. An installed mount's terminals are one pool for every rule
+that draws on it. At each tick, when every node's usable candidates, at both
+ends, fit its cap, every usable candidate links. Otherwise the candidates are
+chosen as follows:
+
+- **Pairs with a stated chooser come first.** For a pair where one node
+  states scheduling, that node chooses by its selection policy and hands over
+  by its handover mode. All such pairs, across every rule drawing on the same
+  terminals, are placed first, in the session's ranking order, within every
+  node's cap.
+- **NodalArc's default fills what is left.** For a pair where neither node
+  states scheduling, NodalArc chooses in the room the stated choices leave.
+  Held links that are no longer usable are released. Every other usable pair
+  is then considered once, in ascending range, ties broken by node-pair
+  order. It links when both nodes have room. When a node is full, the pair may
+  take the place of that node's farthest default-chosen link only if it is
+  strictly nearer, and it links only when every full node can give up such a
+  link. Those links are released. A node brings a new link up before taking
+  the old one down when its matched installed terminals exceed its cap, and
+  takes the old one down first otherwise. A default-chosen link never
+  displaces a stated-chosen one.
+- **Pairs with scheduling at both nodes, once built.** Each node takes its
+  highest-ranked usable candidates up to its cap, by its own policy,
+  independently, with ties broken by node-pair order. A pair links only when
+  both of its nodes took it. Each node hands over by its own mode.
+
+NodalArc's default uses the session's allocator-wide scheduling values when
+any node states scheduling. Only when none does, it uses `one_at_a_time`
+handover, no preemption, `hard_release` successor abort, no cross-tenant
+displacement and a one-tick break-before-make acquire. The resolved session
+records which chooser chose each link, and every candidate pair that does not
+link carries an explicit reason (see "Refusals and reasons").
 
 Every unordered runtime node pair produced by enabled link rules has exactly
-one owning rule; if two rules produce the same pair, resolution fails. Each
-ground terminal may bind to at most one enabled access rule. Access links
-require exactly one ground endpoint and remain local to the ground site's
-reference body. A per-segment `max_links_per_node` map must cover every
-selected node through its segment or placement-group label.
+one owning rule; if two rules produce the same pair, resolution fails. A
+terminal mount whose node chooses by policy binds to at most one enabled
+rule. A per-segment `max_links_per_node` map must cover every selected node
+through its segment or placement-group label.
+
+### Refusals and reasons
+
+Every refusal and every unlinked pair says what, where, why, and what would
+change it. Each carries a typed code. A refusal also names the rule, the
+nodes, the terminal mount, the conflicting numbers, and where each number was
+stated.
+
+Refusals before a session runs:
+
+| Code | When | What would change it |
+|---|---|---|
+| `link_rule.cap_exceeds_terminals` | `n` plus a stated reserve exceeds a node's installed terminals of the mount | Lower `n` or the reserve, or install more terminals of the mount |
+| `scheduling_at_both_nodes` (runtime-support gate) | A candidate pair has scheduling at both of its nodes | Remove scheduling from one side |
+| `mount_bound_and_assigned` (runtime-support gate) | One terminal mount is drawn on by a rule that fixes its pairs and by a `visible_candidates` rule | Give each rule its own mount, or make both rules `visible_candidates` |
+
+Reasons a usable candidate pair did not link at a tick. These reach the page
+and the link history without substitution:
+
+| Reason | Meaning, and what it names |
+|---|---|
+| `cap_full` | A node holds its cap; names the node, its cap and the links it holds |
+| `taken_by_stated_choice` | A stated choice took the room first; names the node and the stated-chosen link |
+| `outranked` | A stated chooser preferred another candidate; names the chooser and the candidate it took |
+| `not_strictly_nearer` | The default holds a link at least as near; names both ranges |
+| `not_mutual` | With scheduling at both nodes, one of them did not choose the other; names which |
+| physics reasons | `los_blocked`, `range_exceeded`, `field_of_regard`, `tracking_exceeded`, with OME's measured values |
 
 ## Addressing
 
@@ -1650,7 +1725,12 @@ construct. The production profile currently supports:
 - `two_body` and `j2_mean_elements` reusable-orbit propagation;
 - Earth `sgp4_tle` placement on fixed space nodes;
 - `session` clocks;
-- `visible_candidates`, `nearest_start`, and `explicit_pairs` topology modes;
+- `visible_candidates`, `nearest_start`, and `explicit_pairs` topology modes.
+  A `visible_candidates` rule assigns a terminal of each node for each pass,
+  between a ground station and a space node and between two space nodes
+  alike; `n` caps the links a node holds on the rule;
+- ground stations with or without stated scheduling: NodalArc chooses the
+  links of a station that states none;
 - the `max_links_per_node` link constraint;
 - loopback address pools using `by_node_order` allocation;
 - the `routed` and `host` forwarding classes; `bridge` and `control_only` are
@@ -1698,6 +1778,10 @@ runtime execution:
 - `bgp` and `dtn_bundle` routing boundaries;
 - an access link between ground stations on two bodies (a direct
   surface-to-surface link across bodies);
+- scheduling stated at both nodes of one candidate pair;
+- one terminal mount drawn on by a rule that fixes its pairs and by a
+  `visible_candidates` rule;
+- a routing boundary over a `visible_candidates` rule;
 - bodies other than Earth, Luna and Mars;
 - a link candidate whose one-way delay can fall on both sides of the
   platform's long-delay bound (chart value `network.longDelayBoundSeconds`,

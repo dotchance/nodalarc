@@ -119,9 +119,25 @@ class GroundStation(BaseModel):
     handover_mode: Literal["bbm", "mbb"] | None = None
     mbb_overlap_ticks: int | None = Field(default=None, ge=0)
     mbb_reserve: int | None = Field(default=None, ge=0, le=1)
+    # False for a station that states no scheduling: NodalArc chooses its links, and it
+    # carries no policy of its own or of any default.
+    states_scheduling: bool = True
 
     @model_validator(mode="after")
     def _valid_handover_surface(self):
+        if not self.states_scheduling and any(
+            value is not None
+            for value in (
+                self.selection_policy,
+                self.handover_policy,
+                self.handover_mode,
+                self.mbb_overlap_ticks,
+                self.mbb_reserve,
+            )
+        ):
+            raise ValueError(
+                f"ground station {self.name!r} states no scheduling and must carry no policy"
+            )
         if self.handover_mode == "mbb":
             if self.mbb_overlap_ticks is not None and self.mbb_overlap_ticks <= 0:
                 raise ValueError("handover_mode='mbb' requires mbb_overlap_ticks > 0")

@@ -40,7 +40,7 @@ export const AUTHORING_FACTS: BuilderVisualAuthoringFacts = {
     { id: "evenly_spaced_mean_anomaly", label: "single-plane evenly spaced" },
   ],
   topology_modes: [
-    { id: "visible_candidates", label: "all visible pairs", runtime_supported: true, support_note: null, requires_n: false },
-    { id: "nearest_start", label: "nearest N", runtime_supported: true, support_note: null, requires_n: true },
+    { id: "visible_candidates", label: "all visible pairs", runtime_supported: true, support_note: null, accepts_n: true, requires_n: false },
+    { id: "nearest_start", label: "nearest N", runtime_supported: true, support_note: null, accepts_n: true, requires_n: true },
   ],
 };

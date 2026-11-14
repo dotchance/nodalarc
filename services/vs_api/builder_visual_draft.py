@@ -323,7 +323,9 @@ class _DerivedLinkPhysics:
     role: Literal["access", "isl", "crosslink", "backbone"]
     medium: Literal["rf", "optical"]
     topology_mode: Literal["visible_candidates", "nearest_start"]
-    topology_n: int
+    # `nearest_start` states `n`. A seeded `visible_candidates` rule states none: each node
+    # holds as many links as its terminals allow.
+    topology_n: int | None
     formable: bool
 
 
@@ -531,7 +533,7 @@ def _derive_link_physics(
         tuple[
             Literal["access", "isl", "crosslink", "backbone"],
             Literal["visible_candidates", "nearest_start"],
-            int,
+            int | None,
         ],
         ...,
     ]
@@ -540,7 +542,7 @@ def _derive_link_physics(
     elif first.kind == "space" and second.kind == "space":
         preferences = (("crosslink", "nearest_start", 1), ("isl", "nearest_start", 1))
     else:
-        preferences = (("access", "visible_candidates", 1),)
+        preferences = (("access", "visible_candidates", None),)
     for role, topology_mode, topology_n in preferences:
         for medium in ("optical", "rf"):
             token = (role, medium)
@@ -698,6 +700,9 @@ def _link_rule_document(
                 )
             else:
                 topology["n"] = rule.topology_n
+        elif rule.topology_n is not None:
+            # `visible_candidates` may state the most links a node holds at once.
+            topology["n"] = rule.topology_n
     document["topology"] = topology
     document["endpoints"] = [
         _endpoint_document(rule.a, issues, at=("endpoints", 0)),
@@ -1043,7 +1048,7 @@ def _link_projection(rule: LinkRule) -> BuilderVisualLinkRule | None:
         a=endpoints[0],
         b=endpoints[1],
         topology_mode=rule.topology.mode,
-        topology_n=rule.topology.n if isinstance(rule.topology, NearestStartTopology) else None,
+        topology_n=rule.topology.n,
         max_range_km=rule.constraints.max_range_km if rule.constraints is not None else None,
     )
     if not _saves_unchanged(rule, *_link_rule_document(projected)):

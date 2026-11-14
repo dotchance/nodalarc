@@ -146,14 +146,15 @@ class BoundaryImport(NamedTuple):
     """One router receiving a ``static_ip`` boundary export into an instance.
 
     ``node_id`` participates in the export's ``to`` instance and installs the
-    exported prefixes over ``interface`` toward ``peer_id``, which
-    participates in its ``from`` instance.
+    exported prefixes toward ``peer_id``, which participates in its ``from``
+    instance. The record names no interface: a static route is router
+    configuration and does not follow from which interface or terminal joins
+    the two routers.
     """
 
     boundary: RoutingBoundary
     export: ExportRule
     node_id: str
-    interface: str
     peer_id: str
 
 
@@ -1215,17 +1216,15 @@ class ResolvedSession(BaseModel):
                     if candidate.rule_id != boundary.over:
                         continue
                     ends = (
-                        (candidate.node_a, candidate.fixed_interfaces[0], candidate.node_b),
-                        (candidate.node_b, candidate.fixed_interfaces[1], candidate.node_a),
+                        (candidate.node_a, candidate.node_b),
+                        (candidate.node_b, candidate.node_a),
                     )
-                    for node_id, interface, peer_id in ends:
+                    for node_id, peer_id in ends:
                         if (
                             node_id in participants[export.to]
                             and peer_id in participants[export.from_]
                         ):
-                            imports.append(
-                                BoundaryImport(boundary, export, node_id, interface, peer_id)
-                            )
+                            imports.append(BoundaryImport(boundary, export, node_id, peer_id))
         return tuple(imports)
 
     def as_boundary_instances_by_node(self) -> dict[str, tuple[str, ...]]:

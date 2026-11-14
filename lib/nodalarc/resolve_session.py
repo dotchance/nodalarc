@@ -3526,13 +3526,35 @@ def _resolve_link_candidates(
             if name not in used:
                 used.add(name)
                 return name
-        raise SessionResolutionError(
-            f"link rule {rule_id!r} needs another fixed interface on {node_id!r}, but "
-            f"every matching terminal interface is allocated ({sorted(eligible)})",
-            subject_kind="link_rule",
-            subject_id=rule_id,
-            segment_id=node.segment_id,
-            node_id=node_id,
+        # A rule that fixes its pairs binds one terminal to each pair. When a node's candidates
+        # of such rules outnumber the matching terminals, some candidate would have to be
+        # chosen over another, which fixed rules cannot do until they run on the mechanism
+        # that assigns terminals.
+        mounts = sorted({_terminal_of(node, name) for name in eligible})
+        peers = sorted(
+            peer
+            for item in declared
+            if item.rule_id == rule_id and node_id in item.pair
+            for peer in item.pair
+            if peer != node_id
+        )
+        raise UnsupportedFeatureError(
+            [
+                UnsupportedFeature(
+                    category=FeatureCategory.LINK_TOPOLOGY,
+                    value="fixed_candidates_exceed_terminals",
+                    message=(
+                        f"link rule {rule_id!r} ({rule.topology.mode}) gives {node_id!r} "
+                        f"{len(peers)} candidate(s) ({', '.join(peers)}), but the terminals "
+                        f"installed on {node_id!r} for it are {len(eligible)} "
+                        f"(mount(s) {', '.join(mounts) or 'none'}; interfaces "
+                        f"{sorted(eligible)}), of which {len(used & set(eligible))} are bound "
+                        "to other fixed pairs: state fewer pairs or a smaller n, install more "
+                        "terminals, or make the rule visible_candidates"
+                    ),
+                    support_note="until fixed rules run on the mechanism that assigns terminals",
+                )
+            ]
         )
 
     for candidate in declared:

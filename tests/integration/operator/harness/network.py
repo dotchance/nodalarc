@@ -112,6 +112,15 @@ def router_neighbors(
     return neighbors
 
 
+def interfaces_up(printed: str) -> set[str]:
+    """The interfaces a router's `show interface brief` reports up."""
+    return {
+        fields[0]
+        for line in printed.splitlines()
+        if len(fields := line.split()) >= 2 and fields[1] == "up"
+    }
+
+
 def ping_reply_times_ms(printed: str) -> list[float]:
     return [float(value) for value in re.findall(r"time=([0-9.]+) ms", printed)]
 
@@ -507,3 +516,44 @@ def wait_for_handover_overlap(
     finally:
         operator.playback("set_speed", factor=1.0)
     return found[0] if found else None
+
+
+def next_change_of_nearest(
+    reference: ReferencePositions,
+    node: Node,
+    candidates: list[Node],
+    start: float,
+    *,
+    within_s: float,
+) -> tuple[float, str, str] | None:
+    """The first whole sim second after `start` at which another candidate is nearest to `node`.
+
+    Returns that second, the candidate nearest before it and the candidate nearest from it on,
+    or None when the same candidate stays nearest for `within_s`. The ranges come from the
+    session's ephemeris.
+    """
+
+    def nearest(t: float) -> str:
+        here = reference.at(node, t)
+        return min(
+            candidates,
+            key=lambda candidate: float(np.linalg.norm(reference.at(candidate, t) - here)),
+        )["node_id"]
+
+    before = nearest(start)
+    step = 120.0
+    low = start
+    while low < start + within_s:
+        if nearest(low + step) == before:
+            low += step
+            continue
+        high = low + step
+        while high - low > 1.0:
+            middle = (low + high) / 2
+            if nearest(middle) == before:
+                low = middle
+            else:
+                high = middle
+        change = float(math.ceil(high))
+        return change, before, nearest(change)
+    return None

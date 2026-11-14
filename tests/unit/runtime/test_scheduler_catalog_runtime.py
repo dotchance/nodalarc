@@ -62,9 +62,17 @@ def test_scheduler_reads_terminal_capacity_and_stated_modes_from_the_resolved_se
     # state scheduling in this session are its stations.
     assert candidate_nodes.issubset(capacities)
     assert set(modes) == set(ground_candidates)
-    # Each access pair has one node that states scheduling, so the nodes that choose links
-    # are the stations.
-    assert tracked == set(ground_candidates)
+    # Each access pair has one node that states scheduling: its station chooses the link.
+    # Neither node of a pair between orbits states scheduling, so both of them choose it.
+    between_orbits = {
+        node_id
+        for candidate in resolved.link_candidates
+        if candidate.assigned_terminals and candidate.kind != "access"
+        for node_id in candidate.pair
+    }
+    assert between_orbits
+    assert between_orbits.issubset(capacities)
+    assert tracked == set(ground_candidates) | between_orbits
     assert all(capacity > 0 for capacity in capacities.values())
 
 

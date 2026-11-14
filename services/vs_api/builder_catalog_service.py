@@ -638,6 +638,7 @@ class BuilderCatalogAuthoringService:
                         is None,
                         support_note=issue.support_note if issue is not None else None,
                         requires_n=identifier == "nearest_start",
+                        accepts_n=identifier in ("nearest_start", "visible_candidates"),
                     )
                     for identifier, label in TOPOLOGY_MODE_LABELS
                 ),

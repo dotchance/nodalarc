@@ -207,9 +207,9 @@ export function LinkRuleEditor({
   const b = rule.b ?? {};
   // An omitted `enabled` means an enabled rule, as in the grammar.
   const enabled = rule.enabled !== false;
-  const topologyRequiresN = authoring.topology_modes.find(
+  const topologyAcceptsN = authoring.topology_modes.find(
     (choice) => choice.id === rule.topology_mode,
-  )?.requires_n;
+  )?.accepts_n;
   const [rederiveNotice, setRederiveNotice] = useState<string | null>(null);
   const repoint = (side: "a" | "b") => (newSegmentId: string) => {
     setRederiveNotice("re-deriving through VS-API…");
@@ -257,7 +257,7 @@ export function LinkRuleEditor({
           </Button>
         ))}
       </div>
-      {topologyRequiresN && (
+      {topologyAcceptsN && (
         <NumberField
           label="N"
           value={rule.topology_n ?? null}

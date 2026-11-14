@@ -178,7 +178,9 @@ class BuilderVisualTopologyModeMetadata(BuilderVisualRuntimeChoiceMetadata):
 
     id: BuilderVisualTopologyMode
     label: str = Field(min_length=1, max_length=120)
+    # Whether a rule of the mode must state `n`, and whether it may.
     requires_n: bool
+    accepts_n: bool
 
 
 def _literal_members(alias: object) -> set[object]:

@@ -261,7 +261,7 @@
           ],
           "id": "leo_to_geo",
           "topology": {
-            "mode": "nearest_start",
+            "mode": "visible_candidates",
             "n": 1
           }
         },
@@ -341,7 +341,7 @@
           ],
           "id": "geo_to_luna",
           "topology": {
-            "mode": "nearest_start",
+            "mode": "visible_candidates",
             "n": 1
           }
         },
@@ -1101,7 +1101,7 @@
           "kind": "isl",
           "max_range_km": null,
           "rule_id": "leo_to_geo",
-          "topology_mode": "nearest_start",
+          "topology_mode": "visible_candidates",
           "topology_n": 1
         },
         {
@@ -1180,7 +1180,7 @@
           "kind": "inter_body",
           "max_range_km": null,
           "rule_id": "geo_to_luna",
-          "topology_mode": "nearest_start",
+          "topology_mode": "visible_candidates",
           "topology_n": 1
         },
         {
@@ -1402,6 +1402,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -1533,6 +1537,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -1664,6 +1672,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -1795,6 +1807,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -2061,6 +2077,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -2192,6 +2212,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -2323,6 +2347,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -2454,6 +2482,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -2585,6 +2617,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -2851,6 +2887,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -2982,6 +3022,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -3113,6 +3157,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -3244,6 +3292,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -3510,6 +3562,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -3641,6 +3697,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -3772,6 +3832,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -3903,6 +3967,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -4034,6 +4102,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -4165,6 +4237,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -4296,6 +4372,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -4427,6 +4507,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -4558,6 +4642,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -4689,6 +4777,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -4820,6 +4912,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -4951,6 +5047,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -5082,6 +5182,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -5213,6 +5317,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -5344,6 +5452,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -5475,6 +5587,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -5606,6 +5722,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -5737,6 +5857,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -5868,6 +5992,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -5999,6 +6127,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -6130,6 +6262,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -6396,6 +6532,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -6527,6 +6667,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -6658,6 +6802,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -6789,6 +6937,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -7055,6 +7207,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -7186,6 +7342,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -7317,6 +7477,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -7448,6 +7612,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -7579,6 +7747,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -7845,6 +8017,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -7976,6 +8152,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -8107,6 +8287,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -8238,6 +8422,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -8504,6 +8692,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -8635,6 +8827,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -8766,6 +8962,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -8897,6 +9097,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -9028,6 +9232,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -9159,6 +9367,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -9290,6 +9502,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -9421,6 +9637,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -9552,6 +9772,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -9683,6 +9907,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -9814,6 +10042,10 @@
                 {
                   "area_id": null,
                   "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
                 }
               ],
               "protocol": "isis"
@@ -9941,6 +10173,18 @@
                 {
                   "area_id": null,
                   "name": "isl2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl5"
                 }
               ],
               "protocol": "isis"
@@ -10050,7 +10294,7 @@
               "areas": [
                 "49.0001"
               ],
-              "as_boundary": false,
+              "as_boundary": true,
               "domain_id": "earth_domain",
               "interfaces": [
                 {
@@ -10068,6 +10312,18 @@
                 {
                   "area_id": null,
                   "name": "isl2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl5"
                 }
               ],
               "protocol": "isis"
@@ -10177,7 +10433,7 @@
               "areas": [
                 "49.0001"
               ],
-              "as_boundary": false,
+              "as_boundary": true,
               "domain_id": "earth_domain",
               "interfaces": [
                 {
@@ -10195,6 +10451,18 @@
                 {
                   "area_id": null,
                   "name": "isl2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl5"
                 }
               ],
               "protocol": "isis"
@@ -10304,7 +10572,7 @@
               "areas": [
                 "49.0001"
               ],
-              "as_boundary": false,
+              "as_boundary": true,
               "domain_id": "earth_domain",
               "interfaces": [
                 {
@@ -10322,6 +10590,18 @@
                 {
                   "area_id": null,
                   "name": "isl2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl5"
                 }
               ],
               "protocol": "isis"
@@ -10431,7 +10711,7 @@
               "areas": [
                 "49.0001"
               ],
-              "as_boundary": false,
+              "as_boundary": true,
               "domain_id": "earth_domain",
               "interfaces": [
                 {
@@ -10449,6 +10729,18 @@
                 {
                   "area_id": null,
                   "name": "isl2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl5"
                 }
               ],
               "protocol": "isis"
@@ -10558,7 +10850,7 @@
               "areas": [
                 "49.0001"
               ],
-              "as_boundary": false,
+              "as_boundary": true,
               "domain_id": "earth_domain",
               "interfaces": [
                 {
@@ -10576,6 +10868,18 @@
                 {
                   "area_id": null,
                   "name": "isl2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl5"
                 }
               ],
               "protocol": "isis"
@@ -10685,7 +10989,7 @@
               "areas": [
                 "49.0001"
               ],
-              "as_boundary": false,
+              "as_boundary": true,
               "domain_id": "earth_domain",
               "interfaces": [
                 {
@@ -10703,6 +11007,18 @@
                 {
                   "area_id": null,
                   "name": "isl2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl5"
                 }
               ],
               "protocol": "isis"
@@ -10812,7 +11128,7 @@
               "areas": [
                 "49.0001"
               ],
-              "as_boundary": false,
+              "as_boundary": true,
               "domain_id": "earth_domain",
               "interfaces": [
                 {
@@ -10830,6 +11146,18 @@
                 {
                   "area_id": null,
                   "name": "isl2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl3"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl4"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl5"
                 }
               ],
               "protocol": "isis"
@@ -10945,6 +11273,14 @@
                 {
                   "area_id": null,
                   "name": "gnd0"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl3"
                 }
               ],
               "protocol": "isis"

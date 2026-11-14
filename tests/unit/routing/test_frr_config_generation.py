@@ -685,14 +685,42 @@ def test_static_domain_renders_zebra_and_staticd_only() -> None:
     assert f"hostname {sat_id}" in files["frr.conf"]
 
 
-def test_boundary_exports_materialize_on_flagship_border_nodes() -> None:
+def _reachability_raw(*, fixed_boundary_link: bool) -> dict[str, Any]:
+    """The cislunar session as shipped, or with its rules between orbits on fixed interfaces.
+
+    The shipped boundary runs over a rule that assigns its terminals per pass, so its routers
+    have no interface to write a route to the peer's loopback on. The adapter writes that
+    route for a boundary over a fixed link, and the tests of that rendering state the rule as
+    `nearest_start`. The other rules between orbits draw on the same terminal mounts, and a
+    mount serves fixed rules or assigned rules, so they change with it.
+    """
+    from nodalarc.configuration_yaml import load_configuration_yaml
+
+    raw = load_configuration_yaml(
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    if fixed_boundary_link:
+        between_orbits = [
+            rule
+            for rule in raw["link_rules"]
+            if rule["topology"]["mode"] == "visible_candidates" and "n" in rule["topology"]
+        ]
+        assert raw["routing"]["boundaries"][0]["over"] in {rule["id"] for rule in between_orbits}
+        for rule in between_orbits:
+            rule["topology"] = {"mode": "nearest_start", "n": rule["topology"]["n"]}
+    return raw
+
+
+def test_boundary_exports_materialize_on_the_border_nodes_of_a_fixed_link() -> None:
     """The cislunar session's declared purpose is Earth<->Luna reachability:
     boundary exports must render as installable static routes plus IGP
     redistribution on the border nodes — declared intent, materialized."""
-    resolved = load_session_resolution_from_file(
-        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml"),
-        catalog=shipped_read_view(),
-    ).resolved
+    resolved = resolve_session(
+        _reachability_raw(fixed_boundary_link=True),
+        source_context=SourceContext(origin="test.frr.boundary"),
+    )
 
     boundary = resolved.routing.boundaries[0]
     luna_domain = next(d for d in resolved.routing_domains if d.domain_id == "luna_domain")
@@ -1119,15 +1147,9 @@ def test_ospf_runs_ospfv3_beside_ospfv2_on_ipv6_routers_only() -> None:
     assert f" ip ospf area {area}" in lan
 
 
-def _reachability_with_ipv6_loopbacks() -> ResolvedSession:
+def _reachability_with_ipv6_loopbacks(*, fixed_boundary_link: bool = False) -> ResolvedSession:
     """The cislunar session with an IPv6 loopback declared beside every IPv4 one."""
-    from nodalarc.configuration_yaml import load_configuration_yaml
-
-    raw = load_configuration_yaml(
-        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
+    raw = _reachability_raw(fixed_boundary_link=fixed_boundary_link)
     [ipv4] = raw["addressing"]["loopbacks"]
     raw["addressing"]["loopbacks"].append(
         {
@@ -1211,7 +1233,7 @@ def _luna_border(resolved: ResolvedSession) -> str:
 
 
 def test_ipv6_boundary_exports_install_over_an_ipv6_seed_and_redistribute() -> None:
-    resolved = _reachability_with_ipv6_loopbacks()
+    resolved = _reachability_with_ipv6_loopbacks(fixed_boundary_link=True)
     border = _luna_border(resolved)
     vars_for_node = _vars_for(resolved, border)
     seeds = [entry["peer_loopback_ipv6"] for entry in vars_for_node["static_links"]]
@@ -1252,13 +1274,7 @@ def test_no_ipv6_static_route_renders_where_no_ipv6_loopback_is_declared() -> No
 
 
 def test_ldp_never_runs_on_a_static_boundary_link() -> None:
-    from nodalarc.configuration_yaml import load_configuration_yaml
-
-    raw = load_configuration_yaml(
-        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
+    raw = _reachability_raw(fixed_boundary_link=True)
     earth = next(domain for domain in raw["routing"]["domains"] if domain["id"] == "earth_domain")
     earth["capabilities"] = {"mpls": {}}
     resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr.ldp"))

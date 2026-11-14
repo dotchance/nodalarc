@@ -987,6 +987,7 @@ export interface BuilderVisualTopologyModeMetadata {
   readonly id: BuilderVisualTopologyMode;
   readonly label: string;
   readonly requires_n: boolean;
+  readonly accepts_n: boolean;
 }
 
 /** Walker population intent whose derived angular values remain backend-owned. */

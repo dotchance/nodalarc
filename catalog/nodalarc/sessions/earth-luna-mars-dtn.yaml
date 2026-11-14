@@ -274,7 +274,7 @@ link_rules:
       - medium: optical
 - id: leo_to_geo
   topology:
-    mode: nearest_start
+    mode: visible_candidates
     n: 1
   endpoints:
   - select:
@@ -308,7 +308,7 @@ link_rules:
       - medium: optical
 - id: geo_to_luna
   topology:
-    mode: nearest_start
+    mode: visible_candidates
     n: 1
   endpoints:
   - select:

@@ -1332,18 +1332,24 @@ through its segment or placement-group label.
 
 ### Refusals and reasons
 
-Every refusal and every unlinked pair says what, where, why, and what would
-change it. Each carries a typed code. A refusal also names the rule, the
+Every refusal and every unlinked pair says exactly what, where, why, and what
+would change it. Each carries a typed code. A refusal also names the rule, the
 nodes, the terminal mount, the conflicting numbers, and where each number was
-stated.
+stated: the file, and the level (node model, site installation, segment
+apply, override, site node, or link rule).
 
 Refusals before a session runs:
 
-| Code | When | What would change it |
-|---|---|---|
-| `link_rule.cap_exceeds_terminals` | `n` plus a stated reserve exceeds a node's installed terminals of the mount | Lower `n` or the reserve, or install more terminals of the mount |
-| `scheduling_at_both_nodes` (runtime-support gate) | A candidate pair has scheduling at both of its nodes | Remove scheduling from one side |
-| `mount_bound_and_assigned` (runtime-support gate) | One terminal mount is drawn on by a rule that fixes its pairs and by a `visible_candidates` rule | Give each rule its own mount, or make both rules `visible_candidates` |
+| Code | When | What it names | What would change it |
+|---|---|---|---|
+| `link_rule.cap_exceeds_terminals` | `n` plus a stated reserve exceeds a node's installed terminals of the mount | Rule, node, mount, `n`, `mbb_reserve`, installed count, and where each was stated | Lower `n` or the reserve, or install more terminals of the mount |
+| `unsupported.scheduling_at_both_nodes` (runtime-support gate) | A candidate pair has scheduling at both of its nodes | Rule, each such pair (all of them, or the first 20 and a count), and where each node's scheduling is stated | Remove scheduling from one side, until it is built |
+| `unsupported.fixed_candidates_exceed_terminals` (runtime-support gate, until fixed rules run on the one mechanism) | A node's `explicit_pairs` or `nearest_start` candidates exceed its installed terminals of the mount | Rule, node, mount, candidate count, installed count, and the candidates | Fewer pairs or a smaller `n`, more terminals, or `visible_candidates` |
+
+The existing scheduling refusals keep their meaning and gain the same detail:
+an incomplete stated scheduling block names the missing fields and the level;
+`bbm`/`mbb` incoherence names the values; non-uniform allocator-wide values
+name each differing node and value.
 
 Reasons a usable candidate pair did not link at a tick. These reach the page
 and the link history without substitution:

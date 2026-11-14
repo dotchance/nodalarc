@@ -109,19 +109,24 @@ def test_constellation_phasing_mode_matches_the_declared_plane_shape() -> None:
 SHIPPED_SESSION_SHAPES = {
     "earth-geo-inmarsat.yaml": (8, 16),
     "earth-geo-tdrs.yaml": (10, 24),
-    "earth-leo-heo-geo-luna-reachability.yaml": (137, 767),
+    # 1091: the four rules between orbits (leo_to_heo, meo_to_geo, heo_to_geo, geo_to_luna)
+    # are visible_candidates, so each holds every pair its endpoints select: 108, 192, 24
+    # and 16 pairs.
+    "earth-leo-heo-geo-luna-reachability.yaml": (137, 1091),
     # 80/153: a full Iridium-class 66-satellite shell (continuous
     # mid-latitude coverage), GEO ring, lunar ELFO relays, one Earth QUIC
     # lab and one lunar QUIC lab, each pairing a routed gateway with a
     # host-forwarding endpoint that joins no routing domain.
-    # 86/357: the quic sky with the lunar relay replaced by a DTN relay
+    # 86/884: the quic sky with the lunar relay replaced by a DTN relay
     # vehicle carrying a uD3TN store-and-forward host on its payload bus,
     # plus one Earth and one lunar DTN endpoint lab beside the QUIC labs.
-    "earth-luna-dtn.yaml": (86, 357),
+    # leo_to_geo and geo_to_luna are visible_candidates: 528 pairs (66 LEO by 8 GEO) and 8
+    # pairs (8 GEO by the one lunar relay).
+    "earth-luna-dtn.yaml": (86, 884),
     # Same sky and counts as earth-luna-dtn; only the relay composition
     # differs (storage-backed custody contact manager).
-    "earth-luna-dtn-custody.yaml": (86, 357),
-    "earth-luna-quic.yaml": (81, 290),
+    "earth-luna-dtn-custody.yaml": (86, 884),
+    "earth-luna-quic.yaml": (81, 817),
     # 18/14: three Mars bases, two low relay orbiters, an areostationary relay,
     # an Earth GEO relay and two optical ground stations, each a router
     # with an HDTN host; 9 UHF pairs (3 bases by 3 relays), 2 relay
@@ -131,9 +136,9 @@ SHIPPED_SESSION_SHAPES = {
     # HDTN ones: three bases and three relays, each a router with an ION host;
     # 9 UHF pairs and 2 relay crosslinks.
     "mars-ion-relay-network.yaml": (12, 11),
-    # 104/371: earth-luna-dtn (86/357) and earth-mars-hdtn-relay (18/14) in one
+    # 104/898: earth-luna-dtn (86/884) and earth-mars-hdtn-relay (18/14) in one
     # session; the two compositions share no node and no link rule.
-    "earth-luna-mars-dtn.yaml": (104, 371),
+    "earth-luna-mars-dtn.yaml": (104, 898),
     # 43/246: four feeder-class bridge sites added (Djibouti, Singapore,
     # Cape Town, Tokyo — authored ranges cover the 780 km shell at the
     # declared mask) and the ISL rule pinned to the 30 physically visible
@@ -224,7 +229,7 @@ def test_catalog_resolver_materializes_runtime_domains_and_link_candidates() -> 
     assert resolved.link_candidates
     assert all(candidate.node_a != candidate.node_b for candidate in resolved.link_candidates)
     fixed_candidates = [
-        candidate for candidate in resolved.link_candidates if candidate.kind != "access"
+        candidate for candidate in resolved.link_candidates if not candidate.assigned_terminals
     ]
     assert fixed_candidates
     assert all(candidate.interface_a and candidate.interface_b for candidate in fixed_candidates)
@@ -592,11 +597,11 @@ def test_routers_receiving_boundary_exports_are_as_boundary_routers() -> None:
     )
 
     # Each boundary link joins an Earth relay and a Luna relay, and the
-    # exports run both ways. Nearest-one ranking at the session epoch picks,
-    # for each lunar relay, the GEO relay nearest to it in the common frame.
+    # exports run both ways. The boundary's rule is visible_candidates: every
+    # GEO relay is a candidate peer of each lunar relay, so every one of them
+    # receives the Luna domain's export.
     assert resolved.as_boundary_instances_by_node() == {
-        "geo-relay-sat-p00s00": ("earth_domain",),
-        "geo-relay-sat-p00s07": ("earth_domain",),
+        **{f"geo-relay-sat-p00s{slot:02d}": ("earth_domain",) for slot in range(8)},
         "luna-relay-sat-p00s00": ("luna_domain",),
         "luna-relay-sat-p00s01": ("luna_domain",),
     }

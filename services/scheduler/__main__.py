@@ -583,10 +583,6 @@ def _run_scheduler() -> None:
     pool = AgentPool()
 
     terminal_capacities, handover_modes, tracked_nodes = _scheduler_terminal_maps(resolved)
-    # The Node Agent's command contract names a link's ground station and its satellite.
-    ground_station_ids = frozenset(
-        node.node_id for node in resolved.nodes if node.kind == "ground_station"
-    )
     max_latency_age_s, compression_factor = _dispatch_timing(resolved)
     log.info(
         "Stated handover mode by node: %s (protocol=%s)",
@@ -624,7 +620,6 @@ def _run_scheduler() -> None:
             terminal_capacities=terminal_capacities,
             handover_modes=handover_modes,
             tracked_nodes=tracked_nodes,
-            ground_station_ids=ground_station_ids,
             # Substrate compensation policy: half the measured RTT is the one-way
             # bound. The dispatcher rejects any other policy; this is the single
             # declared value, not a fallback.

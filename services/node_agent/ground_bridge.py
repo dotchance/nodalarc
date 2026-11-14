@@ -1,10 +1,11 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
 # Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
-"""Ground station and ISL link infrastructure — wiring + runtime operations.
+"""Host-side link infrastructure: wiring and runtime operations.
 
-All host-mediated veth creation (ISL and ground) and tc mirred redirect
-management. Used by both wiring.py (deploy-time) and handlers.py (runtime).
+All host-mediated veth creation (fixed interfaces and terminal interfaces assigned per pass)
+and tc mirred redirect management. Used by both wiring.py (deploy-time) and handlers.py
+(runtime).
 
 tc mirred operations use pyroute2 native netlink tc calls (no subprocess).
 Namespace operations use _in_namespace() from namespace_ops.py (setns, no fork).
@@ -17,45 +18,40 @@ import logging
 import os
 import threading
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 from nodalarc.runtime_naming import (
     MANAGED_HOST_DEVICE_GROUP,
-    gs_bridge_port_name,
     isl_host_name,
-    satellite_ground_host_name,
+    terminal_host_name,
 )
 from pyroute2 import IPRoute
 from pyroute2.netlink.rtnl import TC_H_INGRESS
 
 from node_agent import kernel_verifier
-from node_agent.namespace_ops import _in_namespace, switch_off_host_ipv6
+from node_agent.namespace_ops import _in_namespace, set_interface_admin, switch_off_host_ipv6
 
 log = logging.getLogger(__name__)
 
-# Per-ground-station lock. Serializes attach/detach operations on the same
-# GS bridge port (_gbr-{gs}). Prevents the TOCTOU race where a concurrent
-# detach deletes the ingress qdisc that an attach just created.
-# defaultdict creates a new Lock for each GS on first access.
-_gs_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+# One lock per host-side terminal port. An attach or a detach holds the locks of both ports it
+# joins, so a detach cannot delete the ingress qdisc an attach on either port just created.
+# Rejected alternative: one lock per ground station, which left a space node's port unguarded
+# when its two passes ran to two stations, and had no meaning on a link with no station.
+_port_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+
+# A pod interface whose admin state the Node Agent sets with its link: (pid, interface name).
+type PodEnd = tuple[int, str]
 
 
-# ---------------------------------------------------------------------------
-# Naming helpers
-# ---------------------------------------------------------------------------
-
-
-def _gs_host_veth(gs_id: str, gs_ifname: str) -> str:
-    """Derive host-side GS veth from the Scheduler-provided pod interface."""
-    idx = int(gs_ifname.removeprefix("term"))
-    return gs_bridge_port_name(gs_id, idx)
-
-
-def _sat_host_veth(sat_id: str, sat_ifname: str) -> str:
-    """Derive host-side satellite veth from the Scheduler-provided interface."""
-    idx = int(sat_ifname.removeprefix("gnd"))
-    return satellite_ground_host_name(sat_id, idx)
+@contextlib.contextmanager
+def _ports_locked(*host_ifnames: str) -> Iterator[None]:
+    """Hold the lock of each named host port. The locks are taken in name order, so two
+    operations that share a port never wait on each other in a cycle."""
+    with contextlib.ExitStack() as stack:
+        for name in sorted(set(host_ifnames)):
+            stack.enter_context(_port_locks[name])
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -160,16 +156,15 @@ def _tc_mirred_remove(ifname: str) -> None:
         ipr.close()
 
 
-def attach_ground_end(
-    gs_id: str, own_host: str, peer_host: str, sat_pid: int | None, sat_ifname: str
-) -> None:
-    """Join one end of a long-delay ground pass on one host: both host veths up, this end's
-    redirect toward its peer (``own_host`` ingress to ``peer_host`` egress), and a satellite's
-    terminal interface up. Each end of a long-delay pass installs and removes its own direction
-    (``remove_redirect``), so a pass that reopens while its other end still drains finds that
-    end's direction in place. A redirect already proven toward the peer is reused; any other
-    occupant of the ingress side is refused and nothing is replaced. Serialized per station."""
-    with _gs_locks[gs_id]:
+def attach_terminal_end(own_host: str, peer_host: str, pod_end: PodEnd | None) -> None:
+    """Join one end of a long-delay pass on one host: both host ports up, this end's redirect
+    toward its peer (``own_host`` ingress to ``peer_host`` egress), and the end's pod interface
+    up when its admin state follows the link (``pod_end``). Each end of a long-delay pass
+    installs and removes its own direction (``remove_redirect``), so a pass that reopens while
+    its other end still drains finds that end's direction in place. A redirect already proven
+    toward the peer is reused; any other occupant of the ingress side is refused and nothing is
+    replaced."""
+    with _ports_locked(own_host, peer_host):
         with IPRoute() as ipr:
             for name in (own_host, peer_host):
                 idx = ipr.link_lookup(ifname=name)
@@ -189,141 +184,63 @@ def attach_ground_end(
             )
         if not reuse:
             _tc_mirred_redirect(own_host, peer_host)
-        if sat_pid is not None:
+        if pod_end is not None:
+            set_interface_admin(*pod_end, up=True)
 
-            def _up(ns_ipr: IPRoute) -> None:
-                idx = ns_ipr.link_lookup(ifname=sat_ifname)
+
+def remove_redirect(own_host: str, peer_host: str) -> None:
+    """Remove one host port's outgoing redirect: the end of a long-delay pass that closed while
+    its peer still drains. The peer's redirect toward it stays until the peer closes.
+    Serialized with every attach and detach on either port."""
+    with _ports_locked(own_host, peer_host):
+        _tc_mirred_remove(own_host)
+
+
+# ---------------------------------------------------------------------------
+# Attach / detach of one pass between two terminal interfaces on this host
+# ---------------------------------------------------------------------------
+
+
+def attach_terminals(host_a: str, host_b: str, pod_ends: Sequence[PodEnd]) -> None:
+    """Join two terminal interfaces for one pass.
+
+    Brings both host ports admin UP, which gives carrier to both pod interfaces; brings up each
+    pod interface whose admin state follows the link (``pod_ends``); then installs the redirect
+    between the two host ports, both ways. Either port serves another peer on its next pass,
+    so the redirect is installed at each attach and removed at each detach.
+    """
+    with _ports_locked(host_a, host_b):
+        with IPRoute() as ipr:
+            for name in (host_a, host_b):
+                idx = ipr.link_lookup(ifname=name)
                 if not idx:
-                    raise FileNotFoundError(f"{sat_ifname} not found in sat ns({sat_pid})")
-                ns_ipr.link("set", index=idx[0], state="up")
-
-            _in_namespace(sat_pid, _up)
-
-
-def remove_redirect(gs_id: str, host_ifname: str) -> None:
-    """Remove one host-side veth's outgoing redirect: the end of a long-delay ground pass that
-    closed while its peer still drains. The peer's redirect toward it stays until the peer
-    closes. Serialized with attach and detach on the station."""
-    with _gs_locks[gs_id]:
-        _tc_mirred_remove(host_ifname)
+                    raise FileNotFoundError(f"{name} not found")
+                ipr.link("set", index=idx[0], state="up")
+        for pod_end in pod_ends:
+            set_interface_admin(*pod_end, up=True)
+        install_redirect_pair(host_a, host_b)
+    log.debug("Attached %s <-> %s (tc redirect)", host_a, host_b)
 
 
-# ---------------------------------------------------------------------------
-# Attach / detach (link_manager.py L782-858)
-# ---------------------------------------------------------------------------
+def detach_terminals(host_a: str, host_b: str, pod_ends: Sequence[PodEnd]) -> None:
+    """End one pass between two terminal interfaces.
 
-
-def attach_to_ground_bridge(
-    gs_id: str,
-    sat_id: str,
-    sat_pid: int,
-    gs_ifname: str,
-    sat_ifname: str,
-) -> None:
-    """Connect satellite to GS via tc mirred redirect.
-
-    Brings both host-side veths and satellite pod-side interface admin
-    UP, then installs bidirectional tc mirred redirect between the GS
-    and satellite host-side veths.
-
-    Serialized per GS: concurrent attach/detach on the same GS bridge
-    port would corrupt the tc ingress qdisc (TOCTOU race). The per-GS
-    lock prevents this.
+    Removes the redirect between the two host ports, brings down each pod interface whose
+    admin state follows the link (``pod_ends``), then brings both host ports admin DOWN. A host
+    port DOWN drops carrier on its pod interface (UP to LOWERLAYERDOWN), so a routing stack
+    behind either end tears its adjacency down at once.
     """
-    with _gs_locks[gs_id]:
-        _attach_to_ground_bridge_unlocked(gs_id, sat_id, sat_pid, gs_ifname, sat_ifname)
-
-
-def _attach_to_ground_bridge_unlocked(
-    gs_id: str,
-    sat_id: str,
-    sat_pid: int,
-    gs_ifname: str,
-    sat_ifname: str,
-) -> None:
-    gs_port = _gs_host_veth(gs_id, gs_ifname)
-    host_veth = _sat_host_veth(sat_id, sat_ifname)
-
-    ipr = IPRoute()
-    try:
-        for name in (gs_port, host_veth):
-            idx = ipr.link_lookup(ifname=name)
-            if not idx:
-                raise FileNotFoundError(f"{name} not found")
-            ipr.link("set", index=idx[0], state="up")
-    finally:
-        ipr.close()
-
-    _target_ifname = sat_ifname
-
-    def _up_sat_iface(ipr: IPRoute) -> None:
-        idx = ipr.link_lookup(ifname=_target_ifname)
-        if not idx:
-            raise FileNotFoundError(f"{_target_ifname} not found in sat ns({sat_pid})")
-        ipr.link("set", index=idx[0], state="up")
-
-    _in_namespace(sat_pid, _up_sat_iface)
-
-    install_redirect_pair(gs_port, host_veth)
-
-    log.debug("Attached %s to %s (tc redirect)", sat_id, gs_id)
-
-
-def detach_from_ground_bridge(
-    gs_id: str,
-    sat_id: str,
-    sat_pid: int,
-    gs_ifname: str,
-    sat_ifname: str,
-) -> None:
-    """Disconnect satellite from GS.
-
-    Removes tc mirred redirect, then brings satellite pod-side
-    interface and host veths admin DOWN.
-
-    Serialized per GS: see attach_to_ground_bridge.
-    """
-    with _gs_locks[gs_id]:
-        _detach_from_ground_bridge_unlocked(gs_id, sat_id, sat_pid, gs_ifname, sat_ifname)
-
-
-def _detach_from_ground_bridge_unlocked(
-    gs_id: str,
-    sat_id: str,
-    sat_pid: int,
-    gs_ifname: str,
-    sat_ifname: str,
-) -> None:
-    gs_port = _gs_host_veth(gs_id, gs_ifname)
-    host_veth = _sat_host_veth(sat_id, sat_ifname)
-
-    _tc_mirred_remove(gs_port)
-    _tc_mirred_remove(host_veth)
-
-    _target_ifname = sat_ifname
-
-    def _down_sat_iface(ipr: IPRoute) -> None:
-        idx = ipr.link_lookup(ifname=_target_ifname)
-        if idx:
-            ipr.link("set", index=idx[0], state="down")
-
-    _in_namespace(sat_pid, _down_sat_iface)
-
-    # Bring satellite host veth and GS bridge port DOWN.
-    # GS bridge port DOWN drops carrier on gnd0 inside the GS pod
-    # (gnd0 transitions UP → LOWERLAYERDOWN), triggering immediate
-    # FRR adjacency teardown. Matches attach_to_ground_bridge which
-    # brings both UP.
-    ipr = IPRoute()
-    try:
-        for name in (host_veth, gs_port):
-            idx = ipr.link_lookup(ifname=name)
-            if idx:
-                ipr.link("set", index=idx[0], state="down")
-    finally:
-        ipr.close()
-
-    log.debug("Detached %s from %s", sat_id, gs_id)
+    with _ports_locked(host_a, host_b):
+        _tc_mirred_remove(host_a)
+        _tc_mirred_remove(host_b)
+        for pod_end in pod_ends:
+            set_interface_admin(*pod_end, up=False, must_exist=False)
+        with IPRoute() as ipr:
+            for name in (host_a, host_b):
+                idx = ipr.link_lookup(ifname=name)
+                if idx:
+                    ipr.link("set", index=idx[0], state="down")
+    log.debug("Detached %s from %s", host_a, host_b)
 
 
 # ---------------------------------------------------------------------------
@@ -438,16 +355,17 @@ class MediatedIsl:
     created_b: bool
 
 
-def create_ground_bridge(
-    gs_id: str,
-    gs_pid: int,
+def create_terminal_veth(
+    node_id: str,
+    pid: int,
     ifname: str,
     mtu: int | None = None,
 ) -> PodVeth:
-    """Create GS-side veth pair for ground link. Idempotent.
+    """Create the veth pair of one terminal interface OME assigns per pass. Idempotent.
 
-    Creates a veth pair: host end (_gbr-{gs}-{idx}) stays in host ns (DOWN),
-    GS end moved into GS namespace as {ifname} (DOWN).
+    The host end (``terminal_host_name``) stays in the host namespace, admin DOWN. The pod end
+    moves into the pod's namespace as ``ifname``, admin DOWN. No redirect is installed: the
+    interface has no peer until its first pass.
 
     Returns the pair with ``created`` saying whether this call made it.
     """
@@ -456,69 +374,23 @@ def create_ground_bridge(
 
         mtu = get_platform_config().veth_interface_mtu_bytes
 
-    gs_port = _gs_host_veth(gs_id, ifname)
+    host_name = terminal_host_name(node_id, ifname)
 
-    ipr = IPRoute()
-    try:
-        if ipr.link_lookup(ifname=gs_port):
-            log.debug("GS port %s already exists", gs_port)
-            return PodVeth(gs_port, ifname, created=False)
-
-        _target_ifname = ifname
-
-        def _check_iface(ns_ipr: IPRoute) -> bool:
-            return bool(ns_ipr.link_lookup(ifname=_target_ifname))
-
-        if _in_namespace(gs_pid, _check_iface):
-            log.debug("%s already exists in GS ns(%s)", ifname, gs_pid)
-            return PodVeth(gs_port, ifname, created=False)
-
-        _create_veth_into_pod(ipr, gs_port, ifname, gs_pid, mtu)
-
-        log.debug("Created GS port %s → %s in ns(%s)", gs_port, ifname, gs_pid)
-    finally:
-        ipr.close()
-
-    return PodVeth(gs_port, ifname, created=True)
-
-
-def create_satellite_ground_veth(
-    sat_id: str,
-    sat_pid: int,
-    ifname: str,
-    mtu: int | None = None,
-) -> PodVeth:
-    """Pre-create satellite ground veth pair at deploy time. Idempotent.
-
-    Returns the pair with ``created`` saying whether this call made it.
-    """
-    if mtu is None:
-        from nodalarc.platform_config import get_platform_config
-
-        mtu = get_platform_config().veth_interface_mtu_bytes
-
-    host_name = _sat_host_veth(sat_id, ifname)
-
-    ipr = IPRoute()
-    try:
+    with IPRoute() as ipr:
         if ipr.link_lookup(ifname=host_name):
-            log.debug("Satellite ground veth %s already exists", host_name)
+            log.debug("Terminal host port %s already exists", host_name)
             return PodVeth(host_name, ifname, created=False)
-
-        _target_ifname = ifname
 
         def _check_iface(ns_ipr: IPRoute) -> bool:
-            return bool(ns_ipr.link_lookup(ifname=_target_ifname))
+            return bool(ns_ipr.link_lookup(ifname=ifname))
 
-        if _in_namespace(sat_pid, _check_iface):
-            log.debug("%s already exists in sat ns(%s)", ifname, sat_pid)
+        if _in_namespace(pid, _check_iface):
+            log.debug("%s already exists in ns(%s) of %s", ifname, pid, node_id)
             return PodVeth(host_name, ifname, created=False)
 
-        _create_veth_into_pod(ipr, host_name, ifname, sat_pid, mtu)
-    finally:
-        ipr.close()
+        _create_veth_into_pod(ipr, host_name, ifname, pid, mtu)
 
-    log.debug("Created satellite ground veth %s ↔ %s in ns(%s)", host_name, ifname, sat_pid)
+    log.debug("Created terminal veth %s <-> %s in ns(%s) of %s", host_name, ifname, pid, node_id)
     return PodVeth(host_name, ifname, created=True)
 
 

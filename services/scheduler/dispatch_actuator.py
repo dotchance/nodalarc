@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Collection, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -47,7 +47,8 @@ from scheduler.node_agent_batches import (
     LinkUpBatchPlan,
     build_link_down_batch_plan,
     build_link_up_batch_plan,
-    required_ground_endpoints,
+    link_ends,
+    link_type_of,
     restage_link_up_plan,
     terminal_rates_message,
 )
@@ -342,13 +343,12 @@ def _merge_agent_results(
     )
 
 
-def _ground_inventory_entries_for_pair(
+def _pass_inventory_entries_for_pair(
     *,
     pair: LinkPair,
     info: ActiveLinkInfo,
     expected_admin_up: bool,
     locator: Any,
-    ground_station_ids: Collection[str],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
 ) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
     if not info.assigned_terminals:
@@ -356,13 +356,9 @@ def _ground_inventory_entries_for_pair(
             f"KernelInventory proves links with assigned terminals; {pair} sits on fixed interfaces"
         )
     node_a, node_b = pair
-    gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(pair, info, ground_station_ids)
     locality = locator.link_locality(node_a, node_b)
-    vni = (
-        compute_vni(gs_id, sat_id, gs_iface, sat_iface)
-        if locality == node_agent_pb2.LOCALITY_CROSS_NODE
-        else 0
-    )
+    cross = locality == node_agent_pb2.LOCALITY_CROSS_NODE
+    vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b) if cross else 0
     commanded = (0.0, 0.0)
     if expected_admin_up:
         # Prove the kernel against what was COMMANDED, never against a live
@@ -372,52 +368,42 @@ def _ground_inventory_entries_for_pair(
         # it, and dispatch records the commanded delay on its info.
         if info.commanded_netem_ms is None:
             raise ValueError(
-                f"ground link {pair} is proven up with no commanded delay; "
-                "only commanded links are proven"
+                f"link {pair} is proven up with no commanded delay; only commanded links are proven"
             )
         commanded = info.commanded_netem_ms
 
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     ack_keys: set[InterfaceAck] = set()
-
-    def _remote_ip(peer_node: str) -> str:
-        if locality != node_agent_pb2.LOCALITY_CROSS_NODE:
-            return ""
-        return locator.node_ip(locator.k3s_node(peer_node))
-
-    def _add(agent: str, node_id: str, iface: str, peer_node: str, peer_iface: str) -> None:
+    # A local pass is proven by one entry, on the one agent that owns both ends, as its
+    # LinkUp wired it; a cross-node pass by one entry at each end.
+    both_ends = not cross
+    for node_id, iface, peer_node, peer_iface in link_ends(pair, info):
+        agent = locator.agent_addr(node_id)
         entry = node_agent_pb2.KernelInventoryEntry(
             node_id=node_id,
             interface_name=iface,
-            link_type=node_agent_pb2.LINK_TYPE_GROUND,
-            gs_id=gs_id,
-            sat_id=sat_id,
+            link_type=node_agent_pb2.LINK_TYPE_ASSIGNED,
             peer_node_id=peer_node,
             peer_interface_name=peer_iface,
             locality=locality,
             vni=vni,
-            remote_node_ip=_remote_ip(peer_node),
+            remote_node_ip=locator.node_ip(locator.k3s_node(peer_node)) if cross else "",
             latency_ms=egress_ms(pair, node_id, commanded),
             expected_admin_up=expected_admin_up,
         )
-        if locality == node_agent_pb2.LOCALITY_LOCAL:
+        if both_ends:
             entry.peer_latency_ms = egress_ms(pair, peer_node, commanded)
         if expected_admin_up:
-            # Each end is proven against its own terminal; a LOCAL entry
-            # proves both ends on the one agent that owns them.
+            # Each end is proven against its own terminal.
             entry.rates.CopyFrom(terminal_rates_message(interface_rates, node_id, iface))
-            if locality == node_agent_pb2.LOCALITY_LOCAL:
+            if both_ends:
                 entry.peer_rates.CopyFrom(
                     terminal_rates_message(interface_rates, peer_node, peer_iface)
                 )
         entries_by_agent.setdefault(agent, []).append(entry)
         ack_keys.add((agent, node_id, iface))
-
-    if locality == node_agent_pb2.LOCALITY_LOCAL:
-        _add(locator.agent_addr(sat_id), gs_id, gs_iface, sat_id, sat_iface)
-    else:
-        _add(locator.agent_addr(sat_id), sat_id, sat_iface, gs_id, gs_iface)
-        _add(locator.agent_addr(gs_id), gs_id, gs_iface, sat_id, sat_iface)
+        if both_ends:
+            break
     return entries_by_agent, ack_keys
 
 
@@ -430,44 +416,44 @@ async def _send_kernel_inventory_to_agent(
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
-    gs_id: str,
+    node_id: str,
 ) -> AgentCommandResult:
+    """Send one agent's KernelInventory entries. ``node_id`` names the node whose local passes
+    the entries prove; empty for entries that prove or survey long-delay ends."""
     return await _send_chunked_command(
         addr=addr,
         items=entries,
         pool=pool,
         operation="KernelInventory",
-        operation_id_base=f"{sim_iso}-kernel-inventory-{gs_id or 'long-delay'}-{addr}",
+        operation_id_base=f"{sim_iso}-kernel-inventory-{node_id or 'long-delay'}-{addr}",
         session_id=session_id,
         wiring_generation=wiring_generation,
         writer_epoch=writer_epoch,
         build_request=lambda envelope, chunk: node_agent_pb2.KernelInventoryRequest(
-            envelope=envelope, target_sim_time=sim_iso, gs_id=gs_id, entries=chunk
+            envelope=envelope, target_sim_time=sim_iso, node_id=node_id, entries=chunk
         ),
         send=lambda stub, req: stub.async_kernel_inventory(req),
     )
 
 
 @dataclass(frozen=True, slots=True)
-class GroundInventoryRequests:
+class PassInventoryRequests:
     """The KernelInventory requests that prove the links one node chooses, by agent: requests
-    naming that node (the Node Agent contract's ``gs_id``) for local passes, requests naming
-    none for long-delay ends."""
+    naming that node for local passes, requests naming none for long-delay ends."""
 
     requests: tuple[tuple[str, str, tuple[node_agent_pb2.KernelInventoryEntry, ...]], ...]
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]]
 
 
-def ground_inventory_requests(
+def pass_inventory_requests(
     *,
     node_id: str,
     expected_up: Mapping[LinkPair, ActiveLinkInfo],
     expected_down: Mapping[LinkPair, ActiveLinkInfo],
     locator: Any,
-    ground_station_ids: Collection[str],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
-) -> GroundInventoryRequests:
-    """The proof of each link one node chooses. A local pass is proven against the local ground
+) -> PassInventoryRequests:
+    """The proof of each link one node chooses. A local pass is proven against the local pass
     layout (a delay queue on each pod interface). A long-delay pass that is up is proven by the
     long-delay inventory (``long_delay_inventory_entries``): its ends still carrying the contact
     hold it on their host-side veths, admission open or stopped, the transmit shaper and the
@@ -485,16 +471,14 @@ def ground_inventory_requests(
                     node_ids=remaining_ends(pair, info),
                     locator=locator,
                     interface_rates=interface_rates,
-                    ground_station_ids=ground_station_ids,
                 )
                 by_agent = long_delay_by_agent
             else:
-                agent_entries, ack_keys = _ground_inventory_entries_for_pair(
+                agent_entries, ack_keys = _pass_inventory_entries_for_pair(
                     pair=pair,
                     info=info,
                     expected_admin_up=expected_admin_up,
                     locator=locator,
-                    ground_station_ids=ground_station_ids,
                     interface_rates=interface_rates,
                 )
                 by_agent = local_by_agent
@@ -510,10 +494,10 @@ def ground_inventory_requests(
         (agent_addr, "", tuple(entries))
         for agent_addr, entries in sorted(long_delay_by_agent.items())
     ]
-    return GroundInventoryRequests(requests=tuple(requests), pair_agent_ifaces=pair_agent_ifaces)
+    return PassInventoryRequests(requests=tuple(requests), pair_agent_ifaces=pair_agent_ifaces)
 
 
-async def verify_ground_kernel_inventory(
+async def verify_pass_kernel_inventory(
     *,
     node_id: str,
     expected_up: Mapping[LinkPair, ActiveLinkInfo],
@@ -522,22 +506,20 @@ async def verify_ground_kernel_inventory(
     pool: Any,
     sim_iso: str,
     sim_time: datetime,
-    ground_station_ids: Collection[str],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
 ) -> ActuationResult:
-    """Read-only GS-facing kernel proof for the Scheduler actuation lifecycle: the station's
-    periodic clean-state audit and the re-check of a station that is not clean. Each pass gets
-    the proof of its class (``ground_inventory_requests``)."""
+    """Read-only kernel proof of one node's passes for the Scheduler actuation lifecycle: the
+    node's periodic clean-state audit and the re-check of a node that is not clean. Each pass
+    gets the proof of its class (``pass_inventory_requests``)."""
     del sim_time  # carried by the public signature for call-site symmetry and future audit fields
-    planned = ground_inventory_requests(
+    planned = pass_inventory_requests(
         node_id=node_id,
         expected_up=expected_up,
         expected_down=expected_down,
         locator=locator,
-        ground_station_ids=ground_station_ids,
         interface_rates=interface_rates,
     )
     pair_agent_ifaces = planned.pair_agent_ifaces
@@ -554,9 +536,9 @@ async def verify_ground_kernel_inventory(
                         session_id=session_id,
                         wiring_generation=wiring_generation,
                         writer_epoch=writer_epoch,
-                        gs_id=request_gs_id,
+                        node_id=request_node_id,
                     )
-                    for agent_addr, request_gs_id, entries in planned.requests
+                    for agent_addr, request_node_id, entries in planned.requests
                 ]
             )
         )
@@ -701,7 +683,7 @@ async def survey_long_delay_ends(
                 node_agent_pb2.KernelInventoryEntry(
                     node_id=nid,
                     interface_name=ifname,
-                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                    link_type=node_agent_pb2.LINK_TYPE_FIXED,
                     peer_node_id=peer_nid,
                     peer_interface_name=peer_ifname,
                     locality=locality,
@@ -728,7 +710,7 @@ async def survey_long_delay_ends(
                         session_id=session_id,
                         wiring_generation=wiring_generation,
                         writer_epoch=writer_epoch,
-                        gs_id="",
+                        node_id="",
                     )
                     for agent_addr in sorted(entries_by_agent)
                 ]
@@ -742,10 +724,9 @@ async def survey_long_delay_ends(
     )
 
 
-async def survey_ground_terminals(
+async def survey_assigned_terminals(
     *,
     terminals: list[tuple[str, str]],
-    ground_station_ids: Collection[str],
     locator: Any,
     pool: Any,
     sim_iso: str,
@@ -753,23 +734,20 @@ async def survey_ground_terminals(
     wiring_generation: str,
     writer_epoch: int,
 ) -> ActuationResult:
-    """Read what each access terminal of a node with long-delay ground peers carries
+    """Read what each assigned terminal of a node with long-delay peers carries
     (KernelInventory with ``survey``): the contact, its peer end, whether admission is stopped,
     the receive queue's delay. The peer of a pass is what the survey finds, so each entry names
-    its terminal and its side only. Results are keyed by (node id, interface). Changes nothing."""
+    its terminal only. Results are keyed by (node id, interface). Changes nothing."""
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     keys: dict[tuple[str, str], set[InterfaceAck]] = {}
     for node_id, interface in sorted(terminals):
         agent = locator.agent_addr(node_id)
-        station = node_id in ground_station_ids
         entries_by_agent.setdefault(agent, []).append(
             node_agent_pb2.KernelInventoryEntry(
                 node_id=node_id,
                 interface_name=interface,
-                link_type=node_agent_pb2.LINK_TYPE_GROUND,
+                link_type=node_agent_pb2.LINK_TYPE_ASSIGNED,
                 locality=node_agent_pb2.LOCALITY_LOCAL,
-                gs_id=node_id if station else "",
-                sat_id="" if station else node_id,
                 survey=True,
             )
         )
@@ -787,7 +765,7 @@ async def survey_ground_terminals(
                         session_id=session_id,
                         wiring_generation=wiring_generation,
                         writer_epoch=writer_epoch,
-                        gs_id="",
+                        node_id="",
                     )
                     for agent_addr in sorted(entries_by_agent)
                 ]
@@ -834,7 +812,6 @@ def long_delay_inventory_entries(
     node_ids: frozenset[str],
     locator: Any,
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
-    ground_station_ids: Collection[str],
 ) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
     """KernelInventory entries proving the named ends of a long-delay contact in the stage the
     Scheduler holds it in: open (admission open) or draining (admission stopped); either way
@@ -846,42 +823,22 @@ def long_delay_inventory_entries(
     node_a, node_b = pair
     locality = locator.link_locality(node_a, node_b)
     cross = locality == node_agent_pb2.LOCALITY_CROSS_NODE
-    ground: dict[str, str] = {}
-    if info.assigned_terminals:
-        # A ground pass's tunnel is named from its station and satellite, as its LinkUp names it.
-        gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
-            pair, info, ground_station_ids
-        )
-        ground = {"gs_id": gs_id, "sat_id": sat_id}
-        vni = compute_vni(gs_id, sat_id, gs_iface, sat_iface) if cross else 0
-    else:
-        vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b) if cross else 0
-    link_type = (
-        node_agent_pb2.LINK_TYPE_GROUND if info.assigned_terminals else node_agent_pb2.LINK_TYPE_ISL
-    )
+    vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b) if cross else 0
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     ack_keys: set[InterfaceAck] = set()
-    for nid, ifname, peer_nid, peer_ifname in [
-        (node_a, info.interface_a, node_b, info.interface_b),
-        (node_b, info.interface_b, node_a, info.interface_a),
-    ]:
+    for nid, ifname, peer_nid, peer_ifname in link_ends(pair, info):
         if nid not in node_ids:
             continue
         agent = locator.agent_addr(nid)
         entry = node_agent_pb2.KernelInventoryEntry(
             node_id=nid,
             interface_name=ifname,
-            link_type=link_type,
+            link_type=link_type_of(info),
             peer_node_id=peer_nid,
             peer_interface_name=peer_ifname,
             locality=locality,
             vni=vni,
-            remote_node_ip=(
-                locator.node_ip(locator.k3s_node(peer_nid))
-                if locality == node_agent_pb2.LOCALITY_CROSS_NODE
-                else ""
-            ),
-            **ground,
+            remote_node_ip=locator.node_ip(locator.k3s_node(peer_nid)) if cross else "",
             expected_admin_up=True,
             contact_id=info.end_contact_id(nid),
             receive_latency_ms=egress_ms(pair, peer_nid, info.commanded_netem_ms),
@@ -903,7 +860,6 @@ async def verify_long_delay_ends(
     pool: Any,
     sim_iso: str,
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
-    ground_station_ids: Collection[str],
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
@@ -918,7 +874,6 @@ async def verify_long_delay_ends(
             node_ids=node_ids,
             locator=locator,
             interface_rates=interface_rates,
-            ground_station_ids=ground_station_ids,
         )
         pair_agent_ifaces[pair] = ack_keys
         for agent, entries in agent_entries.items():
@@ -936,7 +891,7 @@ async def verify_long_delay_ends(
                         session_id=session_id,
                         wiring_generation=wiring_generation,
                         writer_epoch=writer_epoch,
-                        gs_id="",
+                        node_id="",
                     )
                     for agent_addr in sorted(entries_by_agent)
                 ]
@@ -963,7 +918,6 @@ async def send_batch_down(
     sim_time: datetime,
     down_reasons: Mapping[LinkPair, str],
     link_down_reason: Callable[[LinkPair], str],
-    ground_station_ids: Collection[str],
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
@@ -982,7 +936,6 @@ async def send_batch_down(
         pairs=sorted_pairs,
         actual_links=actual_links,
         locator=locator,
-        ground_station_ids=ground_station_ids,
         stage=stage,
         ends=ends,
         contact_ids=contact_ids,
@@ -1052,7 +1005,6 @@ async def _dispatch_link_up_plan(
     desired: Mapping[LinkPair, ActiveLinkInfo],
     pool: Any,
     sim_iso: str,
-    ground_station_ids: Collection[str],
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
@@ -1144,7 +1096,6 @@ async def send_batch_up(
     subj_link_up: str,
     sim_iso: str,
     sim_time: datetime,
-    ground_station_ids: Collection[str],
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
@@ -1165,7 +1116,6 @@ async def send_batch_up(
         pairs=sorted_pairs,
         desired=desired,
         locator=locator,
-        ground_station_ids=ground_station_ids,
         compensation_for_pair=latency_compensation,
         interface_rates=interface_rates,
         stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
@@ -1176,7 +1126,6 @@ async def send_batch_up(
         desired=desired,
         pool=pool,
         sim_iso=sim_iso,
-        ground_station_ids=ground_station_ids,
         session_id=session_id,
         wiring_generation=wiring_generation,
         writer_epoch=writer_epoch,
@@ -1203,7 +1152,6 @@ async def prepare_long_delay_contacts(
     pool: Any,
     sim_iso: str,
     sim_time: datetime,
-    ground_station_ids: Collection[str],
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
@@ -1224,7 +1172,6 @@ async def prepare_long_delay_contacts(
         pairs=sorted_pairs,
         desired=desired,
         locator=locator,
-        ground_station_ids=ground_station_ids,
         compensation_for_pair=latency_compensation,
         interface_rates=interface_rates,
         stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
@@ -1235,7 +1182,6 @@ async def prepare_long_delay_contacts(
         desired=desired,
         pool=pool,
         sim_iso=sim_iso,
-        ground_station_ids=ground_station_ids,
         session_id=session_id,
         wiring_generation=wiring_generation,
         writer_epoch=writer_epoch,
@@ -1254,7 +1200,6 @@ async def open_prepared_contacts(
     subj_link_up: str,
     sim_iso: str,
     sim_time: datetime,
-    ground_station_ids: Collection[str],
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
     session_id: str,
@@ -1273,7 +1218,6 @@ async def open_prepared_contacts(
         desired=desired,
         pool=pool,
         sim_iso=sim_iso,
-        ground_station_ids=ground_station_ids,
         session_id=session_id,
         wiring_generation=wiring_generation,
         writer_epoch=writer_epoch,
@@ -1301,7 +1245,6 @@ async def send_authoritative_latency_updates(
     js: Any,
     subj_latency: str,
     sim_time: datetime,
-    ground_station_ids: Collection[str],
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
@@ -1338,59 +1281,24 @@ async def send_authoritative_latency_updates(
         # Remember what was COMMANDED: kernel proofs assert against these values.
         info.commanded_netem_ms = netem
 
-        if info.assigned_terminals:
-            gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
-                pair, info, ground_station_ids
+        for nid, ifname, peer_nid, peer_ifname in link_ends(pair, info):
+            entry = node_agent_pb2.LatencyEntry(
+                node_id=nid,
+                interface_name=ifname,
+                latency_ms=egress_ms(pair, nid, netem),
+                rates=terminal_rates_message(interface_rates, nid, ifname),
+                link_type=link_type_of(info),
+                peer_node_id=peer_nid,
             )
-            locality = locator.link_locality(node_a, node_b)
-            endpoint_agents = [(sat_id, sat_iface, locator.agent_addr(sat_id))]
-            if locality == node_agent_pb2.LOCALITY_LOCAL:
-                endpoint_agents.append((gs_id, gs_iface, locator.agent_addr(sat_id)))
-            else:
-                endpoint_agents.append((gs_id, gs_iface, locator.agent_addr(gs_id)))
-            for endpoint_id, endpoint_iface, agent in endpoint_agents:
-                entry = node_agent_pb2.LatencyEntry(
-                    node_id=endpoint_id,
-                    interface_name=endpoint_iface,
-                    latency_ms=egress_ms(pair, endpoint_id, netem),
-                    rates=terminal_rates_message(interface_rates, endpoint_id, endpoint_iface),
-                    link_type=node_agent_pb2.LINK_TYPE_GROUND,
-                    gs_id=gs_id,
-                    sat_id=sat_id,
+            if info.contact is not None:
+                # A long-delay end's delay queue holds the direction its peer transmits,
+                # and the peer's transmit rate sizes it.
+                entry.contact_id = info.contact.contact_id
+                entry.receive_latency_ms = egress_ms(pair, peer_nid, netem)
+                entry.peer_rates.CopyFrom(
+                    terminal_rates_message(interface_rates, peer_nid, peer_ifname)
                 )
-                if info.contact is not None:
-                    # A long-delay ground end's delay queue holds the direction its peer
-                    # transmits, as on a long-delay fixed link.
-                    peer_id = sat_id if endpoint_id == gs_id else gs_id
-                    peer_iface = sat_iface if endpoint_id == gs_id else gs_iface
-                    entry.contact_id = info.contact.contact_id
-                    entry.receive_latency_ms = egress_ms(pair, peer_id, netem)
-                    # The peer's transmit rate sizes that queue.
-                    entry.peer_rates.CopyFrom(
-                        terminal_rates_message(interface_rates, peer_id, peer_iface)
-                    )
-                _add_entry(pair, agent, entry)
-        else:
-            for nid, ifname, peer_nid, peer_ifname in [
-                (node_a, info.interface_a, node_b, info.interface_b),
-                (node_b, info.interface_b, node_a, info.interface_a),
-            ]:
-                entry = node_agent_pb2.LatencyEntry(
-                    node_id=nid,
-                    interface_name=ifname,
-                    latency_ms=egress_ms(pair, nid, netem),
-                    rates=terminal_rates_message(interface_rates, nid, ifname),
-                    link_type=node_agent_pb2.LINK_TYPE_ISL,
-                )
-                if info.contact is not None:
-                    # A long-delay end's delay queue holds the direction its peer transmits,
-                    # and the peer's transmit rate sizes it.
-                    entry.contact_id = info.contact.contact_id
-                    entry.receive_latency_ms = egress_ms(pair, peer_nid, netem)
-                    entry.peer_rates.CopyFrom(
-                        terminal_rates_message(interface_rates, peer_nid, peer_ifname)
-                    )
-                _add_entry(pair, locator.agent_addr(nid), entry)
+            _add_entry(pair, locator.agent_addr(nid), entry)
 
     agent_results: list[AgentCommandResult] = []
     dispatch_started = time.monotonic()

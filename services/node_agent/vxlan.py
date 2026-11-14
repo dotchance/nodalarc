@@ -46,13 +46,19 @@ from nodalarc.runtime_naming import (
 )
 
 from node_agent import kernel_verifier
-from node_agent.ground_bridge import _tc_mirred_redirect, _tc_mirred_remove, install_redirect_pair
+from node_agent.ground_bridge import (
+    PodEnd,
+    _tc_mirred_redirect,
+    _tc_mirred_remove,
+    install_redirect_pair,
+)
 from node_agent.namespace_ops import (
     _get_host_ns_fd,
     _in_namespace,
     _libc,
     _ns_lock,
     assign_link_mac,
+    set_interface_admin,
     switch_off_host_ipv6,
 )
 
@@ -349,25 +355,24 @@ def destroy_vxlan_link(pid: int, ifname: str, vni: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cross-node ground link — VXLAN between existing host-side interfaces
+# Cross-node pass between two terminal interfaces: VXLAN from the local host port
 # ---------------------------------------------------------------------------
 
 
-def attach_cross_node_ground(
+def attach_cross_node_terminal(
     local_host_ifname: str,
     local_ip: str,
     remote_ip: str,
     vni: int,
-    sat_pid: int | None = None,
-    sat_ifname: str = "",
+    pod_end: PodEnd | None = None,
 ) -> None:
-    """Connect a cross-node ground link, or reuse the proven one.
+    """Connect this host's end of a cross-node pass, or reuse the proven one.
 
-    The host-side veth of the local node already exists (GS bridge port or
-    satellite host-side veth). A dedicated VXLAN carries it to the peer host
-    and tc mirred redirects join the two, both ways. The inventory covers the
-    tunnel and the ingress side of both interfaces, so an occupied local
-    interface is refused before anything is created.
+    The host port of the local terminal interface exists from wiring. A dedicated VXLAN
+    carries it to the peer host and tc mirred redirects join the two, both ways. The
+    inventory covers the tunnel and the ingress side of both interfaces, so an occupied
+    local interface is refused before anything is created. The pod interface comes up
+    when its admin state follows the link (``pod_end``).
     """
     from pyroute2 import IPRoute
 
@@ -379,7 +384,7 @@ def attach_cross_node_ground(
         _enter_host_namespace()
         with IPRoute() as ipr:
             if not ipr.link_lookup(ifname=local_host_ifname):
-                raise FileNotFoundError(f"cross-node ground: {local_host_ifname} not found")
+                raise FileNotFoundError(f"cross-node terminal: {local_host_ifname} not found")
             found = _inventory(
                 ipr, devices=(names.tunnel,), ingress_of=(names.tunnel, local_host_ifname)
             )
@@ -399,8 +404,8 @@ def attach_cross_node_ground(
                     kernel_verifier.prove_mirred_redirect(ipr, local_host_ifname, names.tunnel),
                     # Host-side admin UP on the tunnel and the local host interface,
                     # the state creation sets below. Nothing host-side is configured
-                    # on reuse; the satellite-side bring-UP further down is the
-                    # existing ground-LinkUp step and runs on both paths.
+                    # on reuse; the pod interface's bring-UP further down runs on both
+                    # paths.
                     kernel_verifier.prove_link_admin_up(ipr, names.tunnel),
                     kernel_verifier.prove_link_admin_up(ipr, local_host_ifname),
                     kernel_verifier.prove_host_ipv6_off(names.tunnel),
@@ -415,7 +420,7 @@ def attach_cross_node_ground(
             )
             if reuse:
                 log.info(
-                    "Cross-node ground VNI=%d already complete and proven, reusing [%s]",
+                    "Cross-node terminal VNI=%d already complete and proven, reusing [%s]",
                     vni,
                     " ".join(found.describe()),
                 )
@@ -444,20 +449,11 @@ def attach_cross_node_ground(
             # Bidirectional tc mirred redirect: VXLAN ↔ host-side interface
             install_redirect_pair(names.tunnel, local_host_ifname)
 
-    if sat_pid:
-        if not sat_ifname:
-            raise ValueError("sat_ifname required when sat_pid is provided")
-        _target = sat_ifname
-
-        def _up_sat_iface(ns_ipr):
-            idx = ns_ipr.link_lookup(ifname=_target)
-            if idx:
-                ns_ipr.link("set", index=idx[0], state="up")
-
-        _in_namespace(sat_pid, _up_sat_iface)
+    if pod_end is not None:
+        set_interface_admin(*pod_end, up=True)
 
     log.debug(
-        "Attached cross-node ground: %s ↔ VXLAN VNI=%d (%s→%s)",
+        "Attached cross-node terminal: %s ↔ VXLAN VNI=%d (%s→%s)",
         local_host_ifname,
         vni,
         local_ip,
@@ -465,33 +461,23 @@ def attach_cross_node_ground(
     )
 
 
-def detach_cross_node_ground(
+def detach_cross_node_terminal(
     local_host_ifname: str,
     vni: int,
-    sat_pid: int | None = None,
-    sat_ifname: str = "",
+    pod_end: PodEnd | None = None,
 ) -> None:
-    """Disconnect a cross-node ground link.
+    """Disconnect this host's end of a cross-node pass.
 
-    Removes tc mirred redirect, destroys VXLAN, brings host-side interface DOWN.
-    If sat_pid provided, brings satellite pod-side interface DOWN.
+    Brings the pod interface DOWN when its admin state follows the link (``pod_end``), removes
+    the tc mirred redirect, brings the host port DOWN and destroys the VXLAN.
     """
     names = vxlan_host_ifnames(vni)
 
-    if sat_pid:
-        if not sat_ifname:
-            raise ValueError("sat_ifname required when sat_pid is provided")
-        _target = sat_ifname
-
-        def _down_sat_iface(ns_ipr):
-            idx = ns_ipr.link_lookup(ifname=_target)
-            if idx:
-                ns_ipr.link("set", index=idx[0], state="down")
-
+    if pod_end is not None:
         try:
-            _in_namespace(sat_pid, _down_sat_iface)
+            set_interface_admin(*pod_end, up=False, must_exist=False)
         except Exception as exc:
-            log.warning("Failed to down %s in ns(%d): %s", sat_ifname, sat_pid, exc)
+            log.warning("Failed to down %s in ns(%d): %s", pod_end[1], pod_end[0], exc)
             raise
 
     with _ns_lock:
@@ -505,7 +491,7 @@ def detach_cross_node_ground(
 
             ipr = IPRoute()
             try:
-                # Bring host-side interface DOWN (carrier drops on pod gnd0)
+                # Bring the host port DOWN (carrier drops on the pod interface)
                 links = ipr.link_lookup(ifname=local_host_ifname)
                 if links:
                     ipr.link("set", index=links[0], state="down")
@@ -517,7 +503,7 @@ def detach_cross_node_ground(
             finally:
                 ipr.close()
         except Exception as exc:
-            log.warning("Cross-node ground detach failed (VNI=%d): %s", vni, exc)
+            log.warning("Cross-node terminal detach failed (VNI=%d): %s", vni, exc)
             raise
 
-    log.debug("Detached cross-node ground: %s, VNI=%d", local_host_ifname, vni)
+    log.debug("Detached cross-node terminal: %s, VNI=%d", local_host_ifname, vni)

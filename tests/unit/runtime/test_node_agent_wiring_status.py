@@ -90,6 +90,7 @@ def _handle(node_id: str, *, pod_uid: str):
         static_neighbors=(),
         long_delay_interfaces=frozenset(),
         long_delay_access_peers=(),
+        terminal_admin_follows_link=True,
     )
 
 

@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import pytest
 from nodalarc.proto import node_agent_pb2
+from nodalarc.runtime_naming import terminal_host_name
 from nodalarc.substrate.queue_sizing import queue_limit_packets
 from node_agent.command_contract import RuntimeFence, WriterEpochFloor
 from node_agent.handlers import (
-    _local_ground_delays,
+    _pass_ends,
     _receive_limit,
     handle_batch_link_down,
     handle_batch_link_up,
@@ -72,7 +73,7 @@ class TestBatchLinkDown:
                 node_agent_pb2.InterfaceDown(
                     node_id="sat-P00S00",
                     interface_name="isl0",
-                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                    link_type=node_agent_pb2.LINK_TYPE_FIXED,
                     locality=node_agent_pb2.LOCALITY_LOCAL,
                     peer_node_id="sat-P00S01",
                     peer_interface_name="isl1",
@@ -96,7 +97,7 @@ class TestBatchLinkDown:
                 node_agent_pb2.InterfaceDown(
                     node_id="sat-P00S00",
                     interface_name="isl0",
-                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                    link_type=node_agent_pb2.LINK_TYPE_FIXED,
                     locality=node_agent_pb2.LOCALITY_LOCAL,
                     peer_node_id="sat-P00S01",
                     peer_interface_name="isl1",
@@ -104,7 +105,7 @@ class TestBatchLinkDown:
                 node_agent_pb2.InterfaceDown(
                     node_id="sat-P00S01",
                     interface_name="isl1",
-                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                    link_type=node_agent_pb2.LINK_TYPE_FIXED,
                     locality=node_agent_pb2.LOCALITY_LOCAL,
                     peer_node_id="sat-P00S00",
                     peer_interface_name="isl0",
@@ -138,7 +139,7 @@ class TestBatchLinkUp:
                 node_agent_pb2.InterfaceUp(
                     node_id="sat-P00S00",
                     interface_name="isl0",
-                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                    link_type=node_agent_pb2.LINK_TYPE_FIXED,
                     locality=node_agent_pb2.LOCALITY_LOCAL,
                     latency_ms=3.0,
                     rates=node_agent_pb2.TerminalRates(transmit_mbps=1000.0, receive_mbps=1000.0),
@@ -172,7 +173,7 @@ class TestSetLatency:
                     interface_name="isl0",
                     latency_ms=5.0,
                     rates=node_agent_pb2.TerminalRates(transmit_mbps=2000.0, receive_mbps=2000.0),
-                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                    link_type=node_agent_pb2.LINK_TYPE_FIXED,
                 ),
             ],
         )
@@ -181,61 +182,62 @@ class TestSetLatency:
         assert resp.entries_updated == 0
 
 
-class TestLocalGroundDelays:
-    """A LOCAL ground message may name either end as node_id (its egress delay in latency_ms)
-    and the other as its peer (peer_latency_ms). The handler shapes each pod by identity, so it
-    must return (station delay, satellite delay) whichever end the message names."""
-
-    DELAYS = {"earth-gs-a": 120.0, "geo-tdrs-0": 119.5}
+class TestPassEnds:
+    """An ASSIGNED entry names its own end (node_id, interface_name) and its peer's. The handler
+    acts on each end by what the entry states, whichever kind of node either end is."""
 
     @pytest.mark.parametrize(
-        ("node_id", "peer_node_id"),
-        [("earth-gs-a", "geo-tdrs-0"), ("geo-tdrs-0", "earth-gs-a")],
-        ids=["station-named", "satellite-named"],
+        ("node_id", "ifname", "peer_node_id", "peer_ifname"),
+        [
+            ("earth-gs-a", "term0", "geo-tdrs-0", "gnd0"),
+            ("geo-tdrs-0", "gnd0", "earth-gs-a", "term0"),
+            ("geo-tdrs-0", "gnd1", "luna-relay-0", "gnd0"),
+        ],
+        ids=["station-named", "satellite-named", "two-space-nodes"],
     )
     @pytest.mark.parametrize(
-        "message_type", [node_agent_pb2.InterfaceUp, node_agent_pb2.KernelInventoryEntry]
+        "message_type",
+        [
+            node_agent_pb2.InterfaceUp,
+            node_agent_pb2.InterfaceDown,
+            node_agent_pb2.KernelInventoryEntry,
+        ],
     )
-    def test_each_end_gets_its_own_delay_whichever_end_is_named(
-        self, message_type, node_id, peer_node_id
+    def test_the_entrys_own_end_comes_first_and_each_end_has_its_terminals_host_port(
+        self, message_type, node_id, ifname, peer_node_id, peer_ifname
     ):
         message = message_type(
             node_id=node_id,
+            interface_name=ifname,
             peer_node_id=peer_node_id,
-            gs_id="earth-gs-a",
-            sat_id="geo-tdrs-0",
-            link_type=node_agent_pb2.LINK_TYPE_GROUND,
+            peer_interface_name=peer_ifname,
+            link_type=node_agent_pb2.LINK_TYPE_ASSIGNED,
             locality=node_agent_pb2.LOCALITY_LOCAL,
-            latency_ms=self.DELAYS[node_id],
-            peer_latency_ms=self.DELAYS[peer_node_id],
         )
 
-        assert _local_ground_delays(message) == (
-            self.DELAYS[message.gs_id],
-            self.DELAYS[message.sat_id],
-        )
+        own, peer = _pass_ends(message)
 
-    @pytest.mark.parametrize(
-        "message_type", [node_agent_pb2.InterfaceUp, node_agent_pb2.KernelInventoryEntry]
-    )
-    def test_a_message_naming_neither_end_is_refused(self, message_type):
-        message = message_type(
-            node_id="other-node",
-            peer_node_id="geo-tdrs-0",
-            gs_id="earth-gs-a",
-            sat_id="geo-tdrs-0",
-            latency_ms=120.0,
-            peer_latency_ms=119.5,
+        assert (own.node_id, own.ifname) == (node_id, ifname)
+        assert (peer.node_id, peer.ifname) == (peer_node_id, peer_ifname)
+        assert own.host_ifname == terminal_host_name(node_id, ifname)
+        assert peer.host_ifname == terminal_host_name(peer_node_id, peer_ifname)
+        assert own.host_ifname != peer.host_ifname
+
+    def test_an_entry_that_names_no_peer_end_is_refused(self):
+        message = node_agent_pb2.InterfaceUp(
+            node_id="earth-gs-a",
+            interface_name="term0",
+            link_type=node_agent_pb2.LINK_TYPE_ASSIGNED,
         )
-        with pytest.raises(ValueError, match="neither its station"):
-            _local_ground_delays(message)
+        with pytest.raises(ValueError, match="names no peer end"):
+            _pass_ends(message)
 
 
 def _isl_down(**fields) -> node_agent_pb2.InterfaceDown:
     base = {
         "node_id": "mars-relays-mto",
         "interface_name": "isl3",
-        "link_type": node_agent_pb2.LINK_TYPE_ISL,
+        "link_type": node_agent_pb2.LINK_TYPE_FIXED,
         "locality": node_agent_pb2.LOCALITY_LOCAL,
         "peer_node_id": "earth-relay-geo",
         "peer_interface_name": "isl2",
@@ -259,6 +261,7 @@ def _handle(*, long_delay: frozenset[str]):
             static_neighbors=(),
             long_delay_interfaces=long_delay,
             long_delay_access_peers=(),
+            terminal_admin_follows_link=True,
         )
     }
 

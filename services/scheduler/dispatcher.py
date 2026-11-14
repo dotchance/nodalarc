@@ -143,10 +143,10 @@ from scheduler.dispatch_actuator import (
     send_batch_down,
     send_batch_up,
     stage_only_records,
-    survey_ground_terminals,
+    survey_assigned_terminals,
     survey_long_delay_ends,
-    verify_ground_kernel_inventory,
     verify_long_delay_ends,
+    verify_pass_kernel_inventory,
 )
 from scheduler.dispatch_planner import (
     choosing_nodes,
@@ -274,7 +274,6 @@ class Dispatcher:
         terminal_capacities: Mapping[str, int] | None = None,
         handover_modes: Mapping[str, Literal["bbm", "mbb"]] | None = None,
         tracked_nodes: Collection[str] | None = None,
-        ground_station_ids: Collection[str] | None = None,
         rtt_to_one_way_policy: Literal["half-rtt"] = "half-rtt",
         clean_kernel_audit_interval_s: float | None = 60.0,
         now: Callable[[], datetime] | None = None,
@@ -372,12 +371,6 @@ class Dispatcher:
         # Every node that chooses at least one candidate link of the session. Each has an
         # actuation state, declared at start.
         self._tracked_nodes = frozenset(tracked_nodes)
-        if ground_station_ids is None:
-            log.error("FATAL: Dispatcher created with no ground_station_ids")
-            raise ValueError("ground_station_ids is required")
-        # Which nodes are ground stations. Read only where a Node Agent command is built:
-        # its contract still names a link's ground station and satellite.
-        self._ground_station_ids = frozenset(ground_station_ids)
         self._session_id = session_id
         if not wiring_generation:
             raise ValueError("wiring_generation is required")
@@ -1754,7 +1747,7 @@ class Dispatcher:
         expected_down: dict[tuple[str, str], ActiveLinkInfo],
         sim_time: datetime,
     ) -> ActuationResult:
-        result = await verify_ground_kernel_inventory(
+        result = await verify_pass_kernel_inventory(
             node_id=node_id,
             expected_up=expected_up,
             expected_down=expected_down,
@@ -1762,7 +1755,6 @@ class Dispatcher:
             pool=self._pool,
             sim_iso=sim_time.isoformat(),
             sim_time=sim_time,
-            ground_station_ids=self._ground_station_ids,
             interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
@@ -2656,7 +2648,6 @@ class Dispatcher:
             pool=self._pool,
             sim_iso=sim_time.isoformat(),
             interface_rates=self._interface_rates,
-            ground_station_ids=self._ground_station_ids,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
             writer_epoch=self._writer_epoch,
@@ -3804,7 +3795,6 @@ class Dispatcher:
             js=self._js,
             subj_latency=self._subj_latency,
             sim_time=sim_time,
-            ground_station_ids=self._ground_station_ids,
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
@@ -3978,7 +3968,6 @@ class Dispatcher:
             sim_time=sim_time,
             down_reasons=down_reasons,
             link_down_reason=self._link_down_reason,
-            ground_station_ids=self._ground_station_ids,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
             writer_epoch=self._writer_epoch,
@@ -4011,7 +4000,6 @@ class Dispatcher:
             sim_time=sim_time,
             down_reasons={},
             link_down_reason=self._link_down_reason,
-            ground_station_ids=self._ground_station_ids,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
             writer_epoch=self._writer_epoch,
@@ -4263,7 +4251,6 @@ class Dispatcher:
                     pool=self._pool,
                     sim_iso=sim_iso,
                     interface_rates=self._interface_rates,
-                    ground_station_ids=self._ground_station_ids,
                     session_id=self._session_id,
                     wiring_generation=self._wiring_generation,
                     writer_epoch=self._writer_epoch,
@@ -4479,9 +4466,8 @@ class Dispatcher:
                 for node_id in nodes
                 for interface in self._terminal_interface_names.get(node_id, {}).values()
             )
-            surveyed = await survey_ground_terminals(
+            surveyed = await survey_assigned_terminals(
                 terminals=terminals,
-                ground_station_ids=self._ground_station_ids,
                 locator=self._loc,
                 pool=self._pool,
                 sim_iso=sim_iso,
@@ -4668,7 +4654,6 @@ class Dispatcher:
             pool=self._pool,
             sim_iso=sim_iso,
             sim_time=sim_time,
-            ground_station_ids=self._ground_station_ids,
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             interface_rates=self._interface_rates,
@@ -4695,7 +4680,6 @@ class Dispatcher:
             subj_link_up=self._subj_link_up,
             sim_iso=sim_iso,
             sim_time=sim_time,
-            ground_station_ids=self._ground_station_ids,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
             session_id=self._session_id,
@@ -4721,7 +4705,6 @@ class Dispatcher:
             subj_link_up=self._subj_link_up,
             sim_iso=sim_iso,
             sim_time=sim_time,
-            ground_station_ids=self._ground_station_ids,
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,

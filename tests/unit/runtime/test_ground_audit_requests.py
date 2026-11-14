@@ -25,7 +25,7 @@ from node_agent.command_contract import (
 )
 from scheduler.contact_drain import start_drain
 from scheduler.desired_state import ActiveLinkInfo, Contact
-from scheduler.dispatch_actuator import ground_inventory_requests
+from scheduler.dispatch_actuator import pass_inventory_requests
 from scheduler.pod_locator import PodLocationMap
 
 STATION = "dss-43"
@@ -76,17 +76,16 @@ def _local_pass() -> ActiveLinkInfo:
 
 
 def _plan(expected_up: dict[tuple[str, str], ActiveLinkInfo]):
-    return ground_inventory_requests(
+    return pass_inventory_requests(
         node_id=STATION,
         expected_up=expected_up,
         expected_down={},
         locator=_locator(),
-        ground_station_ids={STATION: 2},
         interface_rates=RATES,
     )
 
 
-def _request(gs_id: str, entries) -> node_agent_pb2.KernelInventoryRequest:
+def _request(node_id: str, entries) -> node_agent_pb2.KernelInventoryRequest:
     return node_agent_pb2.KernelInventoryRequest(
         envelope=node_agent_pb2.CommandEnvelope(
             operation_id="op-1",
@@ -96,14 +95,14 @@ def _request(gs_id: str, entries) -> node_agent_pb2.KernelInventoryRequest:
             writer_epoch=1,
         ),
         target_sim_time="2027-02-19T11:41:00+00:00",
-        gs_id=gs_id,
+        node_id=node_id,
         entries=list(entries),
     )
 
 
 def test_a_long_delay_pass_is_proven_by_the_long_delay_inventory_and_a_local_pass_locally():
     plan = _plan({LONG_DELAY: _long_delay_pass(), LOCAL: _local_pass()})
-    by_scope = {gs_id: entries for _agent, gs_id, entries in plan.requests}
+    by_scope = {node_id: entries for _agent, node_id, entries in plan.requests}
     assert set(by_scope) == {STATION, ""}
 
     # The local pass: one station-scoped entry wiring both ends, against the local layout.
@@ -128,8 +127,8 @@ def test_a_long_delay_pass_is_proven_by_the_long_delay_inventory_and_a_local_pas
     assert (station.peer_rates.transmit_mbps, relay.peer_rates.transmit_mbps) == (1.0, 0.1)
 
     # Both requests pass the contract the Node Agent applies before it reads the kernel.
-    for gs_id, entries in by_scope.items():
-        validate_kernel_inventory_request(_request(gs_id, entries), fence=FENCE)
+    for node_id, entries in by_scope.items():
+        validate_kernel_inventory_request(_request(node_id, entries), fence=FENCE)
 
 
 def test_a_draining_long_delay_pass_is_proven_at_the_ends_still_draining_with_admission_stopped():
@@ -146,9 +145,9 @@ def test_a_draining_long_delay_pass_is_proven_at_the_ends_still_draining_with_ad
         info.drain, ends=tuple(end for end in info.drain.ends if end.node_id == STATION)
     )
     plan = _plan({LONG_DELAY: info})
-    ((_agent, gs_id, entries),) = plan.requests
-    assert gs_id == ""
+    ((_agent, node_id, entries),) = plan.requests
+    assert node_id == ""
     (entry,) = entries
     assert entry.node_id == STATION
     assert entry.expected_admission_stopped
-    validate_kernel_inventory_request(_request(gs_id, entries), fence=FENCE)
+    validate_kernel_inventory_request(_request(node_id, entries), fence=FENCE)

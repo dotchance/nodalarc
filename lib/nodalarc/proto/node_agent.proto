@@ -45,10 +45,14 @@ enum NodeAgentErrorCode {
   NODE_AGENT_STALE_WRITER = 19;
 }
 
+// How a link's two terminal interfaces are joined. A FIXED link runs between two interfaces
+// the session binds to each other for its whole life. An ASSIGNED link runs between two
+// terminal interfaces OME assigns to each other for one pass; either interface serves another
+// peer on its next pass.
 enum LinkType {
   LINK_TYPE_UNSPECIFIED = 0;
-  LINK_TYPE_ISL = 1;
-  LINK_TYPE_GROUND = 2;
+  LINK_TYPE_FIXED = 1;
+  LINK_TYPE_ASSIGNED = 2;
 }
 
 // Per-interface locality — carried in each InterfaceUp/InterfaceDown entry,
@@ -120,15 +124,15 @@ message InterfaceDown {
   string interface_name = 2;
   // field 3 reserved — PID looked up by Node Agent internally
   LinkType link_type = 4;
-  string gs_id = 5;
-  string sat_id = 6;
+  // fields 5-6 reserved — the link's ends are node_id and peer_node_id
+  reserved 5, 6;
   // fields 7-8 reserved — PID looked up by Node Agent internally
   // CROSS_NODE VXLAN parameters (empty/zero for LOCAL)
   string remote_node_ip = 9;
   int32 vni = 10;
   // Per-interface locality
   Locality locality = 11;
-  // Peer info for host-mediated ISL (host-side veth name computation)
+  // The other end of the link. A LOCAL ASSIGNED entry of a local pass closes both ends.
   string peer_node_id = 12;
   string peer_interface_name = 13;
   LinkDownStage stage = 14;
@@ -190,8 +194,8 @@ message InterfaceUp {
   double latency_ms = 5;
   // field 6 reserved — one symmetric pair rate, replaced by per-terminal rates
   reserved 6;
-  string gs_id = 7;
-  string sat_id = 8;
+  // fields 7-8 reserved — the link's ends are node_id and peer_node_id
+  reserved 7, 8;
   // fields 9-10 reserved — PID looked up by Node Agent internally
   // field 11 reserved — peer_mac removed with v0.72 NDP deletion
   //   (Node Agent no longer performs L3 neighbor resolution; see §13.22.6)
@@ -201,16 +205,16 @@ message InterfaceUp {
   int32 vni = 13;
   // Per-interface locality
   Locality locality = 14;
-  // Peer info for host-mediated ISL (host-side veth name computation)
+  // The other end of the link. A LOCAL ASSIGNED entry of a local pass wires both ends.
   string peer_node_id = 15;
   string peer_interface_name = 16;
   // Rates of the terminal behind (node_id, interface_name).
   TerminalRates rates = 17;
   // Rates of the terminal behind (peer_node_id, peer_interface_name): on LOCAL
-  // ground entries, where one entry wires both ends, and on long-delay ends,
+  // ASSIGNED entries, where one entry wires both ends, and on long-delay ends,
   // whose receive-side queue is sized from the peer's transmit rate.
   TerminalRates peer_rates = 18;
-  // LOCAL ground entries describe both ends: the peer end's egress delay (the direction the
+  // LOCAL ASSIGNED entries describe both ends: the peer end's egress delay (the direction the
   // peer transmits). Unused on entries that name one end.
   double peer_latency_ms = 19;
   // Long-delay ends: the contact this LinkUp opens (OME names contacts), and the delay of the
@@ -245,8 +249,8 @@ message LatencyEntry {
   // field 3 reserved — PID looked up by Node Agent internally
   double latency_ms = 4;
   LinkType link_type = 5;
-  string gs_id = 6;
-  string sat_id = 7;
+  // fields 6-7 reserved — the link's ends are node_id and peer_node_id
+  reserved 6, 7;
   // fields 8-9 reserved — PID looked up by Node Agent internally
   // field 10 reserved — a bare transmit rate, replaced by the terminal's rates
   reserved 10;
@@ -260,6 +264,9 @@ message LatencyEntry {
   // Long-delay ends: the rates of the peer terminal, whose transmit rate sizes this end's
   // receive-side queue together with receive_latency_ms. Unset on every other entry.
   TerminalRates peer_rates = 14;
+  // ASSIGNED entries: the node at the other end of the pass. Whether the end is long-delay is a
+  // fact of the pass's peer.
+  string peer_node_id = 15;
 }
 
 message SetLatencyRequest {
@@ -294,8 +301,8 @@ message KernelInventoryEntry {
   string node_id = 1;
   string interface_name = 2;
   LinkType link_type = 3;
-  string gs_id = 4;
-  string sat_id = 5;
+  // fields 4-5 reserved — the link's ends are node_id and peer_node_id
+  reserved 4, 5;
   string peer_node_id = 6;
   string peer_interface_name = 7;
   Locality locality = 8;
@@ -325,8 +332,12 @@ message KernelInventoryEntry {
 message KernelInventoryRequest {
   CommandEnvelope envelope = 1;
   string target_sim_time = 2;
-  string gs_id = 3;
+  // field 3 reserved — replaced by node_id
+  reserved 3;
   repeated KernelInventoryEntry entries = 4;
+  // The node whose local passes the request proves: every entry is an ASSIGNED link with this
+  // node at one end. Empty: the request proves or surveys long-delay ends.
+  string node_id = 5;
 }
 
 message KernelInventoryEntryResult {

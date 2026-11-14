@@ -157,26 +157,19 @@ def assign_link_mac(pid: int, ifname: str, node_id: str, ipr: IPRoute | None = N
 # ---------------------------------------------------------------------------
 
 
-def set_interface_up(pid: int, ifname: str) -> None:
-    """Bring an interface up inside a namespace."""
+def set_interface_admin(pid: int, ifname: str, *, up: bool, must_exist: bool = True) -> None:
+    """Set a pod interface admin up or down inside its namespace: the one place the Node Agent
+    changes a pod interface's admin state. A missing interface is an error. A detach passes
+    ``must_exist`` false: it clears what is there, and its proof reports an interface that is
+    not."""
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=ifname)
         if not links:
-            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
-        ipr.link("set", index=links[0], state="up")
-
-    _in_namespace(pid, _op)
-
-
-def set_interface_down(pid: int, ifname: str) -> None:
-    """Bring an interface down inside a namespace."""
-
-    def _op(ipr: IPRoute) -> None:
-        links = ipr.link_lookup(ifname=ifname)
-        if not links:
-            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
-        ipr.link("set", index=links[0], state="down")
+            if must_exist:
+                raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+            return
+        ipr.link("set", index=links[0], state="up" if up else "down")
 
     _in_namespace(pid, _op)
 
@@ -651,19 +644,6 @@ def configure_interface(pid: int, ifname: str, node_id: str, ipr: IPRoute | None
     else:
         _in_namespace(pid, _do_configure)
     log.debug("Configured %s in ns(%d): mac=%s, ipv6_autoconfig=off", ifname, pid, mac)
-
-
-def set_pod_interface_down(pid: int, ifname: str) -> None:
-    """Bring a pod interface admin down: a satellite's terminal deactivated at the close of its
-    long-delay ground pass, as at a local ground LinkDown."""
-
-    def _do(handle: IPRoute) -> None:
-        idx = handle.link_lookup(ifname=ifname)
-        if not idx:
-            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
-        handle.link("set", index=idx[0], state="down")
-
-    _in_namespace(pid, _do)
 
 
 def install_static_neighbors(

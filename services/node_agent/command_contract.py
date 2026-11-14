@@ -157,14 +157,9 @@ def _validate_common_interface(iface, *, operation: str) -> None:
     _validate_link_type(iface.link_type)
     _validate_locality(iface.locality)
 
-    if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
-        _require_nonempty(iface.gs_id, "gs_id")
-        _require_nonempty(iface.sat_id, "sat_id")
-        _require_nonempty(iface.peer_node_id, "peer_node_id")
-        _require_nonempty(iface.peer_interface_name, "peer_interface_name")
-    else:
-        _require_nonempty(iface.peer_node_id, "peer_node_id")
-        _require_nonempty(iface.peer_interface_name, "peer_interface_name")
+    # Every entry names both ends of its link: its own and its peer's.
+    _require_nonempty(iface.peer_node_id, "peer_node_id")
+    _require_nonempty(iface.peer_interface_name, "peer_interface_name")
 
     if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
         _require_nonempty(iface.remote_node_ip, "remote_node_ip")
@@ -191,26 +186,27 @@ def _validate_rates_field(entry, field: str, *, operation: str) -> None:
             )
 
 
-def _wires_both_ground_ends(entry) -> bool:
-    """A LOCAL ground entry of a local pass wires both ends in one operation. An entry naming a
+def _wires_both_ends(entry) -> bool:
+    """A LOCAL ASSIGNED entry of a local pass wires both ends in one operation. An entry naming a
     contact is one end of a long-delay pass, whose ends stage on their own in both localities."""
     return (
-        entry.link_type == node_agent_pb2.LINK_TYPE_GROUND
+        entry.link_type == node_agent_pb2.LINK_TYPE_ASSIGNED
         and entry.locality == node_agent_pb2.LOCALITY_LOCAL
         and not getattr(entry, "contact_id", "")
     )
 
 
 def _validate_peer_rates(entry, *, operation: str, wires_both_ends: bool) -> None:
-    """A LOCAL ground entry wires both ends in one operation (``wires_both_ends``). A long-delay
-    end (an entry naming a contact) sizes its receive-side queue from the peer terminal's transmit
-    rate. Both carry the peer terminal's ``peer_rates``; every other entry carries none."""
+    """A LOCAL ASSIGNED entry of a local pass wires both ends in one operation
+    (``wires_both_ends``). A long-delay end (an entry naming a contact) sizes its receive-side
+    queue from the peer terminal's transmit rate. Both carry the peer terminal's ``peer_rates``;
+    every other entry carries none."""
     if wires_both_ends or entry.contact_id:
         _validate_rates_field(entry, "peer_rates", operation=operation)
     elif entry.HasField("peer_rates"):
         raise CommandContractError(
             node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-            f"{operation} peer_rates apply only to LOCAL ground entries and long-delay ends",
+            f"{operation} peer_rates apply only to LOCAL pass entries and long-delay ends",
         )
 
 
@@ -219,22 +215,22 @@ def _validate_terminal_rates(entry, *, operation: str) -> None:
     terminal behind (node_id, interface_name)), and the peer terminal's where the entry needs
     them (``_validate_peer_rates``)."""
     _validate_rates_field(entry, "rates", operation=operation)
-    _validate_peer_rates(entry, operation=operation, wires_both_ends=_wires_both_ground_ends(entry))
+    _validate_peer_rates(entry, operation=operation, wires_both_ends=_wires_both_ends(entry))
 
 
 def _validate_peer_latency(entry, *, operation: str) -> None:
-    """A LOCAL ground entry wires both ends and carries the peer end's egress delay; every other
-    entry wires one end and carries none."""
-    local_ground = _wires_both_ground_ends(entry)
-    if local_ground and entry.peer_latency_ms < 0:
+    """A LOCAL ASSIGNED entry of a local pass wires both ends and carries the peer end's egress
+    delay; every other entry wires one end and carries none."""
+    local_pass = _wires_both_ends(entry)
+    if local_pass and entry.peer_latency_ms < 0:
         raise CommandContractError(
             node_agent_pb2.NODE_AGENT_INVALID_FIELD,
             f"{operation} peer_latency_ms must be >= 0",
         )
-    if not local_ground and entry.peer_latency_ms != 0.0:
+    if not local_pass and entry.peer_latency_ms != 0.0:
         raise CommandContractError(
             node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-            f"{operation} peer_latency_ms applies only to LOCAL ground entries",
+            f"{operation} peer_latency_ms applies only to LOCAL pass entries",
         )
 
 
@@ -290,31 +286,22 @@ def validate_set_latency_request(request, *, fence: RuntimeFence) -> None:
             )
         _validate_rates_field(entry, "rates", operation=KIND_SET_LATENCY)
         _validate_peer_rates(entry, operation=KIND_SET_LATENCY, wires_both_ends=False)
-        if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
-            _require_nonempty(entry.gs_id, "gs_id")
-            _require_nonempty(entry.sat_id, "sat_id")
+        if entry.link_type == node_agent_pb2.LINK_TYPE_ASSIGNED:
+            # Whether an assigned terminal's end is long-delay is a fact of the pass's peer.
+            _require_nonempty(entry.peer_node_id, "peer_node_id")
 
 
 def _validate_long_delay_inventory(request) -> None:
-    """A KernelInventory request with no ground station audits long-delay ends, fixed or ground:
-    each entry names one end, the contact it must carry, and when up the received delay, its
-    rates and whether its admission must be stopped."""
+    """A KernelInventory request naming no node audits long-delay ends, fixed or assigned: each
+    entry names one end, the contact it must carry, and when up the received delay, its rates
+    and whether its admission must be stopped."""
     for entry in request.entries:
         _require_nonempty(entry.node_id, "node_id")
         _require_nonempty(entry.interface_name, "interface_name")
         _validate_locality(entry.locality)
-        if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND and entry.survey:
-            # A survey of a ground terminal names the end and its side only: the peer is what
-            # the survey reports.
-            if entry.node_id not in (entry.gs_id, entry.sat_id):
-                raise CommandContractError(
-                    node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                    "a ground survey entry names its node as its station or its satellite",
-                )
-        elif entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
-            # A long-delay ground end, audited like a fixed long-delay end.
-            _require_nonempty(entry.gs_id, "gs_id")
-            _require_nonempty(entry.sat_id, "sat_id")
+        if entry.link_type == node_agent_pb2.LINK_TYPE_ASSIGNED and not entry.survey:
+            # A long-delay pass end, audited like a fixed long-delay end. A survey of an
+            # assigned terminal names the end only: the peer is what the survey reports.
             _require_nonempty(entry.peer_node_id, "peer_node_id")
             _require_nonempty(entry.peer_interface_name, "peer_interface_name")
         if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE and entry.vni <= 0:
@@ -337,7 +324,7 @@ def _validate_long_delay_inventory(request) -> None:
 
 def validate_kernel_inventory_request(request, *, fence: RuntimeFence) -> None:
     validate_envelope(request, expected_kind=KIND_KERNEL_INVENTORY, fence=fence)
-    if not request.gs_id:
+    if not request.node_id:
         _validate_long_delay_inventory(request)
         return
     for entry in request.entries:
@@ -345,19 +332,18 @@ def validate_kernel_inventory_request(request, *, fence: RuntimeFence) -> None:
         _require_nonempty(entry.interface_name, "interface_name")
         _validate_link_type(entry.link_type)
         _validate_locality(entry.locality)
-        if entry.link_type != node_agent_pb2.LINK_TYPE_GROUND:
+        if entry.link_type != node_agent_pb2.LINK_TYPE_ASSIGNED:
             raise CommandContractError(
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                "KernelInventory supports ground entries only",
+                "KernelInventory of a node's passes supports ASSIGNED entries only",
             )
-        _require_nonempty(entry.gs_id, "gs_id")
-        _require_nonempty(entry.sat_id, "sat_id")
         _require_nonempty(entry.peer_node_id, "peer_node_id")
         _require_nonempty(entry.peer_interface_name, "peer_interface_name")
-        if entry.gs_id != request.gs_id:
+        if request.node_id not in (entry.node_id, entry.peer_node_id):
             raise CommandContractError(
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                f"entry gs_id {entry.gs_id!r} does not match request gs_id {request.gs_id!r}",
+                f"entry {entry.node_id}<->{entry.peer_node_id} is not a pass of the request's "
+                f"node {request.node_id!r}",
             )
         if entry.expected_admin_up:
             if entry.latency_ms < 0:

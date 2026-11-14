@@ -5,9 +5,8 @@
 
 import pytest
 from nodalarc.runtime_naming import (
-    gs_bridge_port_name,
     isl_host_name,
-    satellite_ground_host_name,
+    terminal_host_name,
     validate_runtime_node_id,
     vxlan_host_ifnames,
 )
@@ -19,10 +18,10 @@ def test_host_interface_names_are_bounded_and_terminal_distinct():
     names = {
         isl_host_name(node_id, 0),
         isl_host_name(node_id, 1),
-        satellite_ground_host_name(node_id, 0),
-        satellite_ground_host_name(node_id, 1),
-        gs_bridge_port_name("ground-gs-denver", 0),
-        gs_bridge_port_name("ground-gs-denver", 1),
+        terminal_host_name(node_id, "gnd0"),
+        terminal_host_name(node_id, "gnd1"),
+        terminal_host_name("ground-gs-denver", "term0"),
+        terminal_host_name("ground-gs-denver", "term1"),
     }
     assert len(names) == 6
     assert all(len(name) <= 15 for name in names)

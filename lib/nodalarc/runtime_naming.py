@@ -55,14 +55,20 @@ def _ifname(kind: str, node_id: str, index: int) -> str:
     return name
 
 
-def gs_bridge_port_name(gs_id: str, index: int = 0) -> str:
-    """Host-side veth name for a ground-station terminal bridge port."""
-    return _ifname("g", gs_id, index)
+def terminal_host_name(node_id: str, ifname: str) -> str:
+    """Host-side veth name of one terminal interface OME assigns per pass.
 
-
-def satellite_ground_host_name(sat_id: str, index: int = 0) -> str:
-    """Host-side veth name for a satellite ground terminal."""
-    return _ifname("s", sat_id, index)
+    The name comes from the terminal alone: the node and the name of its pod interface, as the
+    wiring manifest states them. Nothing is read out of the interface name, so the host port of
+    a station's terminal and of a space node's terminal are named the same way. Rejected
+    alternative: a letter for the kind of node and the number cut from the interface name,
+    which tied the host port to whether its node was a ground station or a satellite.
+    """
+    digest = hashlib.blake2s(f"{node_id}/{ifname}".encode(), digest_size=7).hexdigest()
+    name = f"t{digest}"
+    if len(name) > LINUX_IFNAME_MAX:
+        raise ValueError(f"internal interface-name budget error for {name!r}")
+    return name
 
 
 def isl_host_name(node_id: str, index: int) -> str:

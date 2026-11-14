@@ -14,7 +14,7 @@ import os
 import shlex
 import subprocess
 
-from nodalarc.runtime_naming import gs_bridge_port_name
+from nodalarc.runtime_naming import terminal_host_name
 from nodalarc.workload_target import NODE_ID_LABEL
 
 KUBECTL = os.environ.get("KUBECTL", "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl")
@@ -35,8 +35,7 @@ def cut_ground_terminal(ground: str, interface: str) -> str:
     NodalArc did not command it, so the kernel no longer matches what the Scheduler holds as
     actual. Returns the interface that was taken down.
     """
-    assert interface.startswith("term") and interface[4:].isdigit(), interface
-    host_interface = gs_bridge_port_name(ground, int(interface[4:]))
+    host_interface = terminal_host_name(ground, interface)
     server = _kubectl(
         "get", "pods", "-n", NAMESPACE, "-l", f"{NODE_ID_LABEL}={ground}",
         "-o", "jsonpath={.items[0].spec.nodeName}",

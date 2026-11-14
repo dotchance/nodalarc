@@ -63,7 +63,7 @@ def _isl_up(**fields) -> node_agent_pb2.InterfaceUp:
         "interface_name": "isl0",
         "peer_node_id": "leo-sat-0-1",
         "peer_interface_name": "isl1",
-        "link_type": node_agent_pb2.LINK_TYPE_ISL,
+        "link_type": node_agent_pb2.LINK_TYPE_FIXED,
         "locality": node_agent_pb2.LOCALITY_LOCAL,
         "latency_ms": 4.0,
         "rates": _rates(2000.0, 2000.0),
@@ -79,11 +79,9 @@ def _local_ground_up(**fields) -> node_agent_pb2.InterfaceUp:
         "interface_name": "term0",
         "peer_node_id": "geo-tdrs-0",
         "peer_interface_name": "gnd0",
-        "link_type": node_agent_pb2.LINK_TYPE_GROUND,
+        "link_type": node_agent_pb2.LINK_TYPE_ASSIGNED,
         "locality": node_agent_pb2.LOCALITY_LOCAL,
         "latency_ms": 120.0,
-        "gs_id": "earth-gs-a",
-        "sat_id": "geo-tdrs-0",
         "rates": _rates(600.0, 50.0),
         "peer_rates": _rates(50.0, 600.0),
         "stage": node_agent_pb2.LINK_UP_STAGE_OPEN,
@@ -152,7 +150,7 @@ def test_a_long_delay_delay_update_carries_its_peers_rates() -> None:
         node_id="earth-relay-geo",
         interface_name="isl0",
         latency_ms=846_096.0,
-        link_type=node_agent_pb2.LINK_TYPE_ISL,
+        link_type=node_agent_pb2.LINK_TYPE_FIXED,
         rates=_rates(15.0, 15.0),
         contact_id="1@2027-07-19T10:50:00.000000Z",
         receive_latency_ms=846_212.0,
@@ -171,19 +169,19 @@ def test_a_long_delay_delay_update_carries_its_peers_rates() -> None:
                 node_id="leo-sat-p00s01",
                 interface_name="isl0",
                 latency_ms=4.0,
-                link_type=node_agent_pb2.LINK_TYPE_ISL,
+                link_type=node_agent_pb2.LINK_TYPE_FIXED,
                 rates=_rates(15.0, 15.0),
                 peer_rates=_rates(15.0, 15.0),
             )
         ],
     )
-    with pytest.raises(CommandContractError, match="LOCAL ground entries and long-delay ends"):
+    with pytest.raises(CommandContractError, match="LOCAL pass entries and long-delay ends"):
         validate_set_latency_request(local, fence=_FENCE)
 
 
 def test_peer_rates_are_refused_outside_local_ground() -> None:
     with pytest.raises(
-        CommandContractError, match="only to LOCAL ground entries and long-delay ends"
+        CommandContractError, match="only to LOCAL pass entries and long-delay ends"
     ):
         validate_batch_link_up_request(
             _link_up(_isl_up(peer_rates=_rates(2000.0, 2000.0))), fence=_FENCE
@@ -196,10 +194,8 @@ def _inventory_entry(**fields) -> node_agent_pb2.KernelInventoryEntry:
         "interface_name": "term0",
         "peer_node_id": "geo-tdrs-0",
         "peer_interface_name": "gnd0",
-        "link_type": node_agent_pb2.LINK_TYPE_GROUND,
+        "link_type": node_agent_pb2.LINK_TYPE_ASSIGNED,
         "locality": node_agent_pb2.LOCALITY_LOCAL,
-        "gs_id": "earth-gs-a",
-        "sat_id": "geo-tdrs-0",
     }
     base.update(fields)
     return node_agent_pb2.KernelInventoryEntry(**base)
@@ -207,7 +203,7 @@ def _inventory_entry(**fields) -> node_agent_pb2.KernelInventoryEntry:
 
 def _inventory(*entries) -> node_agent_pb2.KernelInventoryRequest:
     return node_agent_pb2.KernelInventoryRequest(
-        envelope=_envelope("KernelInventory"), gs_id="earth-gs-a", entries=list(entries)
+        envelope=_envelope("KernelInventory"), node_id="earth-gs-a", entries=list(entries)
     )
 
 
@@ -237,7 +233,7 @@ def _set_latency_request(rates: node_agent_pb2.TerminalRates | None):
         node_id="leo-sat-0-0",
         interface_name="isl0",
         latency_ms=4.0,
-        link_type=node_agent_pb2.LINK_TYPE_ISL,
+        link_type=node_agent_pb2.LINK_TYPE_FIXED,
     )
     if rates is not None:
         entry.rates.CopyFrom(rates)
@@ -424,7 +420,7 @@ def _check_peer_delay(validate, request, *, local_ground: bool, peer_latency_ms:
     if peer_latency_ms == 0.0 or (local_ground and peer_latency_ms > 0.0):
         validate(request, fence=_FENCE)
         return
-    reason = "must be >= 0" if local_ground else "applies only to LOCAL ground entries"
+    reason = "must be >= 0" if local_ground else "applies only to LOCAL pass entries"
     with pytest.raises(CommandContractError, match=f"peer_latency_ms {reason}") as refused:
         validate(request, fence=_FENCE)
     assert refused.value.code == node_agent_pb2.NODE_AGENT_INVALID_FIELD

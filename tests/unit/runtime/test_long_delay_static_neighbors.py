@@ -154,6 +154,7 @@ def test_a_long_delay_access_link_pins_each_peer_at_the_access_interface_it_is_l
         static_neighbors=facts.static_neighbors,
         long_delay_interfaces=facts.long_delay_interfaces,
         long_delay_access_peers=facts.long_delay_access_peers,
+        terminal_admin_follows_link=facts.terminal_admin_follows_link,
     )
     pinned = handle.access_neighbors_for(station, "term1")
     assert pinned.lladdr == link_interface_mac(station, "term1")

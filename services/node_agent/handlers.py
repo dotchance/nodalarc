@@ -9,9 +9,9 @@ all netlink operations (setns-based, no fork).
 
 IMPORTANT — node ID contract:
   Node IDs in Node Agent protobuf messages MUST use the runtime node ID from
-  the resolved session manifest, not the sanitized K8s pod name. The ground
-  bridge naming helpers derive host veth names from that node ID, and Linux
-  interface names are case-sensitive.
+  the resolved session manifest, not the sanitized K8s pod name. Host veth
+  names are derived from that node ID, and Linux interface names are
+  case-sensitive.
 
 Error handling: every per-link operation is wrapped in try/except.
 A single failing link does not prevent other links in the batch from
@@ -25,9 +25,10 @@ import logging
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
+from typing import NamedTuple
 
 from nodalarc.proto import node_agent_pb2
-from nodalarc.runtime_naming import link_interface_mac, vxlan_host_ifnames
+from nodalarc.runtime_naming import link_interface_mac, terminal_host_name, vxlan_host_ifnames
 from nodalarc.substrate.queue_sizing import queue_limit_packets
 
 from node_agent import (
@@ -116,21 +117,53 @@ def _requires_mpls(node_id: str, handles: dict[str, NamespaceHandle]) -> bool:
     return handles[node_id].mpls_enable
 
 
-def _extract_ground_ifaces(iface) -> tuple[str, str]:
-    """Extract (gs_ifname, sat_ifname) from a ground link protobuf.
+def _assigned(entry) -> bool:
+    """Whether an entry's link runs between terminal interfaces OME assigned for one pass."""
+    return entry.link_type == node_agent_pb2.LINK_TYPE_ASSIGNED
 
-    The Scheduler sets interface_name for node_id's side and
-    peer_interface_name for the other side. Both must be present.
-    """
-    if not iface.peer_interface_name:
+
+class _End(NamedTuple):
+    """One end of a pass: the node, its pod interface and the host port behind it."""
+
+    node_id: str
+    ifname: str
+    host_ifname: str
+
+
+def _pass_ends(entry) -> tuple[_End, _End]:
+    """Both ends of an ASSIGNED entry: the entry's own end, then its peer's. A LOCAL entry of a
+    local pass acts on both; every other entry acts on its own end and names its peer."""
+    if not entry.peer_node_id or not entry.peer_interface_name:
         raise ValueError(
-            f"Ground link {iface.gs_id}<->{iface.sat_id}: "
-            "peer_interface_name not set — "
-            "Scheduler must populate both interface names"
+            f"link entry {entry.node_id}/{entry.interface_name} names no peer end: the "
+            "Scheduler must state both ends"
         )
-    if iface.node_id == iface.gs_id:
-        return iface.interface_name, iface.peer_interface_name
-    return iface.peer_interface_name, iface.interface_name
+    return (
+        _End(
+            entry.node_id,
+            entry.interface_name,
+            terminal_host_name(entry.node_id, entry.interface_name),
+        ),
+        _End(
+            entry.peer_node_id,
+            entry.peer_interface_name,
+            terminal_host_name(entry.peer_node_id, entry.peer_interface_name),
+        ),
+    )
+
+
+def _pod_end(
+    node_id: str, ifname: str, handles: dict[str, NamespaceHandle]
+) -> ground_bridge.PodEnd | None:
+    """The pod interface of a terminal whose admin state follows its link, or None.
+
+    The wiring manifest states it per node (``NamespaceHandle.terminal_admin_follows_link``).
+    A node with no handle here has its pod on another host: nothing of it is set from this one.
+    """
+    handle = handles.get(node_id)
+    if handle is None or not handle.terminal_admin_follows_link:
+        return None
+    return (_require_pid(node_id, handles), ifname)
 
 
 def _iface_key(iface) -> tuple[str, str]:
@@ -439,18 +472,11 @@ def _isl_link_down(
 
 def _end_host_ifname(entry) -> str:
     """The host-side veth through which a pod link interface receives, for any entry naming one
-    end. An ISL end's is its mediated veth (local) or its VXLAN veth (cross-node); a ground end's
-    is the station's bridge port or the satellite's host veth, in both localities (a cross-node
-    ground link joins that veth to its tunnel)."""
-    if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
-        if entry.node_id == entry.gs_id:
-            return ground_bridge._gs_host_veth(entry.gs_id, entry.interface_name)
-        if entry.node_id == entry.sat_id:
-            return ground_bridge._sat_host_veth(entry.sat_id, entry.interface_name)
-        raise ValueError(
-            f"ground entry names {entry.node_id!r}, neither its station {entry.gs_id!r} nor its "
-            f"satellite {entry.sat_id!r}"
-        )
+    end. A fixed end's is its mediated veth (local) or its VXLAN veth (cross-node). An assigned
+    terminal's is its host port from wiring, in both localities (a cross-node pass joins that
+    port to its tunnel)."""
+    if _assigned(entry):
+        return terminal_host_name(entry.node_id, entry.interface_name)
     if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
         return vxlan_host_ifnames(entry.vni).host_veth
     return ground_bridge._isl_host_name(
@@ -465,14 +491,14 @@ def _host_ifname_down(iface: node_agent_pb2.InterfaceDown) -> str:
 
 def _long_delay_entry(entry, handles: dict[str, NamespaceHandle]) -> bool:
     """Whether an entry names one end of a long-delay link: a fixed link the manifest classes
-    long-delay, or an access link to a peer the manifest lists as a long-delay access peer. A
-    fixed interface's class is the session's; an access interface's is its peer's, per pass."""
+    long-delay, or a pass to a peer the manifest lists as a long-delay peer of the node's
+    assigned terminals. A fixed interface's class is the session's; an assigned terminal's is
+    its peer's, per pass."""
     handle = handles.get(entry.node_id)
     if handle is None:
         return False
-    if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
-        peer = entry.sat_id if entry.node_id == entry.gs_id else entry.gs_id
-        return handle.long_delay_access_peer(peer)
+    if _assigned(entry):
+        return handle.long_delay_access_peer(entry.peer_node_id)
     return handle.is_long_delay(entry.interface_name)
 
 
@@ -595,8 +621,8 @@ def _close_long_delay_end(
         device = loss.QueueDevice(host_ifname, None)
         before = device.counts()
         (discarded,) = loss.counted_reset([device], lambda: _set_host_down(host_ifname))
-        if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
-            proofs = _close_ground_end(iface, handles, pid, host_ifname)
+        if _assigned(iface):
+            proofs = _close_assigned_end(iface, handles, host_ifname)
         elif iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
             vxlan.destroy_vxlan_link(pid, iface.interface_name, iface.vni)
             proofs = [kernel_verifier.verify_vxlan_absent(iface.vni)]
@@ -627,10 +653,10 @@ def _pin_access_neighbors(
     peer_ifname: str,
     handles: dict[str, NamespaceHandle],
 ) -> list[kernel_verifier.Proof]:
-    """On a long-delay access link, pin the peer's addresses to the peer access interface's link
+    """On a long-delay pass, pin the peer's addresses to the peer terminal interface's link
     address on this end, as a fixed long-delay link does: address resolution cannot complete
-    across it. The peer is chosen per pass, so the pin is made at each ground LinkUp. Returns
-    the proofs of this end's own link address and the pins; none on a local access link."""
+    across it. The peer is chosen per pass, so the pin is made at each LinkUp. Returns the
+    proofs of this end's own link address and the pins; none on a local pass."""
     neighbors = handles[node_id].access_neighbors_for(peer_node_id, peer_ifname)
     if neighbors is None:
         return []
@@ -649,8 +675,8 @@ def _unpin_access_neighbors(
     peer_ifname: str,
     handles: dict[str, NamespaceHandle],
 ) -> list[kernel_verifier.Proof]:
-    """Remove a long-delay access link's pins at its ground LinkDown, and prove them gone: the
-    interface's next pass may link it to another peer."""
+    """Remove a long-delay pass's pins at its LinkDown, and prove them gone: the interface's
+    next pass may link it to another peer."""
     neighbors = handles[node_id].access_neighbors_for(peer_node_id, peer_ifname)
     if neighbors is None:
         return []
@@ -659,27 +685,26 @@ def _unpin_access_neighbors(
     return [kernel_verifier.verify_static_neighbors_absent(pid, ifname, neighbors.addresses)]
 
 
-def _close_ground_end(
+def _close_assigned_end(
     iface: node_agent_pb2.InterfaceDown,
     handles: dict[str, NamespaceHandle],
-    pid: int,
     host_ifname: str,
 ) -> list[kernel_verifier.Proof]:
-    """The teardown of one long-delay ground end after its receive queue was reset: its outgoing
-    redirect goes (local: the host veth's ingress redirect toward its peer; cross-node: the
-    tunnel), a satellite's terminal interface goes down, the contact is cleared from its host
-    veth (which lives for the session and serves its next pass) and its pins are removed. The
-    peer end keeps draining: its queue is on its own host veth."""
-    is_sat = iface.node_id == iface.sat_id
+    """The teardown of one end of a long-delay pass after its receive queue was reset: its
+    outgoing redirect goes (local: the host port's ingress redirect toward its peer;
+    cross-node: the tunnel), its pod interface goes down when its admin state follows the link,
+    the contact is cleared from its host port (which lives for the session and serves its next
+    pass) and its pins are removed. The peer end keeps draining: its queue is on its own host
+    port."""
+    pod_end = _pod_end(iface.node_id, iface.interface_name, handles)
     if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
-        vxlan.detach_cross_node_ground(
-            host_ifname, iface.vni, pid if is_sat else None, iface.interface_name
-        )
+        vxlan.detach_cross_node_terminal(host_ifname, iface.vni, pod_end)
         proofs = [kernel_verifier.verify_vxlan_absent(iface.vni)]
     else:
-        ground_bridge.remove_redirect(iface.gs_id, host_ifname)
-        if is_sat:
-            namespace_ops.set_pod_interface_down(pid, iface.interface_name)
+        peer_host = terminal_host_name(iface.peer_node_id, iface.peer_interface_name)
+        ground_bridge.remove_redirect(host_ifname, peer_host)
+        if pod_end is not None:
+            namespace_ops.set_interface_admin(*pod_end, up=False)
         proofs = [kernel_verifier.verify_host_interface_state(host_ifname, admin_up=False)]
     namespace_ops.tag_contact(host_ifname, None)
     proofs.extend(
@@ -694,34 +719,28 @@ def _close_ground_end(
     return proofs
 
 
-def _ground_long_delay_stage(
+def _assigned_long_delay_stage(
     iface: node_agent_pb2.InterfaceUp,
     handles: dict[str, NamespaceHandle],
     fence: RuntimeFence,
 ) -> EntryOutcome:
-    """PREPARE or OPEN of one end of a long-delay ground contact: the stages a long-delay fixed
-    link's end runs, on the ground end's pod interface and host veth. PREPARE stops admission
-    before the path can forward, joins the path (the shared redirect pair on one host, the
-    tunnel across hosts), builds the end's transmit shaping, receive queue and pins, and records
-    the contact. OPEN admits."""
+    """PREPARE or OPEN of one end of a long-delay pass: the stages a long-delay fixed link's end
+    runs, on the terminal's pod interface and host port. PREPARE stops admission before the
+    path can forward, joins the path (this end's direction of the redirect on one host, the
+    tunnel across hosts), builds the end's transmit shaping, receive queue and pins, and
+    records the contact. OPEN admits."""
     try:
         pid = _require_pid(iface.node_id, handles)
         host_ifname = _end_host_ifname(iface)
         if iface.stage == node_agent_pb2.LINK_UP_STAGE_OPEN:
             return _open_prepared_contact(pid, host_ifname, iface)
         admission.stop_admission(pid, iface.interface_name)
-        is_sat = iface.node_id == iface.sat_id
-        gs_ifname = iface.peer_interface_name if is_sat else iface.interface_name
-        sat_ifname = iface.interface_name if is_sat else iface.peer_interface_name
+        pod_end = _pod_end(iface.node_id, iface.interface_name, handles)
         if iface.locality == node_agent_pb2.LOCALITY_LOCAL:
             # Each end joins its own direction; the peer end's PREPARE joins the other, and the
             # barrier opens neither before both.
-            gs_port = ground_bridge._gs_host_veth(iface.gs_id, gs_ifname)
-            sat_host = ground_bridge._sat_host_veth(iface.sat_id, sat_ifname)
-            peer_host = gs_port if is_sat else sat_host
-            ground_bridge.attach_ground_end(
-                iface.gs_id, host_ifname, peer_host, pid if is_sat else None, sat_ifname
-            )
+            peer_host = terminal_host_name(iface.peer_node_id, iface.peer_interface_name)
+            ground_bridge.attach_terminal_end(host_ifname, peer_host, pod_end)
             path = [
                 kernel_verifier.verify_host_interface_state(host_ifname, admin_up=True),
                 kernel_verifier.verify_host_interface_state(peer_host, admin_up=True),
@@ -732,13 +751,12 @@ def _ground_long_delay_stage(
 
             local_ip = _discover_local_ip()
             substrate_monitor.require_fresh_measurement_for_remote_ip(iface.remote_node_ip)
-            vxlan.attach_cross_node_ground(
+            vxlan.attach_cross_node_terminal(
                 local_host_ifname=host_ifname,
                 local_ip=local_ip,
                 remote_ip=iface.remote_node_ip,
                 vni=iface.vni,
-                sat_pid=pid if is_sat else None,
-                sat_ifname=sat_ifname,
+                pod_end=pod_end,
             )
             substrate_monitor.add_peer_ref(
                 substrate_monitor.PeerRef(
@@ -770,16 +788,16 @@ def _ground_long_delay_stage(
         )
         if _requires_mpls(iface.node_id, handles):
             proofs.append(kernel_verifier.verify_mpls_input(pid, iface.interface_name))
-        outcome = _combine_proofs("long-delay ground PREPARE verified", proofs)
+        outcome = _combine_proofs("long-delay pass PREPARE verified", proofs)
         return replace(outcome, loss=ended) if ended is not None else outcome
     except Exception as exc:
-        msg = f"long-delay ground stage failed {iface.node_id}/{iface.interface_name}: {exc}"
+        msg = f"long-delay pass stage failed {iface.node_id}/{iface.interface_name}: {exc}"
         log.warning(msg)
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
 
 def _admit_local_pass(node_id: str, ifname: str, handles: dict[str, NamespaceHandle]) -> None:
-    """A local pass on an access interface that can carry long-delay passes: the admission hook
+    """A local pass on a terminal interface that can carry long-delay passes: the admission hook
     wiring installed (stopped), or a closed long-delay pass left stopped, opens. The shaping the
     local pass applies replaces whatever layout the interface carried."""
     if not handles[node_id].carries_long_delay_access:
@@ -789,107 +807,196 @@ def _admit_local_pass(node_id: str, ifname: str, handles: dict[str, NamespaceHan
     admission.open_admission(pid, ifname)
 
 
-def _ground_link_down(
+def _mpls_proofs(
+    ends: tuple[_End, ...], handles: dict[str, NamespaceHandle]
+) -> list[kernel_verifier.Proof]:
+    """MPLS input on each end's pod interface, by its node's own manifest requirement. An end
+    whose pod is on another host is proven there."""
+    return [
+        kernel_verifier.verify_mpls_input(_require_pid(end.node_id, handles), end.ifname)
+        for end in ends
+        if end.node_id in handles and _requires_mpls(end.node_id, handles)
+    ]
+
+
+def _local_pass_up_proofs(
+    entry: node_agent_pb2.InterfaceUp | node_agent_pb2.KernelInventoryEntry,
+    handles: dict[str, NamespaceHandle],
+) -> list[kernel_verifier.Proof]:
+    """The proof of a local pass that is up, both ends on this host: both host ports admin up,
+    the redirect between them both ways, and each end shaped as its own terminal (the delay and
+    transmit rate on its pod interface, the receive rate on its host port). The one list for the
+    operation: its LinkUp and its KernelInventory both return it."""
+    own, peer = _pass_ends(entry)
+    proofs = [
+        kernel_verifier.verify_host_interface_state(own.host_ifname, admin_up=True),
+        kernel_verifier.verify_host_interface_state(peer.host_ifname, admin_up=True),
+        kernel_verifier.verify_mirred(own.host_ifname, peer.host_ifname),
+        kernel_verifier.verify_mirred(peer.host_ifname, own.host_ifname),
+    ]
+    for end, delay_ms, rates in (
+        (own, entry.latency_ms, entry.rates),
+        (peer, entry.peer_latency_ms, entry.peer_rates),
+    ):
+        proofs.append(
+            kernel_verifier.verify_qdisc(
+                _require_pid(end.node_id, handles),
+                end.ifname,
+                delay_ms=delay_ms,
+                transmit_mbps=rates.transmit_mbps,
+            )
+        )
+        proofs.append(
+            kernel_verifier.verify_receive_shaping(end.host_ifname, receive_mbps=rates.receive_mbps)
+        )
+    proofs.extend(_mpls_proofs((own, peer), handles))
+    return proofs
+
+
+def _local_pass_down_proofs(
+    entry: node_agent_pb2.InterfaceDown | node_agent_pb2.KernelInventoryEntry,
+    handles: dict[str, NamespaceHandle],
+) -> list[kernel_verifier.Proof]:
+    """The proof of a local pass that is down, both ends on this host: both host ports admin
+    down and both pod interfaces still present for the next pass. The one list for the
+    operation: its LinkDown and its KernelInventory both return it."""
+    own, peer = _pass_ends(entry)
+    proofs = []
+    for end in (own, peer):
+        proofs.append(kernel_verifier.verify_host_interface_state(end.host_ifname, admin_up=False))
+        proofs.append(
+            kernel_verifier.verify_pod_interface_exists(
+                _require_pid(end.node_id, handles), end.ifname
+            )
+        )
+    proofs.extend(_mpls_proofs((own, peer), handles))
+    return proofs
+
+
+def _cross_end_up_proofs(
+    entry: node_agent_pb2.InterfaceUp | node_agent_pb2.KernelInventoryEntry,
+    handles: dict[str, NamespaceHandle],
+    local_ip: str,
+) -> list[kernel_verifier.Proof]:
+    """The proof of this host's end of a cross-node pass that is up: its host port admin up,
+    the tunnel to the peer host, the redirect between the two both ways, and the end shaped as
+    its own terminal. The one list for the operation: its LinkUp and its KernelInventory both
+    return it."""
+    own, _peer = _pass_ends(entry)
+    pid = _require_pid(own.node_id, handles)
+    tunnel = vxlan_host_ifnames(entry.vni).tunnel
+    return [
+        kernel_verifier.verify_host_interface_state(own.host_ifname, admin_up=True),
+        kernel_verifier.verify_vxlan(entry.vni, local_ip=local_ip, remote_ip=entry.remote_node_ip),
+        kernel_verifier.verify_mirred(tunnel, own.host_ifname),
+        kernel_verifier.verify_mirred(own.host_ifname, tunnel),
+        kernel_verifier.verify_qdisc(
+            pid,
+            own.ifname,
+            delay_ms=entry.latency_ms,
+            transmit_mbps=entry.rates.transmit_mbps,
+        ),
+        kernel_verifier.verify_receive_shaping(
+            own.host_ifname, receive_mbps=entry.rates.receive_mbps
+        ),
+        *_mpls_proofs((own,), handles),
+    ]
+
+
+def _cross_end_down_proofs(
+    entry: node_agent_pb2.InterfaceDown | node_agent_pb2.KernelInventoryEntry,
+    handles: dict[str, NamespaceHandle],
+) -> list[kernel_verifier.Proof]:
+    """The proof of this host's end of a cross-node pass that is down: the tunnel gone, the
+    host port admin down, and the pod interface still present for the next pass when its pod
+    is on this host. The one list for the operation: its LinkDown and its KernelInventory both
+    return it."""
+    own, _peer = _pass_ends(entry)
+    proofs = [
+        kernel_verifier.verify_vxlan_absent(entry.vni),
+        kernel_verifier.verify_host_interface_state(own.host_ifname, admin_up=False),
+    ]
+    if own.node_id in handles:
+        proofs.append(
+            kernel_verifier.verify_pod_interface_exists(
+                _require_pid(own.node_id, handles), own.ifname
+            )
+        )
+    proofs.extend(_mpls_proofs((own,), handles))
+    return proofs
+
+
+def _unpin_both_ends(
+    entry: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle]
+) -> list[kernel_verifier.Proof]:
+    """Remove the pins of each end of a pass whose pod is on this host."""
+    own, peer = _pass_ends(entry)
+    proofs: list[kernel_verifier.Proof] = []
+    for end, other in ((own, peer), (peer, own)):
+        if end.node_id in handles:
+            proofs.extend(
+                _unpin_access_neighbors(
+                    end.node_id, end.ifname, other.node_id, other.ifname, handles
+                )
+            )
+    return proofs
+
+
+def _local_pass_down(
     iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
-    """Tear down a ground link.
+    """End a local pass between two terminal interfaces on this host.
 
-    Ground LinkDown sequence:
-    1. Remove tc mirred redirect from host-side veths
-    2. Bring satellite host-side veth DOWN — carrier drops on GS gnd0
-       automatically (UP → LOWERLAYERDOWN), FRR tears down adjacency
-    3. Bring satellite gnd0 DOWN
+    LinkDown sequence (``ground_bridge.detach_terminals``):
+    1. Remove the tc mirred redirect between the two host ports
+    2. Bring down each pod interface whose admin state follows its link
+    3. Bring both host ports DOWN: carrier drops on both pod interfaces (UP to
+       LOWERLAYERDOWN), and a routing stack behind either tears its adjacency down
 
-    Pod-side tc qdiscs on both gnd0 interfaces are left in place —
-    apply_transmit_shaping uses replace semantics on the next LinkUp.
-
-    No explicit admin state manipulation on GS gnd0 — host-side veth state
-    drives carrier which drives FRR behavior.
+    The tc qdiscs on both pod interfaces are left in place: apply_transmit_shaping uses
+    replace semantics on the next LinkUp.
     """
     try:
         if handles is None:
             raise ValueError("handles is None — wiring not complete?")
-        pm = handles
-        sat_pid = _require_pid(iface.sat_id, pm)
-        gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
-        ground_bridge.detach_from_ground_bridge(
-            iface.gs_id,
-            iface.sat_id,
-            sat_pid,
-            gs_ifname=gs_ifname,
-            sat_ifname=sat_ifname,
-        )
-        gs_port = ground_bridge._gs_host_veth(iface.gs_id, gs_ifname)
-        sat_host = ground_bridge._sat_host_veth(iface.sat_id, sat_ifname)
+        own, peer = _pass_ends(iface)
+        pod_ends = [
+            pod_end
+            for end in (own, peer)
+            if (pod_end := _pod_end(end.node_id, end.ifname, handles)) is not None
+        ]
+        ground_bridge.detach_terminals(own.host_ifname, peer.host_ifname, pod_ends)
         return _combine_proofs(
-            "LOCAL ground LinkDown verified",
-            [
-                kernel_verifier.verify_host_interface_state(gs_port, admin_up=False),
-                kernel_verifier.verify_host_interface_state(sat_host, admin_up=False),
-                kernel_verifier.verify_pod_interface_exists(sat_pid, sat_ifname),
-                *_unpin_access_neighbors(iface.gs_id, gs_ifname, iface.sat_id, sat_ifname, pm),
-                *_unpin_access_neighbors(iface.sat_id, sat_ifname, iface.gs_id, gs_ifname, pm),
-            ],
+            "LOCAL pass LinkDown verified",
+            [*_local_pass_down_proofs(iface, handles), *_unpin_both_ends(iface, handles)],
         )
     except Exception as exc:
-        msg = f"Ground down failed {iface.gs_id}<->{iface.sat_id}: {exc}"
+        msg = f"Pass down failed {iface.node_id}<->{iface.peer_node_id}: {exc}"
         log.warning(msg)
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
 
-def _cross_node_ground_down(
-    iface: node_agent_pb2.InterfaceDown,
-    handles: dict[str, NamespaceHandle],
-    host_ifname: str,
-    sat_pid: int | None,
-    sat_ifname: str,
-) -> EntryOutcome | None:
-    """This host's end of a cross-node ground LinkDown: the VXLAN detach, then on a long-delay
-    access link the removal of the pins this end made. None when there are no pins: the caller
-    proves the VXLAN gone, as for every cross-node detach."""
-    vxlan.detach_cross_node_ground(host_ifname, iface.vni, sat_pid, sat_ifname)
-    if iface.node_id not in handles:
-        return None
-    unpinned = _unpin_access_neighbors(
-        iface.node_id, iface.interface_name, iface.peer_node_id, iface.peer_interface_name, handles
-    )
-    if not unpinned:
-        return None
-    return _combine_proofs(
-        "CROSS_NODE ground LinkDown verified",
-        [kernel_verifier.verify_vxlan_absent(iface.vni), *unpinned],
-    )
-
-
-def _local_ground_delays(message) -> tuple[float, float]:
-    """(station egress, satellite egress) delay of a LOCAL ground message, which names one end
-    as node_id (its delay in latency_ms) and the other as its peer (peer_latency_ms). Each end's
-    egress carries the direction that end transmits."""
-    if message.node_id == message.gs_id:
-        return message.latency_ms, message.peer_latency_ms
-    if message.node_id == message.sat_id:
-        return message.peer_latency_ms, message.latency_ms
-    raise ValueError(
-        f"LOCAL ground message names {message.node_id!r}, neither its station "
-        f"{message.gs_id!r} nor its satellite {message.sat_id!r}"
-    )
-
-
-def _ground_terminal_rates(
-    entry: node_agent_pb2.InterfaceUp | node_agent_pb2.KernelInventoryEntry,
-) -> tuple[node_agent_pb2.TerminalRates, node_agent_pb2.TerminalRates]:
-    """(ground station rates, satellite rates) of a LOCAL ground entry.
-
-    ``rates`` belongs to the entry's own node and ``peer_rates`` to its peer.
-    """
-    if entry.node_id == entry.gs_id and entry.peer_node_id == entry.sat_id:
-        return entry.rates, entry.peer_rates
-    if entry.node_id == entry.sat_id and entry.peer_node_id == entry.gs_id:
-        return entry.peer_rates, entry.rates
-    raise ValueError(
-        f"ground entry {entry.node_id}<->{entry.peer_node_id} does not name "
-        f"{entry.gs_id} and {entry.sat_id}"
-    )
+def _cross_node_pass_down(
+    iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle]
+) -> EntryOutcome:
+    """This host's end of a cross-node pass LinkDown: the pod interface down when its admin
+    state follows its link, the redirect and the tunnel removed, the host port down, then on a
+    long-delay pass the removal of the pins this end made."""
+    try:
+        own, _peer = _pass_ends(iface)
+        vxlan.detach_cross_node_terminal(
+            own.host_ifname, iface.vni, _pod_end(own.node_id, own.ifname, handles)
+        )
+        return _combine_proofs(
+            "CROSS_NODE pass LinkDown verified",
+            [*_cross_end_down_proofs(iface, handles), *_unpin_both_ends(iface, handles)],
+        )
+    except PidNotFoundError as exc:
+        return _fail(node_agent_pb2.NODE_AGENT_PID_NOT_FOUND, str(exc))
+    except Exception as exc:
+        msg = f"Pass down failed {iface.node_id}/{iface.interface_name}: {exc}"
+        log.warning(msg)
+        return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
 
 def _isl_host_ifname(iface: node_agent_pb2.InterfaceUp) -> str:
@@ -897,82 +1004,48 @@ def _isl_host_ifname(iface: node_agent_pb2.InterfaceUp) -> str:
     return _end_host_ifname(iface)
 
 
-def _ground_link_up(
+def _local_pass_up(
     iface: node_agent_pb2.InterfaceUp, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
-    """Bring up a ground link with bridge attach + shaping.
+    """Bring up a local pass between two terminal interfaces on this host.
 
-    Ground LinkUp sequence:
-    1. attach_to_ground_bridge (host veths UP, sat gnd0 UP, mirred redirect)
-       — carrier arrives on GS gnd0 automatically (LOWERLAYERDOWN → UP)
-    2. Shape each end as its own terminal: pod egress at the terminal's
-       transmit rate with the link delay, and the host-side veth feeding the
-       pod at the terminal's receive rate
+    LinkUp sequence:
+    1. ``ground_bridge.attach_terminals``: both host ports UP (carrier arrives on both pod
+       interfaces, LOWERLAYERDOWN to UP), each pod interface whose admin state follows its
+       link UP, the mirred redirect between the host ports
+    2. Shape each end as its own terminal: pod egress at the terminal's transmit rate with the
+       link delay, and the host port feeding the pod at the terminal's receive rate
 
-    No explicit admin state manipulation on GS gnd0 — host-side veth state
-    drives carrier which drives FRR behavior.
-
-    Layer 3 neighbor resolution (NDP) is NOT performed here. NDP is owned
-    by FRR (IGP sessions, via IS-IS/OSPF hello) and the kernel NDP state
-    machine (NodalPath sessions, on first forwarding attempt). See PRD
-    §13.22.6 — v0.72 reversal.
+    Layer 3 neighbor resolution is not performed here: the routing stack and the kernel
+    resolve neighbors once carrier is up.
     """
     try:
         if handles is None:
             raise ValueError("handles is None — wiring not complete?")
-        pm = handles
-        sat_pid = _require_pid(iface.sat_id, pm)
-        gs_pid = _require_pid(iface.gs_id, pm)
-        gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
-        _admit_local_pass(iface.gs_id, gs_ifname, pm)
-        _admit_local_pass(iface.sat_id, sat_ifname, pm)
-        ground_bridge.attach_to_ground_bridge(
-            iface.gs_id,
-            iface.sat_id,
-            sat_pid,
-            gs_ifname=gs_ifname,
-            sat_ifname=sat_ifname,
-        )
-        gs_rates, sat_rates = _ground_terminal_rates(iface)
-        gs_delay_ms, sat_delay_ms = _local_ground_delays(iface)
-        gs_port = ground_bridge._gs_host_veth(iface.gs_id, gs_ifname)
-        sat_host = ground_bridge._sat_host_veth(iface.sat_id, sat_ifname)
-        namespace_ops.apply_transmit_shaping(gs_pid, gs_ifname, gs_delay_ms, gs_rates.transmit_mbps)
-        namespace_ops.apply_transmit_shaping(
-            sat_pid, sat_ifname, sat_delay_ms, sat_rates.transmit_mbps
-        )
-        namespace_ops.apply_receive_shaping(gs_port, gs_rates.receive_mbps, access=True)
-        namespace_ops.apply_receive_shaping(sat_host, sat_rates.receive_mbps, access=True)
+        own, peer = _pass_ends(iface)
+        pod_ends = []
+        for end in (own, peer):
+            _admit_local_pass(end.node_id, end.ifname, handles)
+            pod_end = _pod_end(end.node_id, end.ifname, handles)
+            if pod_end is not None:
+                pod_ends.append(pod_end)
+        ground_bridge.attach_terminals(own.host_ifname, peer.host_ifname, pod_ends)
+        for end, delay_ms, rates in (
+            (own, iface.latency_ms, iface.rates),
+            (peer, iface.peer_latency_ms, iface.peer_rates),
+        ):
+            namespace_ops.apply_transmit_shaping(
+                _require_pid(end.node_id, handles), end.ifname, delay_ms, rates.transmit_mbps
+            )
+            namespace_ops.apply_receive_shaping(end.host_ifname, rates.receive_mbps, access=True)
         proofs = [
-            kernel_verifier.verify_host_interface_state(gs_port, admin_up=True),
-            kernel_verifier.verify_host_interface_state(sat_host, admin_up=True),
-            kernel_verifier.verify_mirred(gs_port, sat_host),
-            kernel_verifier.verify_mirred(sat_host, gs_port),
-            kernel_verifier.verify_qdisc(
-                gs_pid,
-                gs_ifname,
-                delay_ms=gs_delay_ms,
-                transmit_mbps=gs_rates.transmit_mbps,
-            ),
-            kernel_verifier.verify_qdisc(
-                sat_pid,
-                sat_ifname,
-                delay_ms=sat_delay_ms,
-                transmit_mbps=sat_rates.transmit_mbps,
-            ),
-            kernel_verifier.verify_receive_shaping(gs_port, receive_mbps=gs_rates.receive_mbps),
-            kernel_verifier.verify_receive_shaping(sat_host, receive_mbps=sat_rates.receive_mbps),
-            *_pin_access_neighbors(iface.gs_id, gs_ifname, iface.sat_id, sat_ifname, pm),
-            *_pin_access_neighbors(iface.sat_id, sat_ifname, iface.gs_id, gs_ifname, pm),
+            *_local_pass_up_proofs(iface, handles),
+            *_pin_access_neighbors(own.node_id, own.ifname, peer.node_id, peer.ifname, handles),
+            *_pin_access_neighbors(peer.node_id, peer.ifname, own.node_id, own.ifname, handles),
         ]
-        # Each endpoint by its own manifest requirement.
-        if _requires_mpls(iface.gs_id, pm):
-            proofs.append(kernel_verifier.verify_mpls_input(gs_pid, gs_ifname))
-        if _requires_mpls(iface.sat_id, pm):
-            proofs.append(kernel_verifier.verify_mpls_input(sat_pid, sat_ifname))
-        return _combine_proofs("LOCAL ground LinkUp verified", proofs)
+        return _combine_proofs("LOCAL pass LinkUp verified", proofs)
     except Exception as exc:
-        msg = f"Ground up failed {iface.gs_id}<->{iface.sat_id}: {exc}"
+        msg = f"Pass up failed {iface.node_id}<->{iface.peer_node_id}: {exc}"
         log.warning(msg)
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
@@ -1160,38 +1233,13 @@ def handle_batch_link_down(
         if sample is not None:
             samples[_iface_key(iface)] = sample
         if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE and iface.vni:
-            if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
-                # CROSS_NODE GROUND: detach VXLAN from existing host-side interface
-                gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
-                is_sat = iface.node_id == iface.sat_id
-                if is_sat:
-                    host_ifname = ground_bridge._sat_host_veth(iface.node_id, sat_ifname)
-                    # Absent handle means the pod side lives on another host
-                    # (legitimate cross-node state); a present handle must
-                    # still verify before its namespace is mutated.
-                    if iface.node_id in pm:
-                        try:
-                            sat_pid = _require_pid(iface.node_id, pm)
-                        except PidNotFoundError as exc:
-                            outcomes[_iface_key(iface)] = _fail(
-                                node_agent_pb2.NODE_AGENT_PID_NOT_FOUND, str(exc)
-                            )
-                            continue
-                    else:
-                        sat_pid = 0
-                else:
-                    host_ifname = ground_bridge._gs_host_veth(iface.node_id, gs_ifname)
-                    sat_pid = None
-                fut = _BATCH_POOL.submit(
-                    _cross_node_ground_down,
-                    iface,
-                    pm,
-                    host_ifname,
-                    sat_pid if is_sat else None,
-                    sat_ifname,
-                )
+            if _assigned(iface):
+                # CROSS_NODE pass: detach the tunnel from the terminal's host port. A node
+                # with no handle has its pod on another host; a present handle is verified
+                # before its namespace is changed (``_pod_end``).
+                fut = _BATCH_POOL.submit(_cross_node_pass_down, iface, pm)
             else:
-                # CROSS_NODE ISL: destroy full VXLAN + veth pair
+                # CROSS_NODE fixed link: destroy full VXLAN + veth pair
                 try:
                     pid = _require_pid(iface.node_id, pm)
                 except Exception as exc:
@@ -1202,8 +1250,8 @@ def handle_batch_link_down(
                 fut = _BATCH_POOL.submit(
                     vxlan.destroy_vxlan_link, pid, iface.interface_name, iface.vni
                 )
-        elif iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
-            fut = _BATCH_POOL.submit(_ground_link_down, iface, pm)
+        elif _assigned(iface):
+            fut = _BATCH_POOL.submit(_local_pass_down, iface, pm)
         else:
             fut = _BATCH_POOL.submit(_isl_link_down, iface, pm)
         futures[fut] = iface
@@ -1308,9 +1356,8 @@ def _local_queue_sample(
     leaving between this read and the reset; the result says so (``discarded_exact`` false).
     The queues are the transmit queues on the pod interfaces the entry closes; an end on another
     host is not sampled here."""
-    if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
-        gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
-        ends = [(iface.gs_id, gs_ifname), (iface.sat_id, sat_ifname)]
+    if _assigned(iface):
+        ends = [(end.node_id, end.ifname) for end in _pass_ends(iface)]
     else:
         ends = [(iface.node_id, iface.interface_name)]
     held = 0
@@ -1375,7 +1422,7 @@ def _prepare_long_delay_contact(
         pid,
         iface.interface_name,
         iface.rates.transmit_mbps,
-        access=iface.link_type == node_agent_pb2.LINK_TYPE_GROUND,
+        access=_assigned(iface),
     )
     transmit_dropped = loss.QueueDevice(iface.interface_name, pid).counts().dropped
     ended: node_agent_pb2.LinkEndLoss | None = None
@@ -1626,19 +1673,13 @@ def handle_batch_link_up(
         raise ValueError("handles is None — wiring not complete?")
     pm = handles
 
-    # Validate PIDs before mutation. Per-interface locality:
-    # LOCAL GROUND needs both gs_id and sat_id PIDs (bridge ops).
-    # CROSS_NODE needs only node_id PID. LOCAL ISL needs node_id PID.
+    # Validate PIDs before mutation. Per-interface locality: a LOCAL pass entry acts on both
+    # ends, so it needs both nodes' PIDs. Every other entry acts on node_id's end only.
     for iface in request.interfaces:
         try:
-            if (
-                iface.link_type == node_agent_pb2.LINK_TYPE_GROUND
-                and iface.locality == node_agent_pb2.LOCALITY_LOCAL
-            ):
-                _require_pid(iface.gs_id, pm)
-                _require_pid(iface.sat_id, pm)
-            else:
-                _require_pid(iface.node_id, pm)
+            _require_pid(iface.node_id, pm)
+            if _assigned(iface) and iface.locality == node_agent_pb2.LOCALITY_LOCAL:
+                _require_pid(iface.peer_node_id, pm)
         except Exception as exc:
             return _batch_up_failure(
                 request,
@@ -1646,7 +1687,7 @@ def handle_batch_link_up(
                 message=str(exc),
             )
 
-    # A long-delay ISL end opens in two stages, PREPARE then OPEN; every other end opens at once
+    # A long-delay end opens in two stages, PREPARE then OPEN; every other end opens at once
     # (OPEN). A wrong stage is refused before any change.
     stage_refused: set[tuple[str, str]] = set()
     for iface in request.interfaces:
@@ -1663,10 +1704,9 @@ def handle_batch_link_up(
     # need VXLAN. LOCAL interfaces in the same batch are unaffected. A long-delay end's tunnel
     # is created at PREPARE; its OPEN finds the prepared one.
     #
-    # ISL CROSS_NODE: create VXLAN + veth pair, move veth into pod namespace
-    # GROUND CROSS_NODE: create VXLAN in host ns, tc mirred to existing host-side
-    #   interface (satellite _gnd_{sat} or GS _gbr-{gs}). Pod-side gnd0 already
-    #   exists from wiring. Same carrier model as LOCAL ground links.
+    # Fixed link, CROSS_NODE: create VXLAN + veth pair, move veth into pod namespace
+    # Pass, CROSS_NODE: create VXLAN in host ns, tc mirred to the terminal's host port. The
+    #   pod interface exists from wiring. Same carrier model as a LOCAL pass.
     local_ip: str | None = None
     preparation_failed: set[tuple[str, str]] = set(stage_refused)
     for iface in request.interfaces:
@@ -1675,13 +1715,13 @@ def handle_batch_link_up(
         ):
             continue
         if (
-            iface.link_type == node_agent_pb2.LINK_TYPE_ISL
+            not _assigned(iface)
             and iface.stage == node_agent_pb2.LINK_UP_STAGE_OPEN
             and pm[iface.node_id].is_long_delay(iface.interface_name)
         ):
             continue
-        if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND and _long_delay_entry(iface, pm):
-            # A long-delay ground end joins its tunnel in its own PREPARE (carrier stage).
+        if _assigned(iface) and _long_delay_entry(iface, pm):
+            # A long-delay pass end joins its tunnel in its own PREPARE (carrier stage).
             continue
         try:
             if local_ip is None:
@@ -1705,25 +1745,17 @@ def handle_batch_link_up(
             preparation_failed.add(_iface_key(iface))
             continue
 
-        if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
+        if _assigned(iface):
             try:
-                gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
-                is_sat = iface.node_id == iface.sat_id
-                if is_sat:
-                    host_ifname = ground_bridge._sat_host_veth(iface.node_id, sat_ifname)
-                    sat_pid = _require_pid(iface.node_id, pm)
-                else:
-                    host_ifname = ground_bridge._gs_host_veth(iface.node_id, gs_ifname)
-                    sat_pid = None
+                host_ifname = _end_host_ifname(iface)
                 local_pid = _require_pid(iface.node_id, pm)
                 _admit_local_pass(iface.node_id, iface.interface_name, pm)
-                vxlan.attach_cross_node_ground(
+                vxlan.attach_cross_node_terminal(
                     local_host_ifname=host_ifname,
                     local_ip=local_ip,
                     remote_ip=iface.remote_node_ip,
                     vni=iface.vni,
-                    sat_pid=sat_pid if is_sat else None,
-                    sat_ifname=sat_ifname,
+                    pod_end=_pod_end(iface.node_id, iface.interface_name, pm),
                 )
                 namespace_ops.apply_transmit_shaping(
                     local_pid,
@@ -1743,41 +1775,21 @@ def handle_batch_link_up(
                         local_ifname=iface.interface_name,
                     )
                 )
-                vxlan_if = vxlan_host_ifnames(iface.vni).tunnel
-                ground_proofs = [
-                    kernel_verifier.verify_vxlan(
-                        iface.vni, local_ip=local_ip, remote_ip=iface.remote_node_ip
-                    ),
-                    kernel_verifier.verify_mirred(vxlan_if, host_ifname),
-                    kernel_verifier.verify_mirred(host_ifname, vxlan_if),
-                    kernel_verifier.verify_qdisc(
-                        local_pid,
-                        iface.interface_name,
-                        delay_ms=iface.latency_ms,
-                        transmit_mbps=iface.rates.transmit_mbps,
-                    ),
-                    kernel_verifier.verify_receive_shaping(
-                        host_ifname, receive_mbps=iface.rates.receive_mbps
-                    ),
-                ]
-                if _requires_mpls(iface.node_id, pm):
-                    ground_proofs.append(
-                        kernel_verifier.verify_mpls_input(local_pid, iface.interface_name)
-                    )
-                ground_proofs.extend(
-                    _pin_access_neighbors(
-                        iface.node_id,
-                        iface.interface_name,
-                        iface.peer_node_id,
-                        iface.peer_interface_name,
-                        pm,
-                    )
-                )
                 outcomes[_iface_key(iface)] = _combine_proofs(
-                    "CROSS_NODE ground LinkUp verified", ground_proofs
+                    "CROSS_NODE pass LinkUp verified",
+                    [
+                        *_cross_end_up_proofs(iface, pm, local_ip),
+                        *_pin_access_neighbors(
+                            iface.node_id,
+                            iface.interface_name,
+                            iface.peer_node_id,
+                            iface.peer_interface_name,
+                            pm,
+                        ),
+                    ],
                 )
             except Exception as exc:
-                msg = f"VXLAN ground attach failed {iface.node_id}/{iface.interface_name}: {exc}"
+                msg = f"VXLAN pass attach failed {iface.node_id}/{iface.interface_name}: {exc}"
                 outcomes[_iface_key(iface)] = _fail(
                     node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED,
                     msg,
@@ -1785,7 +1797,7 @@ def handle_batch_link_up(
                 )
                 preparation_failed.add(_iface_key(iface))
         else:
-            # ISL: create full VXLAN + veth pair into pod namespace
+            # Fixed link: create full VXLAN + veth pair into pod namespace
             try:
                 pid = _require_pid(iface.node_id, pm)
                 created = vxlan.create_vxlan_link(
@@ -1833,26 +1845,22 @@ def handle_batch_link_up(
                 preparation_failed.add(_iface_key(iface))
 
     # Carrier stage: Bring interfaces UP + apply shaping.
-    # - LOCAL GROUND: bridge + mirred attach (_ground_link_up)
-    # - CROSS_NODE GROUND: VXLAN attach + local endpoint shaping handled above
-    # - LOCAL/CROSS_NODE ISL: UP + shaping (_isl_link_up_carrier_stage)
+    # - LOCAL pass: host ports up + mirred attach (_local_pass_up)
+    # - CROSS_NODE pass: VXLAN attach + local endpoint shaping handled above
+    # - LOCAL/CROSS_NODE fixed link: UP + shaping (_isl_link_up_carrier_stage)
     carrier_futures = {}
     for iface in request.interfaces:
         if _iface_key(iface) in preparation_failed:
             continue
-        if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND and _long_delay_entry(iface, pm):
-            carrier_futures[_BATCH_POOL.submit(_ground_long_delay_stage, iface, pm, fence)] = iface
+        if _assigned(iface) and _long_delay_entry(iface, pm):
+            carrier_futures[_BATCH_POOL.submit(_assigned_long_delay_stage, iface, pm, fence)] = (
+                iface
+            )
             continue
-        if (
-            iface.link_type == node_agent_pb2.LINK_TYPE_GROUND
-            and iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE
-        ):
+        if _assigned(iface) and iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
             continue
-        if (
-            iface.link_type == node_agent_pb2.LINK_TYPE_GROUND
-            and iface.locality == node_agent_pb2.LOCALITY_LOCAL
-        ):
-            carrier_futures[_BATCH_POOL.submit(_ground_link_up, iface, pm)] = iface
+        if _assigned(iface):
+            carrier_futures[_BATCH_POOL.submit(_local_pass_up, iface, pm)] = iface
         else:
             carrier_futures[_BATCH_POOL.submit(_isl_link_up_carrier_stage, iface, pm)] = iface
 
@@ -1877,7 +1885,7 @@ def handle_batch_link_up(
     upped += sum(
         1
         for iface in request.interfaces
-        if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND
+        if _assigned(iface)
         and iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE
         and outcomes.get(
             _iface_key(iface), EntryOutcome(error_code=node_agent_pb2.NODE_AGENT_INTERNAL_ERROR)
@@ -1953,18 +1961,18 @@ def _survey_long_delay_end(
     entry: node_agent_pb2.KernelInventoryEntry,
     handles: dict[str, NamespaceHandle] | None = None,
 ) -> EntryOutcome:
-    """Read-only report of what a long-delay ISL end carries: its contact, whether its admission
+    """Read-only report of what a long-delay end carries: its contact, whether its admission
     is stopped, and its receive queue's delay. A restarted Scheduler adopts it before it
     dispatches. A cross-node end whose pod interface is gone carries nothing."""
     try:
         if handles is None:
             raise ValueError("handles is None — wiring not complete?")
         pid = _require_pid(entry.node_id, handles)
-        # A ground terminal is surveyed for whatever pass it carries: its node must have a
-        # long-delay access peer, whichever peer the pass links it to.
+        # An assigned terminal is surveyed for whatever pass it carries: its node must have a
+        # long-delay peer, whichever peer the pass links it to.
         surveyable = (
             handles[entry.node_id].carries_long_delay_access
-            if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND
+            if _assigned(entry)
             else _long_delay_entry(entry, handles)
         )
         if not surveyable:
@@ -2001,7 +2009,7 @@ def _verify_long_delay_inventory_entry(
     entry: node_agent_pb2.KernelInventoryEntry,
     handles: dict[str, NamespaceHandle] | None = None,
 ) -> EntryOutcome:
-    """Read-only proof of a long-delay end, fixed or ground, in the stage its contact is in: open
+    """Read-only proof of a long-delay end, fixed or assigned, in the stage its contact is in: open
     or draining (the contact on the host-side veth, admission open or stopped, the rate shaper,
     the received direction's delay queue), or closed (the end carries no contact)."""
     try:
@@ -2063,127 +2071,25 @@ def _verify_kernel_inventory_entry(
     entry: node_agent_pb2.KernelInventoryEntry,
     handles: dict[str, NamespaceHandle] | None = None,
 ) -> EntryOutcome:
-    """Read-only GS-facing verification for actuation recovery."""
+    """Read-only proof of one pass for actuation recovery: the proof list its LinkUp returned
+    when the pass is expected up, the list its LinkDown returned when it is expected down."""
     try:
         if handles is None:
             raise ValueError("handles is None — wiring not complete?")
-        pm = handles
-        gs_ifname, sat_ifname = _extract_ground_ifaces(entry)
-        is_sat = entry.node_id == entry.sat_id
-        local_pid = _require_pid(entry.node_id, pm)
-        host_ifname = (
-            ground_bridge._sat_host_veth(entry.sat_id, sat_ifname)
-            if is_sat
-            else ground_bridge._gs_host_veth(entry.gs_id, gs_ifname)
-        )
-        local_ifname = sat_ifname if is_sat else gs_ifname
-
-        def _mpls_proofs() -> list[kernel_verifier.Proof]:
-            """Each endpoint's MPLS input by its own manifest requirement; the pod
-            interfaces exist in both expected states."""
-            found: list[kernel_verifier.Proof] = []
-            if entry.locality == node_agent_pb2.LOCALITY_LOCAL:
-                if _requires_mpls(entry.gs_id, pm):
-                    found.append(
-                        kernel_verifier.verify_mpls_input(_require_pid(entry.gs_id, pm), gs_ifname)
-                    )
-                if _requires_mpls(entry.sat_id, pm):
-                    found.append(
-                        kernel_verifier.verify_mpls_input(
-                            _require_pid(entry.sat_id, pm), sat_ifname
-                        )
-                    )
-            elif _requires_mpls(entry.node_id, pm):
-                found.append(kernel_verifier.verify_mpls_input(local_pid, local_ifname))
-            return found
-
+        _require_pid(entry.node_id, handles)
+        local = entry.locality == node_agent_pb2.LOCALITY_LOCAL
         if entry.expected_admin_up:
-            proofs = [
-                kernel_verifier.verify_host_interface_state(host_ifname, admin_up=True),
-            ]
-            if entry.locality == node_agent_pb2.LOCALITY_LOCAL:
-                # LOCAL ground links are verified on the one agent that owns
-                # both pod namespaces and both host-side veths; each end is
-                # proven against its own terminal's rates.
-                gs_rates, sat_rates = _ground_terminal_rates(entry)
-                gs_delay_ms, sat_delay_ms = _local_ground_delays(entry)
-                gs_pid = _require_pid(entry.gs_id, pm)
-                sat_pid = _require_pid(entry.sat_id, pm)
-                gs_port = ground_bridge._gs_host_veth(entry.gs_id, gs_ifname)
-                sat_host = ground_bridge._sat_host_veth(entry.sat_id, sat_ifname)
-                proofs.extend(
-                    [
-                        kernel_verifier.verify_host_interface_state(gs_port, admin_up=True),
-                        kernel_verifier.verify_host_interface_state(sat_host, admin_up=True),
-                        kernel_verifier.verify_mirred(gs_port, sat_host),
-                        kernel_verifier.verify_mirred(sat_host, gs_port),
-                        kernel_verifier.verify_qdisc(
-                            gs_pid,
-                            gs_ifname,
-                            delay_ms=gs_delay_ms,
-                            transmit_mbps=gs_rates.transmit_mbps,
-                        ),
-                        kernel_verifier.verify_qdisc(
-                            sat_pid,
-                            sat_ifname,
-                            delay_ms=sat_delay_ms,
-                            transmit_mbps=sat_rates.transmit_mbps,
-                        ),
-                        kernel_verifier.verify_receive_shaping(
-                            gs_port, receive_mbps=gs_rates.receive_mbps
-                        ),
-                        kernel_verifier.verify_receive_shaping(
-                            sat_host, receive_mbps=sat_rates.receive_mbps
-                        ),
-                    ]
-                )
-            else:
-                proofs.extend(
-                    [
-                        kernel_verifier.verify_qdisc(
-                            local_pid,
-                            local_ifname,
-                            delay_ms=entry.latency_ms,
-                            transmit_mbps=entry.rates.transmit_mbps,
-                        ),
-                        kernel_verifier.verify_receive_shaping(
-                            host_ifname, receive_mbps=entry.rates.receive_mbps
-                        ),
-                    ]
-                )
-                if entry.vni:
-                    local_ip = _discover_local_ip()
-                    vxlan_if = vxlan_host_ifnames(entry.vni).tunnel
-                    proofs.extend(
-                        [
-                            kernel_verifier.verify_vxlan(
-                                entry.vni, local_ip=local_ip, remote_ip=entry.remote_node_ip
-                            ),
-                            kernel_verifier.verify_mirred(host_ifname, vxlan_if),
-                            kernel_verifier.verify_mirred(vxlan_if, host_ifname),
-                        ]
-                    )
-            proofs.extend(_mpls_proofs())
-            return _combine_proofs("KernelInventory expected-up verified", proofs)
-
-        proofs = [
-            kernel_verifier.verify_host_interface_state(host_ifname, admin_up=False),
-            kernel_verifier.verify_pod_interface_exists(local_pid, local_ifname),
-        ]
-        if entry.locality == node_agent_pb2.LOCALITY_LOCAL:
-            sat_pid = _require_pid(entry.sat_id, pm)
-            gs_port = ground_bridge._gs_host_veth(entry.gs_id, gs_ifname)
-            sat_host = ground_bridge._sat_host_veth(entry.sat_id, sat_ifname)
-            proofs.extend(
-                [
-                    kernel_verifier.verify_host_interface_state(gs_port, admin_up=False),
-                    kernel_verifier.verify_host_interface_state(sat_host, admin_up=False),
-                    kernel_verifier.verify_pod_interface_exists(sat_pid, sat_ifname),
-                ]
+            proofs = (
+                _local_pass_up_proofs(entry, handles)
+                if local
+                else _cross_end_up_proofs(entry, handles, _discover_local_ip())
             )
-        elif entry.vni:
-            proofs.append(kernel_verifier.verify_vxlan_absent(entry.vni))
-        proofs.extend(_mpls_proofs())
+            return _combine_proofs("KernelInventory expected-up verified", proofs)
+        proofs = (
+            _local_pass_down_proofs(entry, handles)
+            if local
+            else _cross_end_down_proofs(entry, handles)
+        )
         return _combine_proofs("KernelInventory expected-down verified", proofs)
     except Exception as exc:
         msg = f"KernelInventory failed {entry.node_id}/{entry.interface_name}: {exc}"
@@ -2226,14 +2132,14 @@ def handle_kernel_inventory(
     if handles is None:
         raise ValueError("handles is None — wiring not complete?")
 
-    # A request naming no station proves long-delay ends, fixed or ground, as the contract reads
-    # it (``validate_kernel_inventory_request``); a station-scoped request proves the station's
+    # A request naming no node proves long-delay ends, fixed or assigned, as the contract reads
+    # it (``validate_kernel_inventory_request``); a request naming a node proves that node's
     # local passes. Rejected alternative: choosing the proof by link type, which proved a
-    # long-delay ground end against the local ground layout and found no pod-interface queue.
+    # long-delay pass end against the local pass layout and found no pod-interface queue.
     def prover(entry: node_agent_pb2.KernelInventoryEntry):
         if entry.survey:
             return _survey_long_delay_end
-        if not request.gs_id:
+        if not request.node_id:
             return _verify_long_delay_inventory_entry
         return _verify_kernel_inventory_entry
 

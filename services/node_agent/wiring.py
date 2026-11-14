@@ -36,11 +36,7 @@ from pyroute2 import IPRoute
 from pyroute2.netlink.exceptions import NetlinkError
 
 from node_agent import admission, cni0_lockdown
-from node_agent.ground_bridge import (
-    create_ground_bridge,
-    create_mediated_isl,
-    create_satellite_ground_veth,
-)
+from node_agent.ground_bridge import create_mediated_isl, create_terminal_veth
 from node_agent.mpls import configure_mpls_input, ensure_mpls_kernel_support
 from node_agent.namespace_ops import (
     _in_namespace,
@@ -374,7 +370,6 @@ def execute_wiring(
         node_id: node.model_dump(exclude_none=True)
         for node_id, node in manifest_model.nodes.items()
     }
-    ground_bridges = manifest_model.ground_bridges
 
     if not handles:
         log.info("No handles to wire on this node")
@@ -596,114 +591,72 @@ def execute_wiring(
     )
     if requires_mpls:
         _write_progress(
-            f"MPLS input verified on {mpls_verified} ISL endpoints. Creating ground infrastructure..."
+            f"MPLS input verified on {mpls_verified} ISL endpoints. Creating terminal interfaces..."
         )
     else:
-        _write_progress("Creating ground infrastructure...")
+        _write_progress("Creating terminal interfaces...")
 
-    # Create ground infrastructure (parallelized).
-    # Ground bridges (GS-side) and satellite ground veths are independent
-    # and can be created concurrently. gnd0 starts admin DOWN; FRR zebra
-    # brings it admin UP (no `shutdown` in config). With no host-side veth
-    # connected, gnd0 enters LOWERLAYERDOWN (admin UP, no carrier).
+    # Create the terminal interfaces OME assigns per pass (parallelized). Each is a veth
+    # pair with its host port and its pod interface both admin DOWN and no redirect: it has
+    # no peer until its first pass. A workload that manages its own interfaces brings the pod
+    # interface admin UP (FRR zebra does, with no `shutdown` in its config); with the host
+    # port down the pod interface then shows LOWERLAYERDOWN (admin UP, no carrier).
 
     class _MplsStepFailed(Exception):
-        """The ground interface exists; its MPLS input step failed. Recorded under ``mpls``."""
+        """The terminal interface exists; its MPLS input step failed. Recorded under ``mpls``."""
 
-    def _ground_mpls(pid: int, ifname: str, node_id: str, created: bool) -> None:
-        try:
-            configure_mpls_input(pid, ifname, created=created, subject=f"ground {node_id}/{ifname}")
-        except Exception as exc:
-            raise _MplsStepFailed(str(exc)) from exc
-
-    # An access interface of a node with a long-delay access peer may carry a long-delay pass:
-    # like a long-delay fixed end, it gets its admission hook stopped before it can forward, so
+    # A terminal interface of a node with a long-delay peer may carry a long-delay pass: like
+    # a long-delay fixed end, it gets its admission hook stopped before it can forward, so
     # nothing crosses until that pass opens. A local pass on it opens the hook at its LinkUp.
-    def _create_ground_bridge_task(
-        gs_id: str, gs_pid: int, gnd_ifaces: list, mpls: bool, hooked: bool
+    def _create_terminals_task(
+        node_id: str, pid: int, ifaces: list, mpls: bool, hooked: bool
     ) -> None:
-        for iface_spec in gnd_ifaces:
+        for iface_spec in ifaces:
             ifname = iface_spec["name"]
-            veth = create_ground_bridge(gs_id, gs_pid, ifname=ifname)
-            configure_interface(gs_pid, ifname, gs_id)
-            if hooked:
-                admission.install_stopped_hook(gs_pid, ifname)
-            if mpls:
-                _ground_mpls(gs_pid, ifname, gs_id, veth.created)
-
-    def _create_sat_ground_task(
-        node_id: str, pid: int, gnd_ifaces: list, mpls: bool, hooked: bool
-    ) -> None:
-        for iface_spec in gnd_ifaces:
-            ifname = iface_spec["name"]
-            veth = create_satellite_ground_veth(node_id, pid, ifname=ifname)
+            veth = create_terminal_veth(node_id, pid, ifname=ifname)
             configure_interface(pid, ifname, node_id)
             if hooked:
                 admission.install_stopped_hook(pid, ifname)
             if mpls:
-                _ground_mpls(pid, ifname, node_id, veth.created)
+                try:
+                    configure_mpls_input(
+                        pid, ifname, created=veth.created, subject=f"terminal {node_id}/{ifname}"
+                    )
+                except Exception as exc:
+                    raise _MplsStepFailed(str(exc)) from exc
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        gnd_futures = {}
-        for gs_id, _bridge_spec in ground_bridges.items():
-            gs_pid = pid_map.get(gs_id, 0)
-            if gs_pid == 0:
-                log.warning("No PID for ground station %s", gs_id)
-                continue
-            gs_node = nodes.get(gs_id, {})
-            gs_ifaces = gs_node["gnd_interfaces"]
-            gs_mpls = bool(gs_node.get("mpls_enable", False)) and gs_id not in mpls_refused
-            gnd_futures[
-                pool.submit(
-                    _create_ground_bridge_task,
-                    gs_id,
-                    gs_pid,
-                    gs_ifaces,
-                    gs_mpls,
-                    bool(gs_node["long_delay_access_peers"]),
-                )
-            ] = gs_id
-
+        terminal_futures = {}
         for node_id, node_spec in nodes.items():
-            if node_spec.get("node_type") != "satellite":
-                continue
+            ifaces = node_spec.get("gnd_interfaces") or []
             pid = pid_map.get(node_id, 0)
-            if pid == 0:
+            if not ifaces or pid == 0:
+                # No terminal interfaces, or the node's pod is on another host.
                 continue
-            sat_ifaces = node_spec["gnd_interfaces"]
-            sat_mpls = bool(node_spec.get("mpls_enable", False)) and node_id not in mpls_refused
-            gnd_futures[
+            terminal_futures[
                 pool.submit(
-                    _create_sat_ground_task,
+                    _create_terminals_task,
                     node_id,
                     pid,
-                    sat_ifaces,
-                    sat_mpls,
+                    ifaces,
+                    bool(node_spec.get("mpls_enable", False)) and node_id not in mpls_refused,
                     bool(node_spec["long_delay_access_peers"]),
                 )
             ] = node_id
 
-        gs_created = 0
-        sat_gnd_created = 0
-        for fut in as_completed(gnd_futures):
-            nid = gnd_futures[fut]
+        terminal_nodes_wired = 0
+        for fut in as_completed(terminal_futures):
+            nid = terminal_futures[fut]
             try:
                 fut.result()
-                if nid in ground_bridges:
-                    gs_created += 1
-                else:
-                    sat_gnd_created += 1
+                terminal_nodes_wired += 1
             except _MplsStepFailed as exc:
                 _record_failure(nid, "mpls", str(exc))
             except Exception as exc:
                 _record_failure(nid, "ground_infrastructure", str(exc))
-    log.info(
-        "Created %d ground bridges and %d satellite ground veths",
-        gs_created,
-        sat_gnd_created,
-    )
+    log.info("Created the terminal interfaces of %d nodes", terminal_nodes_wired)
     _write_progress(
-        f"Ground infrastructure ready: {gs_created} GS, {sat_gnd_created} satellites. Creating terrestrial interfaces..."
+        f"Terminal interfaces ready on {terminal_nodes_wired} nodes. Creating terrestrial interfaces..."
     )
 
     # Wire site LANs (terr0 as bridge ports, parallelized per site).

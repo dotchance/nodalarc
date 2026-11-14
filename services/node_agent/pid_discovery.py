@@ -74,13 +74,15 @@ class StaticNeighbors:
 
 @dataclass(frozen=True, slots=True)
 class NodeManifestFacts:
-    """What the wiring manifest requires of one local node's kernel state: its MPLS requirement
-    and, per long-delay link interface, the static neighbors it carries."""
+    """What the wiring manifest requires of one local node's kernel state: its MPLS requirement,
+    per long-delay link interface the static neighbors it carries, and whether the admin state
+    of its terminal interfaces follows their links."""
 
     mpls_enable: bool
     static_neighbors: tuple[tuple[str, StaticNeighbors], ...]
     long_delay_interfaces: frozenset[str]
     long_delay_access_peers: tuple[tuple[str, tuple[str, ...]], ...]
+    terminal_admin_follows_link: bool
 
 
 def manifest_facts(node: NodeSpec) -> NodeManifestFacts:
@@ -106,6 +108,11 @@ def manifest_facts(node: NodeSpec) -> NodeManifestFacts:
             (peer, tuple(addresses))
             for peer, addresses in sorted(node.long_delay_access_peers.items())
         ),
+        # A space node's terminal is switched on for its pass and off after it: the Node Agent
+        # sets the pod interface admin up at LinkUp and admin down at LinkDown. A surface
+        # node's terminal stays on: its workload raises the pod interface once, and each pass
+        # shows as carrier. This is the one place that reads the manifest's node type for it.
+        terminal_admin_follows_link=node.node_type == "satellite",
     )
 
 
@@ -135,6 +142,7 @@ class NamespaceHandle:
     static_neighbors: tuple[tuple[str, StaticNeighbors], ...]
     long_delay_interfaces: frozenset[str]
     long_delay_access_peers: tuple[tuple[str, tuple[str, ...]], ...]
+    terminal_admin_follows_link: bool
 
     def static_neighbors_on(self, ifname: str) -> StaticNeighbors | None:
         """The static neighbors the manifest gives ``ifname``; None on a local link."""
@@ -317,6 +325,7 @@ def _validated_sandbox_handle(
         static_neighbors=facts.static_neighbors,
         long_delay_interfaces=facts.long_delay_interfaces,
         long_delay_access_peers=facts.long_delay_access_peers,
+        terminal_admin_follows_link=facts.terminal_admin_follows_link,
     )
 
 

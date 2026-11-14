@@ -51,6 +51,7 @@ def _handles(pids):
             static_neighbors=(),
             long_delay_interfaces=frozenset(),
             long_delay_access_peers=(),
+            terminal_admin_follows_link=True,
         )
         for node_id, pid in pids.items()
     }

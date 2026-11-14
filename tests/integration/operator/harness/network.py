@@ -112,12 +112,12 @@ def router_neighbors(
     return neighbors
 
 
-def interfaces_up(printed: str) -> set[str]:
-    """The interfaces a router's `show interface brief` reports up."""
+def interfaces_with_carrier(terminal: Terminal, names: list[str]) -> set[str]:
+    """The named interfaces whose router reports line protocol up: admin up with carrier.
+    `show interface brief` states the admin state alone, which is up on a terminal
+    interface that has never held a link."""
     return {
-        fields[0]
-        for line in printed.splitlines()
-        if len(fields := line.split()) >= 2 and fields[1] == "up"
+        name for name in names if "line protocol is up" in terminal.run(f"show interface {name}")
     }
 
 

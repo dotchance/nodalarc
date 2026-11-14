@@ -636,8 +636,9 @@ class Dispatcher:
                 self._leaving_reasons[pair] = reason
 
     def _link_down_reason(self, pair: tuple[str, str]) -> str:
-        """Why a link OME no longer wants goes down: OME's stated reason for the pair, or
-        ``seek`` for a link the session left behind at a seek.
+        """Why a link goes down: OME's stated reason for a pair it no longer wants,
+        ``seek`` for a link the session left behind at a seek, or ``terminals_reassigned``
+        for a link OME keeps on other terminals.
 
         ``not_in_ome_snapshot`` says OME's snapshot stopped listing the link before OME's
         reason for it reached this Scheduler. That happens after a Scheduler restart and
@@ -3672,6 +3673,18 @@ class Dispatcher:
             )
             to_remove = self._filter_blocked_downs(diff.to_remove, operation="BatchLinkDown")
             to_add = self._filter_blocked_ups(diff.to_add, operation="BatchLinkUp")
+            # A link OME moved to other terminals comes up on them only in a pass that
+            # takes it down on the terminals it holds: a link's record is kept by pair.
+            to_add -= diff.reassigned - to_remove
+            reassigned = frozenset(diff.reassigned & to_remove)
+            if reassigned:
+                log.info(
+                    "Link(s) OME assigned other terminals go down on the terminals they "
+                    "hold, then up on the assigned ones: %s",
+                    sorted(reassigned),
+                )
+                for pair in reassigned:
+                    self._leaving_reasons[pair] = "terminals_reassigned"
             to_update_latency = self._filter_blocked_ups(
                 diff.to_update_latency, operation="SetLatency"
             )
@@ -3724,16 +3737,22 @@ class Dispatcher:
                     long_delay, due, desired, sim_iso, sim_time, nc, down_reasons
                 )
 
-            await self._reconcile_staged(
-                to_remove,
-                to_add,
-                desired,
-                sim_iso,
-                sim_time,
-                nc,
-                down_reasons,
-                forced_bbm_pairs,
-            )
+            try:
+                await self._reconcile_staged(
+                    to_remove,
+                    to_add,
+                    desired,
+                    sim_iso,
+                    sim_time,
+                    nc,
+                    down_reasons,
+                    # A link moved to other terminals goes down before it comes up.
+                    forced_bbm_pairs | reassigned,
+                )
+            finally:
+                # The reason holds for this pass's down alone.
+                for pair in reassigned:
+                    self._leaving_reasons.pop(pair, None)
 
             if to_update_latency:
                 latency_result = await self._send_authoritative_latency_updates(
@@ -3900,6 +3919,10 @@ class Dispatcher:
         # compete for one terminal.
         acquire_ups: set[tuple[str, str]] = set()
         for pair in sorted(to_add):
+            if pair in self._actual_links:
+                # A link moved to other terminals whose down on the held ones did not
+                # succeed. It stays as the kernel has it.
+                continue
             if not staged.up_follows_downs(pair):
                 acquire_ups.add(pair)
                 continue

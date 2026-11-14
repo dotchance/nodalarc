@@ -21,7 +21,7 @@ from .harness.network import (
     Node,
     ReferencePositions,
     ShownNetwork,
-    interfaces_up,
+    interfaces_with_carrier,
     let_the_sky_move,
     link_interface,
     link_key,
@@ -179,19 +179,18 @@ def test_a_relay_hands_over_to_the_nearer_satellite_of_the_other_body(
         operator.watch_state(
             (_LEAD_S + 2 * _CHANGE_ALLOWANCE_S) / _HANDOVER_SPEED + 60.0, until=handover_began
         )
+        listed_before: tuple[str, ...] | None = None
         for at, links in held:
-            print(
-                f"relay handover: {datetime.fromtimestamp(at, UTC).isoformat()}: "
-                + ", ".join(
-                    f"{far} {link['range_km']:.1f} km"
-                    + (
-                        f" (ending, successor {link['successor_pair']})"
-                        if link["successor_pair"]
-                        else ""
-                    )
-                    for far, link in sorted(links.items())
-                )
+            listed = tuple(
+                f"{far}" + (" (ending)" if link["successor_pair"] else "")
+                for far, link in sorted(links.items())
             )
+            if listed != listed_before:
+                print(
+                    f"relay handover: from {datetime.fromtimestamp(at, UTC).isoformat()} "
+                    f"NodalArc shows {relay} linked to: {', '.join(listed) or 'no satellite'}"
+                )
+                listed_before = listed
         if not any(links for _, links in held):
             pytest.skip(
                 f"did not run: {relay} held no link of {rule_id} from {target.isoformat()} to "
@@ -224,14 +223,19 @@ def test_a_relay_hands_over_to_the_nearer_satellite_of_the_other_body(
 
         # The relay's own router holds both links while NodalArc shows both.
         old_interface, new_interface = link_interface(old, relay), link_interface(new, relay)
+        both = [old_interface, new_interface]
         while True:
-            up = interfaces_up(operator.introspect(relay, "show interface brief"))
+            with operator.terminal(relay) as terminal:
+                up = interfaces_with_carrier(terminal, both)
             both_shown = any(
                 link_key(link) == link_key(old) and link["successor_pair"]
                 for link in operator.state()["links"]
             )
-            print(f"relay handover: both links shown: {both_shown}; interfaces up: {sorted(up)}")
-            if {old_interface, new_interface} <= up:
+            print(
+                f"relay handover: both links shown: {both_shown}; {old_interface} to {old_far} "
+                f"and {new_interface} to {new_far}: carrier on {sorted(up)}"
+            )
+            if set(both) <= up:
                 break
             assert both_shown, (
                 f"{relay}: NodalArc showed {old_interface} to {old_far} and {new_interface} to "
@@ -253,12 +257,13 @@ def test_a_relay_hands_over_to_the_nearer_satellite_of_the_other_body(
     finally:
         operator.playback("set_speed", factor=1.0)
 
-    up = interfaces_up(operator.introspect(relay, "show interface brief"))
-    print(f"relay handover: after the handover interfaces up: {sorted(up)}")
-    assert new_interface in up and old_interface not in up, (
-        f"{relay}: after the handover {new_interface} to {new_far} is "
-        f"{'up' if new_interface in up else 'down'} and {old_interface} to {old_far} is "
-        f"{'up' if old_interface in up else 'down'}"
+    with operator.terminal(relay) as terminal:
+        up = interfaces_with_carrier(terminal, both)
+    print(f"relay handover: after the handover carrier on {sorted(up)}")
+    assert up == {new_interface}, (
+        f"{relay}: after the handover {new_interface} to {new_far} has "
+        f"{'carrier' if new_interface in up else 'no carrier'} and {old_interface} to "
+        f"{old_far} has {'carrier' if old_interface in up else 'no carrier'}"
     )
 
     # The satellite the relay left is now one hop beyond the new link, in the other domain.

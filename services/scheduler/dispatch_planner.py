@@ -18,6 +18,9 @@ class ReconcileDiff:
     to_remove: set[tuple[str, str]]
     to_add: set[tuple[str, str]]
     to_update_latency: set[tuple[str, str]]
+    # Links OME keeps between the same two nodes on other terminals. Each is in ``to_remove``
+    # with the terminals it holds and in ``to_add`` with the terminals OME assigned.
+    reassigned: set[tuple[str, str]]
 
     @property
     def has_changes(self) -> bool:
@@ -88,16 +91,29 @@ def diff_link_state(
     *,
     latency_tolerance_ms: float = 1e-9,
 ) -> ReconcileDiff:
-    """Compute add/remove/latency-update sets for a reconcile pass."""
+    """Compute add/remove/latency-update sets for a reconcile pass.
+
+    A link is a node pair on two terminals. OME may keep a pair and assign it other
+    terminals: it assigns every link anew at a seek. Such a link goes down on the terminals
+    it holds and up on the terminals OME assigned. Rejected alternative: comparing pairs
+    alone, which left the kernel on the old terminals under a record naming the new ones.
+    """
     current_pairs = set(actual.keys())
     desired_pairs = set(desired.keys())
     common_pairs = current_pairs & desired_pairs
+    reassigned = {
+        pair
+        for pair in common_pairs
+        if (actual[pair].interface_a, actual[pair].interface_b)
+        != (desired[pair].interface_a, desired[pair].interface_b)
+    }
     return ReconcileDiff(
-        to_remove=current_pairs - desired_pairs,
-        to_add=desired_pairs - current_pairs,
+        to_remove=(current_pairs - desired_pairs) | reassigned,
+        to_add=(desired_pairs - current_pairs) | reassigned,
+        reassigned=reassigned,
         to_update_latency={
             pair
-            for pair in common_pairs
+            for pair in common_pairs - reassigned
             if (
                 abs(actual[pair].latency_a_to_b_ms - desired[pair].latency_a_to_b_ms)
                 > latency_tolerance_ms

@@ -123,8 +123,9 @@ class LinkDown(BaseModel):
     interface_b: str
     # Why the link went down: OME's own reason for no longer linking the pair (a physics reason
     # such as tracking_exceeded, or an allocation reason such as outranked), the reason of the
-    # scenario or operator command that took it down, seek, or not_in_ome_snapshot when OME's
-    # snapshot stopped listing the link before its reason reached the Scheduler.
+    # scenario or operator command that took it down, seek, terminals_reassigned when OME
+    # keeps the link on other terminals, or not_in_ome_snapshot when OME's snapshot stopped
+    # listing the link before its reason reached the Scheduler.
     reason: str
     # The contact that closed, on a fixed long-delay link (``link_state.contact_id``).
     contact_id: str | None = None

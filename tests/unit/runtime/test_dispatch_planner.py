@@ -45,6 +45,46 @@ def test_diff_link_state_classifies_add_remove_and_latency_update():
     assert diff.has_changes
 
 
+def _on(interface_a: str, interface_b: str, latency: float = 3.0) -> ActiveLinkInfo:
+    return ActiveLinkInfo(
+        interface_a, interface_b, latency, latency, assigned_terminals=True, range_km=1000.0
+    )
+
+
+def test_a_link_ome_keeps_on_other_terminals_goes_down_and_comes_up() -> None:
+    """OME assigns every link anew at a seek. A pair it keeps may then sit on other
+    terminals: the link is removed with the terminals it holds and added with the assigned
+    ones, and it is no latency update."""
+    moved, kept = ("geo-07", "luna-relay"), ("geo-01", "leo-03")
+    actual = {moved: _on("isl4", "isl3"), kept: _on("isl2", "isl4")}
+    desired = {moved: _on("isl4", "isl2", latency=9.0), kept: _on("isl2", "isl4")}
+
+    diff = diff_link_state(actual, desired)
+
+    assert diff.reassigned == {moved}
+    assert diff.to_remove == {moved}
+    assert diff.to_add == {moved}
+    assert diff.to_update_latency == set()
+
+
+def test_a_link_moved_to_other_terminals_goes_down_before_it_comes_up() -> None:
+    """The record of a link is kept by pair, so its down names the terminals the kernel
+    holds only until its up replaces the record. Its choosing nodes break first, with a
+    spare terminal or without."""
+    moved = ("geo-07", "luna-relay")
+    staged = stage_changes(
+        to_remove={moved},
+        to_add={moved},
+        choosers=lambda pair: pair,
+        terminal_capacities={"geo-07": 4, "luna-relay": 2},
+        active_count=lambda node_id: 1,
+        forced_break_pairs=frozenset({moved}),
+    )
+
+    assert staged.down_goes_first(moved)
+    assert staged.up_follows_downs(moved)
+
+
 def test_diff_link_state_ignores_sub_tolerance_latency_jitter():
     pair = ("sat-a", "sat-b")
     diff = diff_link_state(

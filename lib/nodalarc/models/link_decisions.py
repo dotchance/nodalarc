@@ -97,12 +97,12 @@ type GroundUnscheduledReason = Literal[
 ]
 """Allocation reason a visible GROUND pair is not currently scheduled.
 
-The last three belong to a pair whose nodes state no scheduling, which NodalArc chooses
-nearest first. `cap_full`: a node holds its cap and has no link the pair may take.
-`taken_by_stated_choice`: a link chosen by a stated policy holds the room.
-`not_strictly_nearer`: the node's farthest link of that kind is at least as near.
-`not_mutual` belongs to a pair whose nodes both state scheduling: one of them did not take
-the pair among its highest-ranked candidates.
+The last four belong to pairs with no single stated chooser. `cap_full`: a node holds its
+cap, or has no terminal, and has no link the pair may take. `taken_by_stated_choice`: a
+link chosen by a stated policy holds the room a pair NodalArc chooses needs.
+`not_strictly_nearer`: the node's farthest link that NodalArc chose is at least as near.
+`not_mutual`: one of the pair's two stating nodes did not take the pair among its
+highest-ranked candidates.
 
 The ISL allocator's `isl_terminal_capacity` is intentionally absent
 from this enum. `UnscheduledPair` lives in the ground-decision
@@ -492,7 +492,7 @@ class GroundVisibilityDecisionWire(BaseModel):
         return self
 
 
-# The fields each reason of a pair with no stated chooser carries beyond `incumbent_pair`
+# The fields each reason of a pair with no single stated chooser carries beyond `incumbent_pair`
 # and `capacity_constraint`. A reason that is not listed carries none of them.
 _UNSCHEDULED_REASON_NAMES: dict[str, frozenset[str]] = {
     "cap_full": frozenset({"node_id", "cap", "held_pairs"}),
@@ -519,8 +519,9 @@ class UnscheduledPair(BaseModel):
     reason names a specific resource that ran out (e.g., the sat
     ground-terminal id).
 
-    The last five fields state what the reasons of a pair with no stated
-    chooser name. `cap_full` names the node, its cap and the links it holds.
+    The last five fields state what the reasons of a pair with no single stated
+    chooser name. `cap_full` names the node, the limit it holds (its cap on the
+    rule, or the size of its pool) and the links it holds.
     `taken_by_stated_choice` names the node, with the stated-chosen link in
     `incumbent_pair`. `not_strictly_nearer` names both ranges, with the held
     link in `incumbent_pair`. `not_mutual` names the node that did not take

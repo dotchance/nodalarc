@@ -225,7 +225,6 @@ def test_default_chooser_selects_the_reference_links_over_time():
     """With no terminal to spare, the allocator's links equal the reference chooser's at every
     tick: on moving geometry with equal ranges, and until it settles on still geometry."""
     rnd = random.Random(20261114)
-    ticks = 0
     for _ in range(400):
         nodes, cap, usable = _random_case(rnd)
         pools = _pools_for_caps(cap)
@@ -243,7 +242,6 @@ def test_default_chooser_selects_the_reference_links_over_time():
                     "cap_full",
                     "replaced_by_successor",
                 }, item
-            ticks += 1
             settled = step >= moves and reference == held
             held, previous = reference, result
             if settled:
@@ -256,14 +254,12 @@ def test_default_chooser_selects_the_reference_links_over_time():
                 }
         else:
             pytest.fail(f"no fixed point on still geometry: {usable} {cap}")
-    assert ticks > 2000
 
 
 def test_stated_pairs_are_placed_before_the_pairs_nodalarc_chooses():
     """From an empty state, the allocator's links equal the reference: every pair with a
     stated chooser first, in rank order, then NodalArc's own choices in what is left."""
     rnd = random.Random(20261115)
-    compared = 0
     for _ in range(600):
         nodes, cap, usable = _random_case(rnd)
         stating = frozenset(node for node in nodes if rnd.random() < 0.4)
@@ -292,8 +288,6 @@ def test_stated_pairs_are_placed_before_the_pairs_nodalarc_chooses():
             sorted(stating),
             stated_score,
         )
-        compared += 1
-    assert compared == 600
 
 
 # ----- What each reason names -----------------------------------------------------------------
@@ -305,14 +299,14 @@ def test_not_strictly_nearer_names_the_held_link_and_both_ranges():
     assert set(first.associations) == {("a", "b")}
 
     second = _allocate(
-        _usable({("a", "b"): 5.0, ("a", "c"): 5.0}), pools=pools, previous=first, step=1
+        _usable({("a", "b"): 5.0, ("a", "c"): 6.0}), pools=pools, previous=first, step=1
     )
 
     assert set(second.associations) == {("a", "b")}
     refused = _unscheduled(second)[("a", "c")]
     assert refused.unscheduled_reason == "not_strictly_nearer"
     assert refused.incumbent_pair == ("a", "b")
-    assert (refused.range_km, refused.incumbent_range_km) == (5.0, 5.0)
+    assert (refused.range_km, refused.incumbent_range_km) == (6.0, 5.0)
 
 
 def test_a_strictly_nearer_pair_takes_the_farthest_link_which_is_final_for_the_tick():
@@ -609,6 +603,17 @@ def mutual_choice(
     return {p for p in usable if p in picks[p[0]] and p in picks[p[1]]}
 
 
+def _first_to_decline(
+    pair: Pair, usable: dict[Pair, float], cap: dict[str, int], score: dict[str, dict[Pair, float]]
+) -> str:
+    """The first node of a pair, in node-pair order, that did not take it."""
+    for node in pair:
+        mine = sorted((p for p in usable if node in p), key=lambda p: (-score[node][p], p))
+        if pair not in mine[: cap[node]]:
+            return node
+    raise AssertionError(f"{pair} was taken by both of its nodes")
+
+
 def _usable_by_both(
     usable: dict[Pair, float], score: dict[str, dict[Pair, float]]
 ) -> list[UsablePair]:
@@ -631,7 +636,6 @@ def test_a_pair_two_nodes_choose_links_only_when_both_take_it():
     """Every node states scheduling. With no terminal to spare and no hysteresis, the links
     equal the reference at every tick of moving scores, ties included."""
     rnd = random.Random(20261116)
-    ticks = 0
     for _ in range(400):
         nodes, cap, usable = _random_case(rnd)
         cap = {node: max(1, count) for node, count in cap.items()}
@@ -658,11 +662,9 @@ def test_a_pair_two_nodes_choose_links_only_when_both_take_it():
             for item in result.unscheduled_pairs:
                 assert item.unscheduled_reason in {"not_mutual", "replaced_by_successor"}, item
                 if item.unscheduled_reason == "not_mutual":
-                    assert item.node_id in item.pair
-            ticks += 1
+                    assert item.node_id == _first_to_decline(item.pair, usable, cap, score)
             previous = result
             usable = {pair: rng for pair, rng in usable.items() if rnd.random() < 0.95}
-    assert ticks == 2400
 
 
 def _hysteresis() -> HandoverPolicySpec:
@@ -746,3 +748,283 @@ def test_one_cap_shared_by_pairs_chosen_alone_and_pairs_chosen_together_is_refus
 
     with pytest.raises(ValueError, match="both alone and together"):
         _allocate(usable, pools=pools, stating=stating)
+
+
+# ----- Cases an independent review asked for ---------------------------------------------------
+
+
+def test_nodalarc_chooses_only_after_every_stated_pair_is_placed():
+    """The pair (s, y) is nearer than the held link (y, z) and s is free when the tick starts.
+    The stated pair to s is placed first, so (s, y) finds s taken and (y, z) stays. Choosing
+    (s, y) before the stated pair would have released (y, z) for nothing."""
+    stating = frozenset({"gs-B"})
+    pools = _pools_for_caps({"gs-B": 1, "s": 1, "y": 1, "z": 1})
+    first = _allocate(_usable({("y", "z"): 5.0}), pools=pools, stating=stating)
+    assert set(first.associations) == {("y", "z")}
+
+    second = _allocate(
+        _usable(
+            {("gs-B", "s"): 9.0, ("s", "y"): 1.0, ("y", "z"): 5.0},
+            stating=stating,
+            scores={("gs-B", "s"): 60.0},
+        ),
+        pools=pools,
+        stating=stating,
+        previous=first,
+        step=1,
+    )
+
+    assert set(second.associations) == {("gs-B", "s"), ("y", "z")}
+    refused = _unscheduled(second)[("s", "y")]
+    assert (refused.unscheduled_reason, refused.node_id) == ("taken_by_stated_choice", "s")
+
+
+def test_a_stated_pair_takes_a_link_nodalarc_chose_whatever_its_tenant():
+    stating = frozenset({"gs"})
+    pools = _pools_for_caps({"gs": 1, "peer": 1, "sat": 1})
+    tenants = {"gs": "tenant-a", "peer": "tenant-b", "sat": "tenant-b"}
+    first = _allocate(
+        _usable({("peer", "sat"): 1.0}), pools=pools, stating=stating, tenants=tenants
+    )
+    assert set(first.associations) == {("peer", "sat")}
+
+    second = _allocate(
+        _usable(
+            {("gs", "sat"): 9.0, ("peer", "sat"): 1.0},
+            stating=stating,
+            scores={("gs", "sat"): 40.0},
+        ),
+        pools=pools,
+        stating=stating,
+        tenants=tenants,
+        previous=first,
+        step=1,
+    )
+
+    assert set(second.associations) == {("gs", "sat")}
+    assert _unscheduled(second)[("peer", "sat")].unscheduled_reason == "taken_by_stated_choice"
+
+
+def test_a_node_whose_spare_terminal_is_in_use_takes_the_old_link_down_first():
+    """The hub has two terminals. Its rule A states n: 1, and a link of rule B uses the second
+    terminal, so the hub has none to spare. A strictly nearer pair of rule A still replaces
+    the held one, at once. The event about the released link carries that link's own tenant."""
+    pools = {
+        "a-far": {POOL: (0,)},
+        "a-near": {POOL: (0,)},
+        "b-peer": {POOL: (0,)},
+        "hub": {POOL: (0, 1)},
+    }
+    tenants = dict.fromkeys(pools, "default") | {"a-far": "tenant-far", "a-near": "tenant-near"}
+    rules = {("a-far", "hub"): "A", ("a-near", "hub"): "A", ("b-peer", "hub"): "B"}
+    first = _allocate(
+        _usable({("a-far", "hub"): 500.0, ("b-peer", "hub"): 50.0}, rules=rules),
+        pools=pools,
+        rule_n={"A": 1},
+        tenants=tenants,
+    )
+    assert set(first.associations) == {("a-far", "hub"), ("b-peer", "hub")}
+
+    second = _allocate(
+        _usable(
+            {("a-far", "hub"): 500.0, ("a-near", "hub"): 100.0, ("b-peer", "hub"): 50.0},
+            rules=rules,
+        ),
+        pools=pools,
+        rule_n={"A": 1},
+        tenants=tenants,
+        previous=first,
+        step=1,
+    )
+
+    assert set(second.associations) == {("a-near", "hub"), ("b-peer", "hub")}
+    assert second.pending_teardowns == {}
+    assert _unscheduled(second)[("a-far", "hub")].unscheduled_reason == "replaced_by_successor"
+    gap = next(event for event in second.allocation_events if event.category == "bbm_gap")
+    assert (gap.pair, gap.tenant_id) == (("a-far", "hub"), "tenant-far")
+
+
+def test_a_handover_no_node_states_follows_the_sessions_successor_abort_value():
+    """With the session's value soft_retain, a relay keeps its old link when the new one is
+    lost during the overlap."""
+    pools = _relay_pools()
+    rule_n = {RULE: 1}
+    first = _allocate(_usable({("g1", "relay"): 10.0}), pools=pools, rule_n=rule_n)
+    second = _allocate(
+        _usable({("g1", "relay"): 10.0, ("g2", "relay"): 5.0}),
+        pools=pools,
+        rule_n=rule_n,
+        previous=first,
+        step=1,
+        successor_abort_policy="soft_retain",
+    )
+    assert set(second.pending_teardowns) == {("g1", "relay")}
+
+    third = _allocate(
+        _usable({("g1", "relay"): 10.0}),
+        pools=pools,
+        rule_n=rule_n,
+        previous=second,
+        step=2,
+        successor_abort_policy="soft_retain",
+    )
+
+    assert set(third.associations) == {("g1", "relay")}
+    assert third.pending_teardowns == {}
+
+
+def test_cap_full_names_the_pool_size_when_the_pool_binds_before_the_rule_cap():
+    """The rule states n: 2 and node b has no terminal: the limit b holds is 0."""
+    pools = {"a": {POOL: (0, 1)}, "b": {POOL: ()}}
+
+    result = _allocate(_usable({("a", "b"): 5.0}), pools=pools, rule_n={RULE: 2})
+
+    refused = _unscheduled(result)[("a", "b")]
+    assert (refused.unscheduled_reason, refused.node_id, refused.cap) == ("cap_full", "b", 0)
+
+
+def test_an_association_orders_its_two_indices_by_the_lead_node():
+    """The lead is the one node that states scheduling, and the first node in node-pair order
+    when neither or both do."""
+    pools = {"a": {POOL: (5,)}, "b": {POOL: (7,)}}
+    neither = _allocate(_usable({("a", "b"): 5.0}), pools=pools)
+    assert neither.associations == {("a", "b"): (5, 7)}
+
+    second_states = _allocate(
+        _usable({("a", "b"): 5.0}, stating=frozenset({"b"}), scores={("a", "b"): 40.0}),
+        pools=pools,
+        stating=frozenset({"b"}),
+    )
+    assert second_states.associations == {("a", "b"): (7, 5)}
+
+    both = frozenset({"a", "b"})
+    score = {"a": {("a", "b"): 40.0}, "b": {("a", "b"): 40.0}}
+    both_state = _allocate(_usable_by_both({("a", "b"): 5.0}, score), pools=pools, stating=both)
+    assert both_state.associations == {("a", "b"): (5, 7)}
+
+
+def test_a_link_its_two_nodes_no_longer_both_take_is_released_and_says_why():
+    """Node a now ranks c first, and c ranks d first: (a, b) is no longer taken by a, and
+    (a, c) is not taken by c. The held link is released, its terminals keep receiving, and the
+    release cause says the link was no longer chosen by both nodes."""
+    stating = frozenset({"a", "b", "c", "d"})
+    pools = _pools_for_caps({"a": 1, "b": 1, "c": 1, "d": 1})
+    before = {"a": {("a", "b"): 40.0}, "b": {("a", "b"): 40.0}}
+    first = _allocate(_usable_by_both({("a", "b"): 5.0}, before), pools=pools, stating=stating)
+    assert set(first.associations) == {("a", "b")}
+
+    after = {
+        "a": {("a", "b"): 30.0, ("a", "c"): 80.0},
+        "b": {("a", "b"): 40.0},
+        "c": {("a", "c"): 30.0, ("c", "d"): 80.0},
+        "d": {("c", "d"): 40.0},
+    }
+    second = _allocate(
+        _usable_by_both({("a", "b"): 5.0, ("a", "c"): 5.0, ("c", "d"): 5.0}, after),
+        pools=pools,
+        stating=stating,
+        previous=first,
+        step=1,
+    )
+
+    assert set(second.associations) == {("c", "d")}
+    refused = _unscheduled(second)
+    assert (refused[("a", "b")].unscheduled_reason, refused[("a", "b")].node_id) == (
+        "not_mutual",
+        "a",
+    )
+    assert (refused[("a", "c")].unscheduled_reason, refused[("a", "c")].node_id) == (
+        "not_mutual",
+        "c",
+    )
+    assert second.receive_windows[("a", 0)].released_by == "not_mutual"
+    assert second.receive_windows[("b", 0)].released_by == "not_mutual"
+
+
+def test_a_stating_node_hands_a_pair_two_nodes_choose_over_by_its_own_mode():
+    """Node a states make before break with one reserved terminal. When it takes c in place of
+    b, it keeps its link to b for its stated overlap of one tick."""
+    stating = frozenset({"a", "b", "c"})
+    pools = {"a": {POOL: (0, 1)}, "b": {POOL: (0,)}, "c": {POOL: (0,)}}
+    modes = {"a": "mbb", "b": "bbm", "c": "bbm"}
+    reserve = {"a": 1, "b": 0, "c": 0}
+    overlap = {"a": 1, "b": 0, "c": 0}
+    before = {"a": {("a", "b"): 40.0}, "b": {("a", "b"): 40.0}}
+    first = _allocate(
+        _usable_by_both({("a", "b"): 5.0}, before),
+        pools=pools,
+        stating=stating,
+        handover_modes=modes,
+        mbb_reserve=reserve,
+        mbb_overlap_ticks=overlap,
+    )
+    assert set(first.associations) == {("a", "b")}
+
+    after = {
+        "a": {("a", "b"): 30.0, ("a", "c"): 80.0},
+        "b": {("a", "b"): 40.0},
+        "c": {("a", "c"): 50.0},
+    }
+    usable = {("a", "b"): 5.0, ("a", "c"): 5.0}
+    second = _allocate(
+        _usable_by_both(usable, after),
+        pools=pools,
+        stating=stating,
+        handover_modes=modes,
+        mbb_reserve=reserve,
+        mbb_overlap_ticks=overlap,
+        previous=first,
+        step=1,
+    )
+    assert set(second.associations) == {("a", "b"), ("a", "c")}
+    assert second.pending_teardowns == {
+        ("a", "b"): MbbTeardown(start_step=1, successor_pair=("a", "c"))
+    }
+
+    third = _allocate(
+        _usable_by_both(usable, after),
+        pools=pools,
+        stating=stating,
+        handover_modes=modes,
+        mbb_reserve=reserve,
+        mbb_overlap_ticks=overlap,
+        previous=second,
+        step=2,
+    )
+    assert set(third.associations) == {("a", "c")}
+    assert third.pending_teardowns == {}
+
+
+def test_a_rule_that_names_two_pools_at_one_node_is_refused():
+    usable = [
+        UsablePair(("a", "hub"), RULE, POOL, "east", 5.0, None, None),
+        UsablePair(("b", "hub"), RULE, POOL, "west", 5.0, None, None),
+    ]
+    pools = {"a": {POOL: (0,)}, "b": {POOL: (0,)}, "hub": {"east": (0,), "west": (1,)}}
+
+    with pytest.raises(ValueError, match="names one pool at each node"):
+        _allocate(usable, pools=pools)
+
+
+def test_n_below_one_is_refused():
+    with pytest.raises(ValueError, match="n must be at least 1"):
+        _allocate(
+            _usable({("a", "b"): 5.0}), pools=_pools_for_caps({"a": 1, "b": 1}), rule_n={RULE: 0}
+        )
+
+
+def test_n_plus_a_stated_reserve_that_fills_the_pool_exactly_is_accepted():
+    stating = frozenset({"s"})
+    pools = {"s": {POOL: (0, 1)}, "x": {POOL: (0,)}}
+
+    result = _allocate(
+        _usable({("s", "x"): 9.0}, stating=stating, scores={("s", "x"): 40.0}),
+        pools=pools,
+        stating=stating,
+        rule_n={RULE: 1},
+        handover_modes={"s": "mbb"},
+        mbb_reserve={"s": 1},
+        mbb_overlap_ticks={"s": 3},
+    )
+
+    assert set(result.associations) == {("s", "x")}

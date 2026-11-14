@@ -154,13 +154,10 @@ class VisibilityEvent(BaseModel):
       ``"range_exceeded"``, ``"field_of_regard"``,
       ``"tracking_exceeded"``) when not visible.
     - ``unscheduled_reason``: scheduling attribution. ``None`` when the
-      pair is allocated (``scheduled=True``) or invisible. One of
-      ``"gs_capacity"``, ``"sat_capacity"``, ``"hysteresis_hold"``,
-      ``"incumbent_held"``, ``"bbm_no_spare"``,
-      ``"mbb_overlap_locked"``, ``"replaced_by_successor"``,
-      ``"successor_aborted"``,
-      ``"failed_successor"``, or ``"failed_acquire"`` when the pair is
-      visible but the allocator did not schedule it.
+      pair is allocated (``scheduled=True``) or invisible. A value of
+      ``GroundUnscheduledReason`` (for example ``"sat_capacity"`` or
+      ``"hysteresis_hold"``) when the pair is visible but the allocator
+      did not schedule it.
 
     Field-level consistency invariants:
     - ``visible == (visibility_reject_reason == "ok")``.

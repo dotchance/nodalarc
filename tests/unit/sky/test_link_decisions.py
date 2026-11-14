@@ -246,6 +246,34 @@ class TestUnscheduledPair:
                 incumbent_range_km=None,
             )
 
+    def test_a_reason_carries_exactly_what_it_names(self) -> None:
+        """`cap_full` names a node, a limit and the links held; `not_strictly_nearer` names a
+        held link and both ranges; a reason that names none of these carries none."""
+        empty = {
+            "node_id": None,
+            "cap": None,
+            "held_pairs": None,
+            "range_km": None,
+            "incumbent_range_km": None,
+        }
+
+        def build(reason: str, incumbent, **named):
+            kwargs = _unscheduled_kwargs()
+            kwargs["unscheduled_reason"] = reason
+            return UnscheduledPair(
+                **kwargs, incumbent_pair=incumbent, capacity_constraint=None, **(empty | named)
+            )
+
+        build("cap_full", None, node_id="sat-a", cap=1, held_pairs=(("gs-a", "sat-a"),))
+        build("not_strictly_nearer", ("gs-a", "sat-b"), range_km=6.0, incumbent_range_km=5.0)
+        build("not_mutual", None, node_id="sat-a")
+        with pytest.raises(ValidationError, match="must carry exactly"):
+            build("cap_full", None, node_id="sat-a")
+        with pytest.raises(ValidationError, match="must carry exactly"):
+            build("gs_capacity", None, node_id="sat-a")
+        with pytest.raises(ValidationError, match="must name the held link"):
+            build("not_strictly_nearer", None, range_km=6.0, incumbent_range_km=5.0)
+
     def test_teardown_explicitly_not_an_unscheduled_reason(self) -> None:
         """Teardown overlap is a scheduling state, not an
         unscheduled-reason. Any future maintainer who tries to add

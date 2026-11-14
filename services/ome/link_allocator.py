@@ -92,8 +92,10 @@ class UsablePair(NamedTuple):
     policy scores; a node that states no scheduling has no view.
 
     ``rule_id`` is the link rule the pair belongs to. A node's cap is counted per rule, while a
-    pool's terminals are shared by every rule that draws on it. ``None`` means the caller names
-    no rule for the pair; such pairs form one group at each node.
+    pool's terminals are shared by every rule that draws on it. A rule names one pool at each
+    node: the terminals of that node the rule may use. Two pools of a node may hold the same
+    terminal index. ``None`` means the caller names no rule for the pair; such pairs form one
+    group at each node.
     """
 
     pair: tuple[str, str]
@@ -273,6 +275,10 @@ def _build_candidates(
         ],
     ] = {}
     default_items: list[UsablePair] = []
+    # The pool each rule draws on at each node. A node's cap on a rule counts its links
+    # of that rule in that one pool.
+    rule_pools: dict[tuple[str, str], str] = {}
+    stated_pool_rule: dict[tuple[str, str], str | None] = {}
     usable_set: set[tuple[str, str]] = set()
 
     for item in usable:
@@ -282,6 +288,25 @@ def _build_candidates(
         if pair in usable_set:
             raise ValueError(f"Duplicate usable candidate for pair {pair!r}")
         usable_set.add(pair)
+        if item.rule_id is not None:
+            for node_id, pool_name in ((pair[0], item.pool_a), (pair[1], item.pool_b)):
+                named = rule_pools.setdefault((node_id, item.rule_id), pool_name)
+                if named != pool_name:
+                    raise ValueError(
+                        f"Rule {item.rule_id!r} draws on two pools of {node_id}, {named!r} "
+                        f"and {pool_name!r}; a rule names one pool at each node"
+                    )
+        for node_id, pool_name in ((pair[0], item.pool_a), (pair[1], item.pool_b)):
+            if node_id not in stating_nodes:
+                continue
+            # A node that states scheduling keeps its reserve and counts its cap on one rule
+            # per pool; two rules on one such pool would each count the same terminals.
+            served = stated_pool_rule.setdefault((node_id, pool_name), item.rule_id)
+            if served != item.rule_id:
+                raise ValueError(
+                    f"Node {node_id} states scheduling and its pool {pool_name!r} is drawn on "
+                    f"by two rules, {served!r} and {item.rule_id!r}; such a pool serves one rule"
+                )
         lead, peer = _lead_and_peer(pair, stating_nodes)
         if lead not in stating_nodes:
             default_items.append(item)
@@ -404,7 +429,7 @@ def _build_candidates(
     # chooses a pair together with another stating node by taking a fixed number of
     # candidates. One cap cannot be filled by both rules, and nothing states how they
     # would share it.
-    alone = {(c.lead, c.lead_pool, c.rule_id) for c in candidates if c.kind == "stated"}
+    alone = {(c.lead, c.lead_pool) for c in candidates if c.kind == "stated"}
     for candidate in candidates:
         if candidate.kind != "mutual":
             continue
@@ -412,7 +437,7 @@ def _build_candidates(
             (candidate.lead, candidate.lead_pool),
             (candidate.peer, candidate.peer_pool),
         ):
-            if (node_id, pool_name, candidate.rule_id) in alone:
+            if (node_id, pool_name) in alone:
                 raise ValueError(
                     f"Node {node_id} chooses pairs on {node_id}.{pool_name} both alone and "
                     "together with another node that states scheduling; one cap cannot "
@@ -975,15 +1000,16 @@ def allocate_links(
             return size - mbb_reserve[node_id]
         return size
 
-    def end_mode(node_id: str, pool_name: str, rule_id: str | None) -> Literal["bbm", "mbb"]:
-        """How a choosing node ends a held link. A node that states scheduling uses its stated
-        mode. A node that states none brings the new link up first when its pool has a
-        terminal beyond its cap, and takes the old link down first otherwise."""
+    def ending_mode(node_id: str, pool_name: str) -> Literal["bbm", "mbb"]:
+        """How a choosing node ends a held link, decided before anything is released.
+
+        A node that states scheduling uses its stated mode. A node that states none brings
+        the new link up first when it has a terminal to spare, and takes the old link
+        down first otherwise. A terminal beyond its cap may be in use by a link of another
+        rule, so the test is whether a terminal is free now."""
         if node_id in stating:
             return handover_modes[node_id]
-        if len(pool_of(node_id, pool_name)) > cap_of(node_id, pool_name, rule_id):
-            return "mbb"
-        return "bbm"
+        return "mbb" if has_free_terminal(node_id, pool_name) else "bbm"
 
     def overlap_ticks_for(node_id: str) -> int:
         if node_id in stating:
@@ -1106,25 +1132,36 @@ def allocate_links(
         # The links whose release would make room: the node's links of the same rule when its
         # cap is reached, and any occupant of the pool when only the terminals are used up.
         relevant = steady if cap_reached else occupants
-        # A link in a handover cannot be taken, and no link of another tenant. A pair NodalArc
-        # chooses takes only a link NodalArc chose: it never displaces a stated choice. A pair
-        # both of its nodes choose takes only a link of that kind.
+        binding_limit = (
+            cap_of(node_id, pool_name, candidate.rule_id)
+            if cap_reached
+            else len(pool_of(node_id, pool_name))
+        )
+        # A link in a handover cannot be taken. A pair NodalArc chooses takes only a link
+        # NodalArc chose: it never displaces a stated choice. A pair both of its nodes choose
+        # takes only a link of that kind. A node that does not choose gives up a stated link
+        # only to a pair of the same tenant; a link NodalArc chose gives way to any stated
+        # pair, because stated always beats derived.
         takeable = [
             pair
             for pair in relevant
             if pair not in protected
-            and tenant_ids[candidate_for(pair).lead] == tenant_ids[candidate.lead]
             and (candidate.kind == "stated" or candidate_for(pair).kind == candidate.kind)
+            and (
+                chooses
+                or candidate_for(pair).kind != "stated"
+                or tenant_ids[candidate_for(pair).lead] == tenant_ids[candidate.lead]
+            )
         ]
         incumbent = worst_of(takeable)
 
         if not chooses:
-            # A refusal names the pool's worst-ranked occupant, whether or not that link
-            # could be taken.
+            # A refusal names the worst-ranked link that holds the room the pair needs,
+            # whether or not that link could be taken.
             if incumbent is None or not strictly_higher(
                 -rank_place[candidate.pair], -rank_place[incumbent.pair]
             ):
-                blocker = worst_of(occupants)
+                blocker = worst_of(relevant)
                 return None, _Rejected(
                     reason="sat_capacity",
                     incumbent_pair=blocker.pair if blocker is not None else None,
@@ -1146,7 +1183,7 @@ def allocate_links(
                     incumbent_pair=None,
                     capacity_constraint=capacity_text,
                     node_id=node_id,
-                    cap=cap_of(node_id, pool_name, candidate.rule_id),
+                    cap=binding_limit,
                     held_pairs=tuple(sorted(relevant)),
                 )
         elif candidate.kind == "default":
@@ -1165,7 +1202,7 @@ def allocate_links(
                     incumbent_pair=None,
                     capacity_constraint=capacity_text,
                     node_id=node_id,
-                    cap=cap_of(node_id, pool_name, candidate.rule_id),
+                    cap=binding_limit,
                     held_pairs=tuple(sorted(relevant)),
                 )
             if not strictly_higher(candidate.selection_score, incumbent.selection_score):
@@ -1181,7 +1218,11 @@ def allocate_links(
                 return None, _Rejected(
                     reason="gs_capacity", incumbent_pair=None, capacity_constraint=capacity_text
                 )
-            if candidate.visibility is None or incumbent.visibility is None:
+            if (
+                candidate.visibility is None
+                or incumbent.visibility is None
+                or incumbent.lead != node_id
+            ):
                 raise ValueError(
                     f"Internal allocator invariant violated: {node_id} chooses "
                     f"{candidate.pair!r} against {incumbent.pair!r} by a stated policy, but "
@@ -1219,7 +1260,9 @@ def allocate_links(
                     f"{decision.action!r}"
                 )
 
-        if end_mode(node_id, pool_name, candidate.rule_id) == "mbb" and not terminal_free:
+        # Only a stated make before break can be refused for want of a spare terminal. A
+        # node that states no mode takes the old link down first in that case.
+        if node_id in stating and handover_modes[node_id] == "mbb" and not terminal_free:
             return None, _Rejected(
                 reason="bbm_no_spare",
                 incumbent_pair=incumbent.pair,
@@ -1232,7 +1275,7 @@ def allocate_links(
             _make_event(
                 category="bbm_gap",
                 pair=incumbent.pair,
-                lead=challenger.lead,
+                lead=incumbent.lead,
                 tenant_ids=tenant_ids,
                 reference_bodies=reference_bodies,
                 message=(
@@ -1247,8 +1290,14 @@ def allocate_links(
             )
         )
 
+    lost_reported: set[tuple[str, str]] = set()
+
     def emit_incumbent_lost(pair: tuple[str, str], message: str) -> None:
         released(pair, "incumbent_lost")
+        # Two nodes can hand over to one new link; its loss is reported once.
+        if pair in lost_reported:
+            return
+        lost_reported.add(pair)
         lead, _peer = _lead_and_peer(pair, stating)
         allocation_events.append(
             _make_event(
@@ -1520,19 +1569,28 @@ def allocate_links(
                 return False
 
         # Both ends decide before any link is released.
-        displaced: list[tuple[str, str, bool, _Candidate]] = []
+        # Each entry: the node, its pool, how the held link ends ("bbm" or "mbb" at a node
+        # that chooses, None at a node that does not), and the held link.
+        displaced: list[tuple[str, str, Literal["bbm", "mbb"] | None, _Candidate]] = []
         for node_id, pool_name, chooses in ends:
             incumbent, rejection = check_end(candidate, node_id, pool_name, chooses=chooses)
             if rejection is not None:
                 rejected[candidate.pair] = rejection
                 return False
             if incumbent is not None:
-                displaced.append((node_id, pool_name, chooses, incumbent))
+                displaced.append(
+                    (
+                        node_id,
+                        pool_name,
+                        ending_mode(node_id, pool_name) if chooses else None,
+                        incumbent,
+                    )
+                )
 
         # A choosing node that breaks before it makes releases its held link now. That
         # link is final for the tick.
-        for node_id, pool_name, chooses, incumbent in displaced:
-            if chooses and end_mode(node_id, pool_name, candidate.rule_id) == "bbm":
+        for _node_id, _pool_name, mode, incumbent in displaced:
+            if mode == "bbm":
                 released(incumbent.pair, "bbm_gap")
                 remove_association(incumbent.pair)
                 if incumbent.pair in usable_set:
@@ -1548,8 +1606,8 @@ def allocate_links(
         # A node that does not choose releases its held link at once. That link's pair may
         # be considered again in this tick. A link NodalArc chose gives way to the stated
         # choice that took its room.
-        for node_id, pool_name, chooses, incumbent in displaced:
-            if not chooses:
+        for node_id, pool_name, mode, incumbent in displaced:
+            if mode is None:
                 released(incumbent.pair, "sat_capacity")
                 remove_association(incumbent.pair)
                 if incumbent.kind == "default":
@@ -1575,8 +1633,8 @@ def allocate_links(
             )
 
         # A choosing node that makes before it breaks keeps its held link for the overlap.
-        for node_id, pool_name, chooses, incumbent in displaced:
-            if chooses and end_mode(node_id, pool_name, candidate.rule_id) == "mbb":
+        for node_id, _pool_name, mode, incumbent in displaced:
+            if mode == "mbb":
                 new_pending_teardowns[incumbent.pair] = MbbTeardown(
                     start_step=step,
                     successor_pair=candidate.pair,
@@ -1586,7 +1644,7 @@ def allocate_links(
                     _make_event(
                         category="mbb_overlap_started",
                         pair=incumbent.pair,
-                        lead=candidate.lead,
+                        lead=incumbent.lead,
                         tenant_ids=tenant_ids,
                         reference_bodies=reference_bodies,
                         message=(

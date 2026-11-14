@@ -428,6 +428,34 @@ def test_wan_interface_metrics_follow_own_transmit_rate_and_access_links() -> No
             assert entry["metric"] == 10
 
 
+def test_a_crosslink_assigned_per_pass_takes_its_metric_from_its_own_terminal() -> None:
+    """earth-luna-dtn's leo_to_geo rule assigns its terminals per pass. A LEO satellite's
+    interface on that mount takes its IS-IS metric from its terminal's transmit rate
+    (1000 Mb/s: 100), as its fixed ISL interfaces do (2000 Mb/s: 50). Only its access
+    interface carries the access link metric."""
+    resolved = load_session_resolution_from_file(
+        Path("catalog/nodalarc/sessions/earth-luna-dtn.yaml"), catalog=shipped_read_view()
+    ).resolved
+    node_id = "leo-sat-p00s00"
+    node = resolved.node_by_id(node_id)
+    assert node is not None
+    metrics = {
+        entry["name"]: entry["metric"] for entry in _domain_vars(resolved, node_id)["interfaces"]
+    }
+    assigned = set(resolved.assigned_interfaces_by_node()[node_id])
+    crosslinks = [name for name in metrics if node.wan_terminal(name).endpoint_role == "crosslink"]
+
+    assert crosslinks and set(crosslinks) <= assigned
+    assert {metrics[name] for name in crosslinks} == {100}
+    for name, metric in metrics.items():
+        block = node.wan_terminal(name)
+        if block.endpoint_role == "access":
+            assert metric == 10
+        else:
+            assert metric == int(100_000 / block.transmit_mbps)
+    assert set(metrics.values()) == {10, 50, 100}
+
+
 @pytest.mark.parametrize(
     ("transmit_mbps", "metric"),
     [

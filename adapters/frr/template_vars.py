@@ -266,7 +266,8 @@ def _domain_facts(
 
 
 def _igp_metric(node: ResolvedNode, interface: str, protocol: str) -> int:
-    """A fixed link's IGP metric from its own terminal's transmit rate.
+    """The IGP metric of a WAN interface that is no access interface, from its own
+    terminal's transmit rate.
 
     A metric above what the protocol accepts is refused rather than clipped.
     """
@@ -302,7 +303,12 @@ def _wan_links(context: SessionContext, node: ResolvedNode) -> dict[str, dict[st
     order, each with its peer; ``static_only`` marks a fixed link a
     ``static_ip`` routing boundary crosses. The interfaces whose peer OME
     assigns per pass follow, with no fixed peer. ``reaches_ipv6`` marks an
-    interface some possible peer of which carries IPv6.
+    interface some possible peer of which carries IPv6. ``access`` marks an
+    interface of an access mount, which takes the access link metric. Every
+    other interface takes its metric from its own terminal's transmit rate,
+    whether its peer is fixed or assigned per pass. Rejected alternative:
+    the access metric for every interface assigned per pass, which gave a
+    crosslink a different metric when its rule changed mode.
     """
     resolved = context.resolved
     static_rules = resolved.static_boundary_rule_ids()
@@ -342,7 +348,7 @@ def _wan_links(context: SessionContext, node: ResolvedNode) -> dict[str, dict[st
         links[name] = {
             "peer": None,
             "static_only": False,
-            "access": True,
+            "access": node.wan_terminal(name).endpoint_role == "access",
             "reaches_ipv6": bool(peers.get((node.node_id, name), frozenset()) & carries_ipv6),
         }
     return links

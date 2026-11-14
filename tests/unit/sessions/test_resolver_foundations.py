@@ -7,7 +7,7 @@ import zlib
 
 import pytest
 from nodalarc.models.identity import IdentityMode
-from nodalarc.models.link_rules import VisibleCandidatesTopology
+from nodalarc.models.link_rules import NearestStartTopology, VisibleCandidatesTopology
 from nodalarc.models.resolved_session import (
     OspfInstanceAreas,
     ResolvedBodyFacts,
@@ -513,7 +513,7 @@ def test_link_interface_map_contains_only_fixed_candidates() -> None:
             ResolvedEndpoint(segment_id="leo", terminal_role="isl", node_ids=(left.node_id,)),
             ResolvedEndpoint(segment_id="leo", terminal_role="isl", node_ids=(right.node_id,)),
         ),
-        topology=VisibleCandidatesTopology(mode="visible_candidates"),
+        topology=NearestStartTopology(mode="nearest_start", n=1),
     )
     candidate = ResolvedLinkCandidate(
         rule_id="isl",
@@ -524,7 +524,7 @@ def test_link_interface_map_contains_only_fixed_candidates() -> None:
         node_b=right.node_id,
         interface_a="isl0",
         interface_b="isl0",
-        topology_mode="visible_candidates",
+        topology_mode="nearest_start",
         priority=0,
         endpoint_segments=("leo", "leo"),
         delay_class="local",
@@ -537,6 +537,36 @@ def test_link_interface_map_contains_only_fixed_candidates() -> None:
     )
 
     assert resolved.link_interface_map() == {(left.node_id, right.node_id): ("isl0", "isl0")}
+
+
+def test_a_visible_candidates_candidate_between_space_nodes_has_its_terminals_assigned() -> None:
+    """A rule that chooses among visible candidates binds no interface to a pair, whatever
+    kind of node its ends are: OME assigns a terminal of each node for each pass."""
+    fields = {
+        "rule_id": "relay",
+        "kind": "isl",
+        "terminal_roles": ("crosslink", "crosslink"),
+        "terminal_medium": "optical",
+        "node_a": "geo-sat-0",
+        "node_b": "luna-relay-0",
+        "topology_mode": "visible_candidates",
+        "priority": 0,
+        "endpoint_segments": ("geo", "luna"),
+        "delay_class": "local",
+        "longest_delay_s": 1.4,
+    }
+    candidate = ResolvedLinkCandidate(**fields)
+    assert candidate.assigned_terminals
+    with pytest.raises(ValueError, match="no fixed interfaces"):
+        _ = candidate.fixed_interfaces
+
+    with pytest.raises(ValidationError, match="must not carry fixed interfaces"):
+        ResolvedLinkCandidate(**fields, interface_a="isl2", interface_b="isl2")
+
+    fixed = ResolvedLinkCandidate(
+        **{**fields, "topology_mode": "nearest_start"}, interface_a="isl2", interface_b="isl2"
+    )
+    assert not fixed.assigned_terminals
 
 
 def test_access_candidate_rejects_fabricated_fixed_interfaces() -> None:
@@ -568,7 +598,7 @@ def test_fixed_candidate_requires_both_interfaces() -> None:
             node_a="sat-a",
             node_b="sat-b",
             interface_a="isl0",
-            topology_mode="visible_candidates",
+            topology_mode="nearest_start",
             priority=0,
             endpoint_segments=("leo", "leo"),
             delay_class="local",
@@ -587,7 +617,7 @@ def test_link_candidate_rejects_self_pair() -> None:
             node_b="sat",
             interface_a="isl0",
             interface_b="isl1",
-            topology_mode="visible_candidates",
+            topology_mode="nearest_start",
             priority=0,
             endpoint_segments=("leo", "leo"),
             delay_class="local",

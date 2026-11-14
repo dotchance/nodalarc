@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from nodalarc.body_frames import BodyFrame
@@ -217,47 +218,32 @@ def isl_pair_reasons(
     ]
 
 
-def evaluate_isl_feasibility(
+@dataclass(frozen=True)
+class SpacePair:
+    """One candidate pair between two space terminals, in node-pair order, with each end's
+    limits. A fixed link names the interface the resolver bound at each end; a pair whose
+    terminals OME assigns per pass names none."""
+
+    pair: tuple[str, str]
+    link_type: str
+    constraints_a: IslTerminalConstraints
+    constraints_b: IslTerminalConstraints
+    interface_a: str = ""
+    interface_b: str = ""
+
+
+def fixed_space_pairs(
     *,
     node_order: list[str],
-    sat_states: Mapping[str, PropagatedState],
     by_node: Mapping[str, list[NeighborAssignment]],
     terminal_constraints: Mapping[str, Mapping[str, IslTerminalConstraints]],
-    body_frames: Mapping[str, BodyFrame],
-    polar_seam_enabled: bool,
-    latitude_threshold_deg: float,
-    signals: PairSignals,
-) -> dict[tuple[str, str], IslFeasibilityResult]:
-    """Evaluate physical ISL feasibility for assigned neighbor pairs.
-
-    Each candidate's two directions are the tick's signals: the transmitter's constraints at
-    the tick, the receiver's at arrival, each along its apparent
-    direction, and the path against every session body and the Sun. A link is feasible while
-    both directions are; the reason is the first failure, a->b before b->a. ``range_km`` is the
-    ends' geometric separation at the tick.
-    """
-    results: dict[tuple[str, str], IslFeasibilityResult] = {}
-    candidates: list[_Candidate] = []
-    rejected: list[tuple[dict, str, str]] = []
-
+) -> list[SpacePair]:
+    """The fixed candidate pairs, each once, in node order: each end's limits are those of the
+    terminal behind the interface the resolver bound there."""
+    pairs: list[SpacePair] = []
     for node_id in node_order:
-        state_a = sat_states.get(node_id)
-        if state_a is None:
-            raise ValueError(
-                f"ISL feasibility missing propagated state for endpoint {node_id!r}; "
-                "refusing to convert absent physics into a no-link decision"
-            )
-
         for assignment_a in by_node.get(node_id, []):
             peer_id = assignment_a.peer_node_id
-            state_b = sat_states.get(peer_id)
-            if state_b is None:
-                raise ValueError(
-                    f"ISL feasibility missing propagated state for endpoint {peer_id!r} "
-                    f"while evaluating {node_id!r}->{peer_id!r}; refusing to convert "
-                    "absent physics into a no-link decision"
-                )
-
             pair = (min(node_id, peer_id), max(node_id, peer_id))
             if pair[0] != node_id:
                 continue
@@ -283,73 +269,148 @@ def evaluate_isl_feasibility(
                     f"Missing terminal constraints for {node_id}:{assignment_a.interface}<->"
                     f"{peer_id}:{assignment_b.interface}"
                 )
-            if state_a.central_body not in body_frames or state_b.central_body not in body_frames:
-                raise ValueError(
-                    f"ISL feasibility is missing resolved body primitive facts for "
-                    f"{state_a.central_body!r} or {state_b.central_body!r}"
-                )
-
-            max_range_km = min(constraints_a.max_range_km, constraints_b.max_range_km)
-            max_tracking_rate_deg_s = min(
-                constraints_a.max_tracking_rate_deg_s,
-                constraints_b.max_tracking_rate_deg_s,
-            )
-            field_of_regard_deg = min(
-                constraints_a.field_of_regard_deg,
-                constraints_b.field_of_regard_deg,
-            )
-            # The stricter of the two terminals' rates, as published; each end is checked
-            # against its own.
-            applied_tracking_rate = max_tracking_rate_deg_s
-            pos_a, _vel_a, pos_b, _vel_b = _state_vectors(state_a, state_b)
-            range_km = compute_range_km(pos_a, pos_b)
-            common = {
-                "pair": pair,
-                "link_type": assignment_a.link_type,
-                "constraints_a": constraints_a,
-                "constraints_b": constraints_b,
-                "interface_a": assignment_a.interface,
-                "interface_b": assignment_b.interface,
-                "range_km": range_km,
-                "max_range_km": max_range_km,
-                "applied_tracking_rate": applied_tracking_rate,
-                "field_of_regard_deg": field_of_regard_deg,
-            }
-
-            if constraints_a.terminal_type != constraints_b.terminal_type:
-                rejected.append(
-                    (
-                        common,
-                        "terminal_type_mismatch",
-                        f"{constraints_a.terminal_type}/{constraints_b.terminal_type}",
-                    )
-                )
-                continue
-            if not _role_allows_link(
-                constraints_a.role, assignment_a.link_type
-            ) or not _role_allows_link(constraints_b.role, assignment_a.link_type):
-                rejected.append((common, "terminal_role_mismatch", constraints_a.terminal_type))
-                continue
-
-            candidates.append(
-                _Candidate(
+            pairs.append(
+                SpacePair(
                     pair=pair,
                     link_type=assignment_a.link_type,
                     constraints_a=constraints_a,
                     constraints_b=constraints_b,
                     interface_a=assignment_a.interface,
                     interface_b=assignment_b.interface,
-                    range_km=range_km,
-                    limits=PairLimits(
-                        a=_end_limits(constraints_a),
-                        b=_end_limits(constraints_b),
-                        polar_seam=polar_seam_enabled
-                        and assignment_a.link_type == "cross_plane_isl"
-                        and state_a.central_body == state_b.central_body,
-                    ),
-                    applied_tracking_rate=applied_tracking_rate,
                 )
             )
+    return pairs
+
+
+def evaluate_isl_feasibility(
+    *,
+    node_order: list[str],
+    sat_states: Mapping[str, PropagatedState],
+    by_node: Mapping[str, list[NeighborAssignment]],
+    terminal_constraints: Mapping[str, Mapping[str, IslTerminalConstraints]],
+    body_frames: Mapping[str, BodyFrame],
+    polar_seam_enabled: bool,
+    latitude_threshold_deg: float,
+    signals: PairSignals,
+) -> dict[tuple[str, str], IslFeasibilityResult]:
+    """Evaluate physical feasibility for the fixed candidate pairs (``fixed_space_pairs``)."""
+    return evaluate_space_feasibility(
+        pairs=fixed_space_pairs(
+            node_order=node_order, by_node=by_node, terminal_constraints=terminal_constraints
+        ),
+        sat_states=sat_states,
+        body_frames=body_frames,
+        polar_seam_enabled=polar_seam_enabled,
+        latitude_threshold_deg=latitude_threshold_deg,
+        signals=signals,
+    )
+
+
+def evaluate_space_feasibility(
+    *,
+    pairs: Sequence[SpacePair],
+    sat_states: Mapping[str, PropagatedState],
+    body_frames: Mapping[str, BodyFrame],
+    polar_seam_enabled: bool,
+    latitude_threshold_deg: float,
+    signals: PairSignals,
+) -> dict[tuple[str, str], IslFeasibilityResult]:
+    """Evaluate physical feasibility for candidate pairs between two space terminals. The one
+    check for every such pair, whether its interfaces are fixed or its terminals are assigned
+    per pass: only where each end's limits come from differs.
+
+    Each candidate's two directions are the tick's signals: the transmitter's constraints at
+    the tick, the receiver's at arrival, each along its apparent
+    direction, and the path against every session body and the Sun. A link is feasible while
+    both directions are; the reason is the first failure, a->b before b->a. ``range_km`` is the
+    ends' geometric separation at the tick.
+    """
+    results: dict[tuple[str, str], IslFeasibilityResult] = {}
+    candidates: list[_Candidate] = []
+    rejected: list[tuple[dict, str, str]] = []
+
+    for item in pairs:
+        pair = item.pair
+        constraints_a = item.constraints_a
+        constraints_b = item.constraints_b
+        states = []
+        for node_id in pair:
+            state = sat_states.get(node_id)
+            if state is None:
+                raise ValueError(
+                    f"ISL feasibility missing propagated state for endpoint {node_id!r} "
+                    f"while evaluating {pair[0]!r}->{pair[1]!r}; refusing to convert "
+                    "absent physics into a no-link decision"
+                )
+            states.append(state)
+        state_a, state_b = states
+        if state_a.central_body not in body_frames or state_b.central_body not in body_frames:
+            raise ValueError(
+                f"ISL feasibility is missing resolved body primitive facts for "
+                f"{state_a.central_body!r} or {state_b.central_body!r}"
+            )
+
+        max_range_km = min(constraints_a.max_range_km, constraints_b.max_range_km)
+        max_tracking_rate_deg_s = min(
+            constraints_a.max_tracking_rate_deg_s,
+            constraints_b.max_tracking_rate_deg_s,
+        )
+        field_of_regard_deg = min(
+            constraints_a.field_of_regard_deg,
+            constraints_b.field_of_regard_deg,
+        )
+        # The stricter of the two terminals' rates, as published; each end is checked
+        # against its own.
+        applied_tracking_rate = max_tracking_rate_deg_s
+        pos_a, _vel_a, pos_b, _vel_b = _state_vectors(state_a, state_b)
+        range_km = compute_range_km(pos_a, pos_b)
+        common: dict[str, Any] = {
+            "pair": pair,
+            "link_type": item.link_type,
+            "constraints_a": constraints_a,
+            "constraints_b": constraints_b,
+            "interface_a": item.interface_a,
+            "interface_b": item.interface_b,
+            "range_km": range_km,
+            "max_range_km": max_range_km,
+            "applied_tracking_rate": applied_tracking_rate,
+            "field_of_regard_deg": field_of_regard_deg,
+        }
+
+        if constraints_a.terminal_type != constraints_b.terminal_type:
+            rejected.append(
+                (
+                    common,
+                    "terminal_type_mismatch",
+                    f"{constraints_a.terminal_type}/{constraints_b.terminal_type}",
+                )
+            )
+            continue
+        if not _role_allows_link(constraints_a.role, item.link_type) or not _role_allows_link(
+            constraints_b.role, item.link_type
+        ):
+            rejected.append((common, "terminal_role_mismatch", constraints_a.terminal_type))
+            continue
+
+        candidates.append(
+            _Candidate(
+                pair=pair,
+                link_type=item.link_type,
+                constraints_a=constraints_a,
+                constraints_b=constraints_b,
+                interface_a=item.interface_a,
+                interface_b=item.interface_b,
+                range_km=range_km,
+                limits=PairLimits(
+                    a=_end_limits(constraints_a),
+                    b=_end_limits(constraints_b),
+                    polar_seam=polar_seam_enabled
+                    and item.link_type == "cross_plane_isl"
+                    and state_a.central_body == state_b.central_body,
+                ),
+                applied_tracking_rate=applied_tracking_rate,
+            )
+        )
 
     all_pairs = [common["pair"] for common, _reason, _type in rejected] + [
         candidate.pair for candidate in candidates

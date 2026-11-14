@@ -493,6 +493,17 @@ class ResolvedBodyFacts(BaseModel):
     reference: str
 
 
+def assigns_terminals(kind: LinkLabel, topology_mode: TopologyMode) -> bool:
+    """Whether a rule's candidates have their terminals assigned per pass.
+
+    A ``visible_candidates`` rule chooses among its usable candidates as the geometry changes,
+    so a node's terminal serves one peer now and another later: no interface can be bound to
+    a pair. An access rule is assigned in every mode. Every other rule fixes its pairs, and
+    each pair keeps the interfaces the resolver bound to it.
+    """
+    return kind == "access" or topology_mode == "visible_candidates"
+
+
 # A link whose one-way delay can exceed the platform's long-delay bound is a
 # long-delay link; every other link is a local link. The resolver classifies
 # each candidate once, from every delay the candidate can have.
@@ -502,9 +513,11 @@ type LinkDelayClass = Literal["local", "long_delay"]
 class ResolvedLinkCandidate(BaseModel):
     """One declared candidate pair.
 
-    Fixed links carry resolver-assigned interfaces. Access links do not: OME
-    assigns one of each endpoint's selected global access-interface indices
-    when it schedules an association.
+    A candidate has one of two forms. A fixed candidate carries the interface the resolver
+    bound to it at each node. A candidate whose terminals are assigned per pass carries none:
+    OME assigns one of each node's selected terminals when it schedules the pair. A rule that
+    chooses among visible candidates as the geometry changes (``visible_candidates``) resolves
+    to the assigned form, as does every access rule.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -532,10 +545,11 @@ class ResolvedLinkCandidate(BaseModel):
         if self.node_a == self.node_b:
             raise ValueError(f"link candidate {self.rule_id!r} has identical endpoints")
         interfaces = (self.interface_a, self.interface_b)
-        if self.kind == "access":
+        if assigns_terminals(self.kind, self.topology_mode):
             if any(interface is not None for interface in interfaces):
                 raise ValueError(
-                    f"access candidate {self.rule_id!r} must not carry fixed interfaces"
+                    f"candidate {self.rule_id!r} has its terminals assigned per pass and must "
+                    "not carry fixed interfaces"
                 )
         elif any(interface is None for interface in interfaces):
             raise ValueError(
@@ -544,14 +558,22 @@ class ResolvedLinkCandidate(BaseModel):
         return self
 
     @property
+    def assigned_terminals(self) -> bool:
+        """Whether OME assigns the candidate's terminals for each pass."""
+        return assigns_terminals(self.kind, self.topology_mode)
+
+    @property
     def pair(self) -> tuple[str, str]:
         return (self.node_a, self.node_b)
 
     @property
     def fixed_interfaces(self) -> tuple[str, str]:
-        """Return the resolver-owned interfaces for a non-access candidate."""
+        """Return the resolver-owned interfaces of a fixed candidate."""
         if self.interface_a is None or self.interface_b is None:
-            raise ValueError(f"access candidate {self.rule_id!r} has no fixed interfaces")
+            raise ValueError(
+                f"candidate {self.rule_id!r} has its terminals assigned per pass; it has no "
+                "fixed interfaces"
+            )
         return self.interface_a, self.interface_b
 
 
@@ -630,16 +652,6 @@ class ResolvedNode(BaseModel):
                 if getattr(self.originated_prefixes, family) is not None
             )
         return frozenset(carried)
-
-    @property
-    def access_interfaces(self) -> tuple[str, ...]:
-        """The WAN interfaces behind the node's access terminals, in WAN order."""
-        access_terminals = {
-            block.terminal_id
-            for block in self.terminal_inventory
-            if block.endpoint_role == "access"
-        }
-        return tuple(wan.name for wan in self.wan_interfaces if wan.terminal_id in access_terminals)
 
     def wan_terminal(self, interface: str) -> ResolvedTerminalBlock:
         """The terminal block behind one of this node's WAN interfaces."""
@@ -740,9 +752,9 @@ class ResolvedEndpoint(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedAccessTerminalSelection:
-    """One selected access mount, its resolver-owned interface indices and the interface
-    behind each index, in the same order."""
+class ResolvedTerminalSelection:
+    """One mount a rule that assigns terminals selects on a node, the node's terminal index of
+    each of its interfaces and the interface behind each index, in the same order."""
 
     block: ResolvedTerminalBlock
     interface_indices: tuple[int, ...]
@@ -761,6 +773,11 @@ class ResolvedLinkRule(BaseModel):
     topology: LinkTopology
     constraints: LinkRuleConstraints | None = None
     tags: tuple[NonEmptyReference, ...] = ()
+
+    @property
+    def assigns_terminals(self) -> bool:
+        """Whether the rule's candidates have their terminals assigned per pass."""
+        return assigns_terminals(self.kind, self.topology.mode)
 
 
 class SidBlock(BaseModel):
@@ -1072,12 +1089,12 @@ class ResolvedSession(BaseModel):
     def instance_links(self) -> dict[str, tuple[InstanceLink, ...]]:
         """Each instance's possible adjacencies, keyed by domain id.
 
-        A fixed link, an access link or a shared Ethernet segment joins two
-        participants of an instance when each end has an interface in the
-        instance toward the other (``domain_interfaces_by_node``).
+        A fixed link, a link on terminals assigned per pass or a shared Ethernet
+        segment joins two participants of an instance when each end has an
+        interface in the instance toward the other (``domain_interfaces_by_node``).
         """
         interfaces_by_node = self.domain_interfaces_by_node()
-        nodes = {node.node_id: node for node in self.nodes}
+        assigned_interfaces = self.assigned_interfaces_by_node()
         links: dict[str, list[InstanceLink]] = {
             domain.domain_id: [] for domain in self.routing_domains
         }
@@ -1088,13 +1105,13 @@ class ResolvedSession(BaseModel):
 
         for candidate in self.link_candidates:
             for domain_id in links:
-                if candidate.kind == "access":
+                if candidate.assigned_terminals:
                     ends = (
                         in_instance(
-                            candidate.node_a, domain_id, nodes[candidate.node_a].access_interfaces
+                            candidate.node_a, domain_id, assigned_interfaces[candidate.node_a]
                         ),
                         in_instance(
-                            candidate.node_b, domain_id, nodes[candidate.node_b].access_interfaces
+                            candidate.node_b, domain_id, assigned_interfaces[candidate.node_b]
                         ),
                     )
                 else:
@@ -1249,9 +1266,9 @@ class ResolvedSession(BaseModel):
         A router takes part in a domain through its interfaces, and its
         loopback belongs to every domain it participates in. A fixed link
         belongs to the domains the node shares with the peer on it; a link a
-        ``static_ip`` boundary crosses belongs to none. An access interface
-        belongs to the domains the node shares with the nodes it can reach
-        over access links. An Ethernet segment interface belongs to the
+        ``static_ip`` boundary crosses belongs to none. An interface assigned
+        per pass belongs to the domains the node shares with the nodes it can
+        reach over such links. An Ethernet segment interface belongs to the
         domains the node shares with the segment's other participants, or,
         when it shares none, to every domain the node participates in. Inner
         keys follow declared domain order; the loopback is not listed.
@@ -1267,6 +1284,7 @@ class ResolvedSession(BaseModel):
         }
         assigned: dict[str, dict[str, set[str]]] = {node_id: {} for node_id in participation}
         access_reach: dict[str, set[str]] = {node_id: set() for node_id in participation}
+        assigned_interfaces = self.assigned_interfaces_by_node()
         for candidate in self.link_candidates:
             ends = (
                 (candidate.node_a, candidate.node_b, 0),
@@ -1277,7 +1295,7 @@ class ResolvedSession(BaseModel):
                 if own is None:
                     continue
                 peer_domains = participation.get(peer_id, set())
-                if candidate.kind == "access":
+                if candidate.assigned_terminals:
                     access_reach[node_id] |= peer_domains
                 elif candidate.rule_id not in static_rules:
                     assigned[node_id].setdefault(candidate.fixed_interfaces[side], set()).update(
@@ -1287,7 +1305,7 @@ class ResolvedSession(BaseModel):
             own = participation.get(node.node_id)
             if own is None:
                 continue
-            for name in node.access_interfaces:
+            for name in assigned_interfaces.get(node.node_id, ()):
                 assigned[node.node_id].setdefault(name, set()).update(
                     own & access_reach[node.node_id]
                 )
@@ -1385,19 +1403,21 @@ class ResolvedSession(BaseModel):
             for node_id, by_rule in self.ground_min_elevation_by_gs_and_rule().items()
         }
 
-    def selected_access_terminals_by_node(
+    def assigned_terminal_selections_by_node(
         self,
-    ) -> dict[str, tuple[ResolvedAccessTerminalSelection, ...]]:
-        """Return enabled access-rule mounts with their global WAN indices.
+    ) -> dict[str, tuple[ResolvedTerminalSelection, ...]]:
+        """Every mount an enabled rule that assigns terminals selects, by node.
 
-        Selection is derived once from resolved endpoints. Consumers receive
-        the same mount blocks and the same resolver-created interface identity;
-        filtering a mount must never renumber ``termN`` or ``gndN``.
+        Selection is derived once from resolved endpoints. A terminal's index is the position
+        of its interface in the node's WAN interface list, so every terminal of a node has one
+        index whatever its interface is named, and filtering a mount never renumbers another.
+        Rejected alternative: the number cut from a ``term`` or ``gnd`` interface name, which
+        gave ``gnd2`` and an assigned ``isl2`` of one node the same index.
         """
         node_by_id = {node.node_id: node for node in self.nodes}
         selected_ids: dict[str, set[str]] = {}
         for rule in self.link_rules:
-            if rule.kind != "access" or not rule.enabled:
+            if not rule.enabled or not rule.assigns_terminals:
                 continue
             for endpoint in rule.endpoints:
                 for node_id in endpoint.node_ids:
@@ -1405,43 +1425,30 @@ class ResolvedSession(BaseModel):
                     matches = tuple(
                         block
                         for block in node.terminal_inventory
-                        if block.endpoint_role == "access" and endpoint.matches_terminal(block)
+                        if endpoint.matches_terminal(block)
                     )
                     if not matches:
                         raise ValueError(
-                            f"access rule {rule.rule_id!r} endpoint for {node_id!r} "
-                            "matches no resolved access terminal mount"
+                            f"link rule {rule.rule_id!r} endpoint for {node_id!r} "
+                            f"matches no resolved {endpoint.terminal_role} terminal mount"
                         )
                     selected_ids.setdefault(node_id, set()).update(
                         block.terminal_id for block in matches
                     )
 
-        result: dict[str, tuple[ResolvedAccessTerminalSelection, ...]] = {}
+        result: dict[str, tuple[ResolvedTerminalSelection, ...]] = {}
         for node in self.nodes:
             terminal_ids = selected_ids.get(node.node_id)
             if not terminal_ids:
                 continue
-            expected_prefix = "term" if node.kind == "ground_station" else "gnd"
             interfaces_by_terminal: dict[str, list[tuple[int, str]]] = {}
-            for interface in node.wan_interfaces:
-                if interface.terminal_id not in terminal_ids:
-                    continue
-                if not interface.name.startswith(expected_prefix):
-                    raise ValueError(
-                        f"selected access interface {node.node_id}:{interface.name} must use "
-                        f"the {expected_prefix!r} prefix"
+            for index, interface in enumerate(node.wan_interfaces):
+                if interface.terminal_id in terminal_ids:
+                    interfaces_by_terminal.setdefault(interface.terminal_id, []).append(
+                        (index, interface.name)
                     )
-                suffix = interface.name[len(expected_prefix) :]
-                if not suffix.isdigit():
-                    raise ValueError(
-                        f"selected access interface {node.node_id}:{interface.name} "
-                        "does not end in a numeric global index"
-                    )
-                interfaces_by_terminal.setdefault(interface.terminal_id, []).append(
-                    (int(suffix), interface.name)
-                )
 
-            selections: list[ResolvedAccessTerminalSelection] = []
+            selections: list[ResolvedTerminalSelection] = []
             for block in node.terminal_inventory:
                 if block.terminal_id not in terminal_ids:
                     continue
@@ -1449,16 +1456,11 @@ class ResolvedSession(BaseModel):
                 indices = tuple(index for index, _name in interfaces)
                 if len(indices) != block.count:
                     raise ValueError(
-                        f"selected access mount {node.node_id}:{block.terminal_id} declares "
-                        f"count={block.count}, but owns global interface indices {indices}"
-                    )
-                if len(set(indices)) != len(indices):
-                    raise ValueError(
-                        f"selected access mount {node.node_id}:{block.terminal_id} owns "
-                        f"duplicate global interface indices {indices}"
+                        f"selected mount {node.node_id}:{block.terminal_id} declares "
+                        f"count={block.count}, but owns WAN interface indices {indices}"
                     )
                 selections.append(
-                    ResolvedAccessTerminalSelection(
+                    ResolvedTerminalSelection(
                         block=block,
                         interface_indices=indices,
                         interface_names=tuple(name for _index, name in interfaces),
@@ -1467,14 +1469,49 @@ class ResolvedSession(BaseModel):
             missing = sorted(terminal_ids - {item.block.terminal_id for item in selections})
             if missing:
                 raise ValueError(
-                    f"selected access mounts for {node.node_id!r} are missing from its "
+                    f"selected mounts for {node.node_id!r} are missing from its "
                     f"resolved terminal inventory: {missing}"
                 )
             result[node.node_id] = tuple(selections)
         return result
 
+    def selected_access_terminals_by_node(
+        self,
+    ) -> dict[str, tuple[ResolvedTerminalSelection, ...]]:
+        """The access mounts among ``assigned_terminal_selections_by_node``: the mounts the
+        surface-frame physics reads (a station's sky mask, a satellite's boresight toward a
+        body)."""
+        result: dict[str, tuple[ResolvedTerminalSelection, ...]] = {}
+        for node_id, selections in self.assigned_terminal_selections_by_node().items():
+            access = tuple(item for item in selections if item.block.endpoint_role == "access")
+            if access:
+                result[node_id] = access
+        return result
+
+    def assigned_interfaces_by_node(self) -> dict[str, tuple[str, ...]]:
+        """Each node's WAN interfaces whose peer OME assigns per pass, in WAN order: every
+        interface behind an access mount, and every interface behind a mount that an enabled
+        rule which assigns terminals selects. Every node has an entry; a node with none has an
+        empty one."""
+        selected = {
+            node_id: {item.block.terminal_id for item in selections}
+            for node_id, selections in self.assigned_terminal_selections_by_node().items()
+        }
+        result: dict[str, tuple[str, ...]] = {}
+        for node in self.nodes:
+            mounts = selected.get(node.node_id, set()) | {
+                block.terminal_id
+                for block in node.terminal_inventory
+                if block.endpoint_role == "access"
+            }
+            result[node.node_id] = tuple(
+                wan.name for wan in node.wan_interfaces if wan.terminal_id in mounts
+            )
+        return result
+
     def terminal_interface_names(self) -> dict[str, dict[int, str]]:
-        """Each node's selected access terminal interfaces, by terminal index.
+        """Each node's selected terminal interfaces that OME assigns per pass, by terminal
+        index.
 
         OME names the terminals of a link by index. This is the one lookup that turns a
         node's terminal index into the pod interface the resolver created for it, so no
@@ -1488,7 +1525,7 @@ class ResolvedSession(BaseModel):
                     selection.interface_indices, selection.interface_names, strict=True
                 )
             }
-            for node_id, selections in self.selected_access_terminals_by_node().items()
+            for node_id, selections in self.assigned_terminal_selections_by_node().items()
         }
 
     def ground_index_by_node_id(self) -> dict[str, int]:
@@ -1524,23 +1561,23 @@ class ResolvedSession(BaseModel):
     def link_interface_map(self) -> dict[tuple[str, str], tuple[str, str]]:
         """Return resolver-assigned fixed-link interfaces by canonical pair.
 
-        Access interfaces are selected dynamically by OME and therefore never
-        appear in this map.
+        A candidate whose terminals OME assigns per pass never appears in this map.
         """
         return {
             candidate.pair: candidate.fixed_interfaces
             for candidate in self.link_candidates
-            if candidate.kind != "access"
+            if not candidate.assigned_terminals
         }
 
     def long_delay_fixed_pairs(self) -> frozenset[tuple[str, str]]:
         """The fixed links whose class is long-delay, by canonical pair. OME names each contact
-        on them and the Scheduler drains each at its end. A long-delay access candidate is not
-        among them: its terminals are chosen per contact, and its drain is not built."""
+        on them and the Scheduler drains each at its end. A long-delay candidate whose
+        terminals are assigned per pass is not among them: its terminals are chosen per
+        contact."""
         return frozenset(
             candidate.pair
             for candidate in self.link_candidates
-            if candidate.kind != "access" and candidate.delay_class == "long_delay"
+            if not candidate.assigned_terminals and candidate.delay_class == "long_delay"
         )
 
     def interface_terminal_rates(self) -> dict[tuple[str, str], InterfaceRates]:
@@ -1561,23 +1598,23 @@ class ResolvedSession(BaseModel):
     def wan_interface_peers(self) -> dict[tuple[str, str], frozenset[str]]:
         """The nodes each WAN interface can reach, keyed by (node_id, interface).
 
-        A fixed link's interface reaches its one peer. An access interface can
-        carry any of its node's access candidates, since OME assigns the
+        A fixed link's interface reaches its one peer. An interface assigned per pass
+        can carry any of its node's candidates of that form, since OME assigns the
         interface when it schedules an association.
         """
         peers: dict[tuple[str, str], set[str]] = {}
         access_peers: dict[str, set[str]] = {}
         for candidate in self.link_candidates:
-            if candidate.kind == "access":
+            if candidate.assigned_terminals:
                 access_peers.setdefault(candidate.node_a, set()).add(candidate.node_b)
                 access_peers.setdefault(candidate.node_b, set()).add(candidate.node_a)
                 continue
             interface_a, interface_b = candidate.fixed_interfaces
             peers.setdefault((candidate.node_a, interface_a), set()).add(candidate.node_b)
             peers.setdefault((candidate.node_b, interface_b), set()).add(candidate.node_a)
-        for node in self.nodes:
-            for interface in node.access_interfaces:
-                peers[(node.node_id, interface)] = access_peers.get(node.node_id, set())
+        for node_id, interfaces in self.assigned_interfaces_by_node().items():
+            for interface in interfaces:
+                peers[(node_id, interface)] = access_peers.get(node_id, set())
         return {key: frozenset(value) for key, value in peers.items()}
 
     def ground_candidate_satellites_by_gs(self) -> dict[str, tuple[str, ...]]:

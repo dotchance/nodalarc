@@ -143,6 +143,7 @@ def four_node_timeline():
 
     events = precompute_timeline(
         long_delay_access_pairs=frozenset(),
+        assigned_space_pairs=(),
         satellites=sats,
         addressing=addressing,
         gs_file=gs_file,
@@ -205,6 +206,7 @@ class TestNoGroundStations:
 
         events = precompute_timeline(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=addressing,
             gs_file=None,

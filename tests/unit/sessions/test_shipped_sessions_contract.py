@@ -65,7 +65,8 @@ def _shipped_step_context(path: Path):
 
     cfg = _load_session_config(str(path), run_id="run-shipped-smoke-0001")
     ctx = build_step_context(
-        long_delay_access_pairs=frozenset(),
+        long_delay_access_pairs=cfg.long_delay_access_pairs,
+        assigned_space_pairs=cfg.assigned_space_pairs,
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,
@@ -110,7 +111,7 @@ def _assert_tick_round_trips(cfg, ctx, result, step: int, step_seconds: float):
     assert LinkStateSnapshot.model_validate_json(wire).model_dump_json() == wire
     decision_snapshot = DeferredLinkDecisionSnapshot(
         decisions=result.ground_decisions,
-        unscheduled_pairs=result.ground_allocation.unscheduled_pairs,
+        unscheduled_pairs=result.ground_unscheduled_pairs,
         policy_audit=result.ground_allocation.policy_audit,
         allocation_events=result.ground_allocation.allocation_events,
         sim_time=result.sim_time,
@@ -173,6 +174,52 @@ def test_shipped_session_computes_real_steps(path: Path) -> None:
         f"{path.name}: {sat_count} satellites resolved but only "
         f"{len(propagated_nodes)} ever propagated"
     )
+
+
+def test_space_pairs_of_a_visible_candidates_rule_are_chosen_on_assigned_terminals() -> None:
+    """mars-ion-relay-network joins its Mars orbiters with a ``visible_candidates`` rule. Its
+    pairs carry no fixed interface: at each tick the allocator links every usable one that
+    fits its nodes' terminals, on a terminal of the mount the rule selects at each node, and
+    the static fixed-link scheduler never sees them."""
+    from nodalarc.models.session import session_epoch_unix
+    from ome.event_stream import compute_step
+
+    cfg, ctx = _shipped_step_context(SESSIONS_DIR / "mars-ion-relay-network.yaml")
+    space_pairs = {item.pair: item for item in ctx.assigned_space_pairs}
+    assert space_pairs, "the session resolves no assigned pair between space nodes"
+    assert all(item.rule_id == "mars_relay_crosslink" for item in space_pairs.values())
+    assert not set(space_pairs) & set(cfg.interface_map)
+
+    epoch_unix = session_epoch_unix(cfg.resolved.time)
+    step_seconds = float(cfg.resolved.time.step_seconds)
+    isl_state: dict = {}
+    gs_state: dict = {}
+    associations: dict = {}
+    teardowns: dict = {}
+    linked: set[tuple[str, str]] = set()
+    for step in range(31):
+        result = compute_step(
+            ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state, associations, teardowns
+        )
+        associations = result.associations
+        teardowns = result.pending_teardowns
+        assert not set(space_pairs) & set(result.isl_links)
+        snapshot = _assert_tick_round_trips(cfg, ctx, result, step, step_seconds)
+        rows = {(link.node_a, link.node_b): link for link in snapshot.links}
+        for pair, item in space_pairs.items():
+            if pair not in result.ground_allocation.scheduled_pairs:
+                continue
+            linked.add(pair)
+            index_a, index_b = result.associations[pair]
+            assert index_a in item.end_a.terminal_indices
+            assert index_b in item.end_b.terminal_indices
+            row = rows[pair]
+            assert row.carrier == "UP"
+            assert (row.terminal_index_a, row.terminal_index_b) == (index_a, index_b)
+            assert row.interface_a == cfg.terminal_interface_names[pair[0]][index_a]
+            assert row.interface_b == cfg.terminal_interface_names[pair[1]][index_b]
+            assert row.link_rule_id == "mars_relay_crosslink"
+    assert linked, "no pair between the Mars orbiters linked in thirty ticks"
 
 
 def test_a_make_before_break_teardown_tick_round_trips() -> None:
@@ -402,3 +449,41 @@ class TestTickRateContract:
                     f"{path.name}: dwell lookahead is {horizon_s}s of sim time; "
                     "the authored intent is 2 hours — scale ticks with the step"
                 )
+
+
+def test_a_mount_drawn_on_by_a_fixed_rule_and_an_assigned_rule_is_refused() -> None:
+    """mars-ion-relay-network's ``mars_relay_crosslink`` assigns the relays' ``relay_x``
+    terminals per pass. A rule that fixes a pair on the same mount would bind one of those
+    terminals to one peer while it is also handed to passes; the session is refused naming
+    the node, the mount and both rules."""
+    from nodalarc.resolve_session import resolve_session
+    from nodalarc.runtime_support import UnsupportedFeatureError
+
+    raw = load_configuration_yaml((SESSIONS_DIR / "mars-ion-relay-network.yaml").read_text())
+    crosslink = {"all": [{"role": "crosslink"}, {"medium": "rf"}, {"mount": "relay_x"}]}
+    raw["link_rules"].append(
+        {
+            "id": "lmo_pair",
+            "topology": {"mode": "explicit_pairs", "pairs": [{"a": "mro", "b": "tgo"}]},
+            "endpoints": [
+                {
+                    "select": {"all": [{"segment": "mars_relays"}, {"node": "mro"}]},
+                    "terminal": crosslink,
+                },
+                {
+                    "select": {"all": [{"segment": "mars_relays"}, {"node": "tgo"}]},
+                    "terminal": crosslink,
+                },
+            ],
+        }
+    )
+
+    with pytest.raises(UnsupportedFeatureError) as refusal:
+        resolve_session(raw, catalog=shipped_read_view())
+
+    values = {feature.value for feature in refusal.value.features}
+    assert values == {"mount_bound_and_assigned"}
+    message = " ".join(feature.message for feature in refusal.value.features)
+    assert (
+        "'relay_x'" in message and "'lmo_pair'" in message and "'mars_relay_crosslink'" in message
+    )

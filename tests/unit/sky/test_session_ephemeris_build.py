@@ -87,6 +87,7 @@ def _load_test_ctx():
 
     ctx = build_step_context(
         long_delay_access_pairs=frozenset(),
+        assigned_space_pairs=(),
         satellites=sats,
         addressing=addressing,
         gs_file=gs_file,
@@ -114,6 +115,7 @@ class TestBuildSessionEphemeris:
         start = datetime.fromisoformat(resolved.time.start_time.replace("Z", "+00:00")).timestamp()
         ctx = build_step_context(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -213,6 +215,7 @@ class TestBuildSessionEphemeris:
         ctx, sats, gs_file = _load_test_ctx()
         ctx = build_step_context(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=ctx.addressing,
             gs_file=gs_file,
@@ -238,6 +241,7 @@ class TestBuildSessionEphemeris:
             sat.propagator_id = "j2-mean-elements"
         ctx = build_step_context(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=ctx.addressing,
             gs_file=gs_file,
@@ -293,6 +297,7 @@ class TestBuildSessionEphemeris:
         ]
         ctx = build_step_context(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=StaticOmeAddressing(satellite_ids=(node_id,)),
             gs_file=None,
@@ -318,6 +323,7 @@ class TestBuildSessionEphemeris:
         gs_id = next(iter(ctx.gs_positions))
         ctx = build_step_context(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=ctx.addressing,
             gs_file=gs_file,

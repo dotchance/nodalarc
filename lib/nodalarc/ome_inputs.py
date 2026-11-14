@@ -18,14 +18,19 @@ from typing import Literal
 
 from nodalarc.body_frames import BodyFrame
 from nodalarc.link_metadata import LinkRuleMetadata
-from nodalarc.models.addressing import IslPlaneRelation, NeighborAssignment
+from nodalarc.models.addressing import (
+    AssignedSpaceEnd,
+    AssignedSpacePair,
+    IslPlaneRelation,
+    NeighborAssignment,
+)
 from nodalarc.models.events import EphemerisBodyFrame
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.resolved_session import (
-    ResolvedAccessTerminalSelection,
     ResolvedNode,
     ResolvedSession,
     ResolvedTerminalBlock,
+    ResolvedTerminalSelection,
 )
 from nodalarc.models.session import GroundSchedulingConfig, session_epoch_unix
 from nodalarc.ome_runtime import (
@@ -79,9 +84,12 @@ class ResolvedOmeInputs:
     terminal_interface_names: dict[str, dict[int, str]]
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
-    # The ground pairs (station, satellite) the resolver classed long-delay, sorted like every
-    # ground pair: each pass between them is a contact OME names, as on a fixed long-delay link.
+    # The pairs on terminals assigned per pass that the resolver classed long-delay, in
+    # node-pair order: each pass between them is a contact OME names, as on a fixed long-delay
+    # link.
     long_delay_access_pairs: frozenset[tuple[str, str]]
+    # The candidate pairs between two space nodes whose terminals OME assigns per pass.
+    assigned_space_pairs: tuple[AssignedSpacePair, ...]
     node_metadata: dict[str, dict[str, object]]
     ground_scheduling: GroundSchedulingConfig
     ground_link_model: GroundLinkModel
@@ -201,8 +209,9 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         long_delay_access_pairs=frozenset(
             tuple(sorted(candidate.pair))
             for candidate in resolved.link_candidates
-            if candidate.kind == "access" and candidate.delay_class == "long_delay"
+            if candidate.assigned_terminals and candidate.delay_class == "long_delay"
         ),
+        assigned_space_pairs=_assigned_space_pairs(resolved),
         node_metadata=_node_metadata(resolved),
         ground_scheduling=ground_scheduling,
         ground_link_model=(
@@ -291,7 +300,7 @@ def _session_epoch_unix(resolved: ResolvedSession) -> float:
 
 def _satellite_from_resolved(
     node: ResolvedNode,
-    access_selections: tuple[ResolvedAccessTerminalSelection, ...],
+    access_selections: tuple[ResolvedTerminalSelection, ...],
 ) -> SatelliteNode:
     if node.orbit is None:
         raise ValueError(f"satellite {node.node_id!r} is missing resolved orbit facts")
@@ -342,7 +351,7 @@ def _horizon_dip_deg(alt_m: float, radius_km: float) -> float:
 def _ground_file_from_resolved(
     nodes: list[ResolvedNode],
     min_elevation_by_gs: dict[str, float],
-    selected_access: dict[str, tuple[ResolvedAccessTerminalSelection, ...]],
+    selected_access: dict[str, tuple[ResolvedTerminalSelection, ...]],
     radius_km_by_body: dict[str, float],
 ) -> GroundStationFile | None:
     stations: list[GroundStation] = []
@@ -404,7 +413,7 @@ def _neighbors_from_resolved(
     assignments: list[tuple[str, NeighborAssignment]] = []
     nodes_by_id = {node.node_id: node for node in resolved.nodes}
     for candidate in resolved.link_candidates:
-        if candidate.kind == "access":
+        if candidate.assigned_terminals:
             continue
         left = nodes_by_id[candidate.node_a]
         right = nodes_by_id[candidate.node_b]
@@ -435,6 +444,63 @@ def _neighbors_from_resolved(
             )
         )
     return frozenset(assignments)
+
+
+def _assigned_space_pairs(resolved: ResolvedSession) -> tuple[AssignedSpacePair, ...]:
+    """Every candidate pair between two space nodes whose terminals OME assigns per pass, with
+    each end's terminal pool: the terminals of the one mount its rule selects on that node.
+    The resolver refuses a rule that selects several mounts on one space node, so each end
+    has one mount, whose limits are the end's."""
+    nodes_by_id = {node.node_id: node for node in resolved.nodes}
+    selections = resolved.assigned_terminal_selections_by_node()
+    rules = {rule.rule_id: rule for rule in resolved.link_rules}
+
+    def end(node: ResolvedNode, rule_id: str) -> AssignedSpaceEnd:
+        endpoints = [
+            endpoint for endpoint in rules[rule_id].endpoints if node.node_id in endpoint.node_ids
+        ]
+        selected = [
+            item
+            for item in selections[node.node_id]
+            if any(endpoint.matches_terminal(item.block) for endpoint in endpoints)
+        ]
+        if len(selected) != 1:
+            raise ValueError(
+                f"link rule {rule_id!r} selects {len(selected)} terminal mounts on space node "
+                f"{node.node_id!r}; its terminals are assigned from one mount"
+            )
+        (selection,) = selected
+        block = selection.block
+        return AssignedSpaceEnd(
+            pool=f"mount:{block.terminal_id}",
+            terminal_indices=selection.interface_indices,
+            terminal_type=block.source_terminal_id or block.medium,
+            max_range_km=block.max_range_km,
+            max_tracking_rate_deg_s=block.tracking_rate_deg_s,
+            field_of_regard_deg=block.field_of_regard_deg,
+            tenant_id=node.tenant_id,
+            central_body=_node_reference_body(node),
+        )
+
+    pairs = []
+    for candidate in resolved.link_candidates:
+        if not candidate.assigned_terminals or candidate.kind == "access":
+            continue
+        # Node-pair order, as the allocator takes every pair.
+        first, second = sorted(
+            (nodes_by_id[candidate.node_a], nodes_by_id[candidate.node_b]),
+            key=lambda node: node.node_id,
+        )
+        pairs.append(
+            AssignedSpacePair(
+                pair=(first.node_id, second.node_id),
+                rule_id=candidate.rule_id,
+                link_type=_isl_link_type(first, second),
+                end_a=end(first, candidate.rule_id),
+                end_b=end(second, candidate.rule_id),
+            )
+        )
+    return tuple(sorted(pairs, key=lambda item: item.pair))
 
 
 def _isl_link_type(left: ResolvedNode, right: ResolvedNode) -> IslPlaneRelation:
@@ -495,7 +561,7 @@ def _isl_terminal(block: ResolvedTerminalBlock) -> IslTerminal:
 
 
 def _satellite_ground_terminal(
-    selection: ResolvedAccessTerminalSelection,
+    selection: ResolvedTerminalSelection,
 ) -> SatelliteGroundTerminal:
     block = selection.block
     return SatelliteGroundTerminal(
@@ -509,7 +575,7 @@ def _satellite_ground_terminal(
     )
 
 
-def _ground_terminal(selection: ResolvedAccessTerminalSelection) -> GroundTerminal:
+def _ground_terminal(selection: ResolvedTerminalSelection) -> GroundTerminal:
     block = selection.block
     return GroundTerminal(
         id=block.terminal_id,

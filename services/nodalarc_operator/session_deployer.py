@@ -415,12 +415,13 @@ def _static_neighbors(peer: ResolvedNode) -> list[str]:
 
 
 def _long_delay_access_peers_by_node(resolved: ResolvedSession) -> dict[str, dict[str, list[str]]]:
-    """For each node, the peers it can reach over a long-delay access link and the addresses to
-    pin for each: the same loopbacks a fixed long-delay link pins, at each ground LinkUp."""
+    """For each node, the peers it can reach over a long-delay link on terminals assigned per
+    pass and the addresses to pin for each: the same loopbacks a fixed long-delay link pins, at
+    each LinkUp."""
     nodes = {node.node_id: node for node in resolved.nodes}
     by_node: dict[str, dict[str, list[str]]] = {}
     for candidate in resolved.link_candidates:
-        if candidate.kind != "access" or candidate.delay_class != "long_delay":
+        if not candidate.assigned_terminals or candidate.delay_class != "long_delay":
             continue
         for node_id, peer in (
             (candidate.node_a, candidate.node_b),
@@ -434,7 +435,7 @@ def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[
     nodes = {node.node_id: node for node in resolved.nodes}
     by_node: dict[str, list[dict[str, Any]]] = {}
     for candidate in resolved.link_candidates:
-        if candidate.kind == "access":
+        if candidate.assigned_terminals:
             continue
         interface_a, interface_b = candidate.fixed_interfaces
         # Address resolution takes seconds; across a long-delay link it cannot complete, so the
@@ -959,6 +960,9 @@ def write_wiring_manifest(
     }
     fixed_interfaces = _fixed_link_interfaces_by_node(resolved_session)
     access_peers = _long_delay_access_peers_by_node(resolved_session)
+    # Each node's interfaces whose peer OME assigns per pass, as the resolved session states
+    # them. No interface name decides which they are.
+    assigned_interfaces = resolved_session.assigned_interfaces_by_node()
     ground_indices = resolved_session.ground_index_by_node_id()
 
     # Build per-node wiring spec
@@ -1006,11 +1010,7 @@ def write_wiring_manifest(
                 ),
                 "sysctls": dict(node_sysctls),
                 "isl_interfaces": fixed_interfaces.get(node.node_id, []),
-                "gnd_interfaces": [
-                    {"name": iface.name}
-                    for iface in node.wan_interfaces
-                    if iface.name.startswith("gnd")
-                ],
+                "gnd_interfaces": [{"name": name} for name in assigned_interfaces[node.node_id]],
                 "long_delay_access_peers": access_peers.get(node.node_id, {}),
                 "mpls_enable": requirements.mpls_enable,
                 "remove_default_route": True,
@@ -1023,7 +1023,7 @@ def write_wiring_manifest(
                 "gs_index": ground_indices[node.node_id],
                 "sysctls": dict(node_sysctls),
                 "isl_interfaces": [],
-                "gnd_interfaces": [{"name": iface.name} for iface in node.wan_interfaces],
+                "gnd_interfaces": [{"name": name} for name in assigned_interfaces[node.node_id]],
                 "long_delay_access_peers": access_peers.get(node.node_id, {}),
                 "mpls_enable": requirements.mpls_enable,
                 "remove_default_route": True,
@@ -1049,7 +1049,7 @@ def write_wiring_manifest(
     # Count unique ISL links
     isl_pairs: set[tuple[str, str]] = set()
     for candidate in resolved_session.link_candidates:
-        if candidate.kind != "access":
+        if not candidate.assigned_terminals:
             isl_pairs.add((candidate.node_a, candidate.node_b))
 
     missing_placement = sorted(

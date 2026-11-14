@@ -103,21 +103,21 @@ def _scheduler_terminal_maps(
     states scheduling, and every node that chooses at least one such candidate link."""
     terminal_capacities = {
         node_id: capacity
-        for node_id, selections in resolved.selected_access_terminals_by_node().items()
+        for node_id, selections in resolved.assigned_terminal_selections_by_node().items()
         if (capacity := sum(len(selection.interface_indices) for selection in selections)) > 0
     }
     without_terminals = sorted(
         {
             node_id
             for candidate in resolved.link_candidates
-            if candidate.kind == "access"
+            if candidate.assigned_terminals
             for node_id in candidate.pair
             if node_id not in terminal_capacities
         }
     )
     if without_terminals:
         raise RuntimeError(
-            "Resolved access candidates name nodes with no selected access terminals: "
+            "Resolved candidates on assigned terminals name nodes with no selected terminals: "
             f"{without_terminals}"
         )
     handover_modes: dict[str, str] = {}
@@ -132,7 +132,7 @@ def _scheduler_terminal_maps(
     tracked_nodes = frozenset(
         node_id
         for candidate in resolved.link_candidates
-        if candidate.kind == "access"
+        if candidate.assigned_terminals
         for node_id in choosing_nodes(candidate.pair, fixed_pairs=(), stating_nodes=handover_modes)
     )
     return terminal_capacities, handover_modes, tracked_nodes
@@ -632,10 +632,13 @@ def _run_scheduler() -> None:
             substrate_measurements=substrate_measurements,
             read_lifecycle_identity=_make_lifecycle_identity_reader(k8s_v1, ns),
             writer_epoch=writer_epoch,
-            # Fixed links by their canonical pair; ground pairs sorted, as OME keys them.
+            # Fixed links by their canonical pair; pairs on assigned terminals sorted, as
+            # OME keys them.
             long_delay_bounds_s={
                 (
-                    candidate.pair if candidate.kind != "access" else tuple(sorted(candidate.pair))
+                    tuple(sorted(candidate.pair))
+                    if candidate.assigned_terminals
+                    else candidate.pair
                 ): candidate.longest_delay_s
                 for candidate in resolved.link_candidates
                 if candidate.delay_class == "long_delay"

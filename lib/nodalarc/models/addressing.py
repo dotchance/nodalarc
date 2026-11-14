@@ -23,6 +23,36 @@ class NeighborAssignment(NamedTuple):
     long_delay: bool
 
 
+class AssignedSpaceEnd(NamedTuple):
+    """One end of a candidate pair between two space nodes whose terminals OME assigns per
+    pass: the node's terminal pool the pair draws on, and what the allocator and the space
+    physics need of that end."""
+
+    # The pool's name at the node, and the node's terminal indices in it.
+    pool: str
+    terminal_indices: tuple[int, ...]
+    # The limits of the pool's terminals.
+    terminal_type: str
+    max_range_km: float
+    max_tracking_rate_deg_s: float
+    field_of_regard_deg: float
+    # The node's tenant and the body it orbits: a pair no node states scheduling for is
+    # attributed to its first node's.
+    tenant_id: str
+    central_body: str
+
+
+class AssignedSpacePair(NamedTuple):
+    """One candidate pair between two space nodes whose terminals OME assigns per pass, in
+    node-pair order."""
+
+    pair: tuple[str, str]
+    rule_id: str
+    link_type: IslPlaneRelation
+    end_a: AssignedSpaceEnd
+    end_b: AssignedSpaceEnd
+
+
 def neighbors_by_node(
     assignments: frozenset[tuple[str, NeighborAssignment]],
 ) -> dict[str, list[NeighborAssignment]]:

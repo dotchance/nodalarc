@@ -443,6 +443,7 @@ class TestWindowAuthority:
         def window(inputs):
             return precompute_timeline_window(
                 long_delay_access_pairs=frozenset(),
+                assigned_space_pairs=(),
                 satellites=inputs.satellites,
                 addressing=inputs.addressing,
                 gs_file=inputs.gs_file,

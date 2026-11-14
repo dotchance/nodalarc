@@ -42,6 +42,7 @@ class TestFoldDeterminism:
 
         window = precompute_timeline_window(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -60,6 +61,7 @@ class TestFoldDeterminism:
 
         ctx = build_step_context(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -112,6 +114,7 @@ class TestFoldDeterminism:
         # Simulate: first build associations from first 10 ticks (warm-up seed)
         ctx = build_step_context(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -147,6 +150,7 @@ class TestFoldDeterminism:
 
         window = precompute_timeline_window(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -218,6 +222,7 @@ class TestFoldDeterminism:
 
         ctx = build_step_context(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,

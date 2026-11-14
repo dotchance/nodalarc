@@ -115,16 +115,17 @@ def _senders(resolved: ResolvedSession) -> dict[tuple[str, str], list[_Sender]]:
         return _Sender(peer, interface, block.source_ref, block.transmit_mbps, longest_delay_s)
 
     senders: dict[tuple[str, str], list[_Sender]] = {}
+    assigned_interfaces = resolved.assigned_interfaces_by_node()
     for candidate in resolved.link_candidates:
         if candidate.delay_class != "long_delay":
             continue
         a, b = candidate.pair
-        if candidate.kind == "access":
+        if candidate.assigned_terminals:
             for node_id, peer in ((a, b), (b, a)):
-                for interface in nodes[node_id].access_interfaces:
+                for interface in assigned_interfaces[node_id]:
                     senders.setdefault((node_id, interface), []).extend(
                         sender(peer, peer_interface, candidate.longest_delay_s)
-                        for peer_interface in nodes[peer].access_interfaces
+                        for peer_interface in assigned_interfaces[peer]
                     )
             continue
         interface_a, interface_b = candidate.fixed_interfaces

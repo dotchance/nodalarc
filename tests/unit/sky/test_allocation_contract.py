@@ -42,6 +42,7 @@ class TestAllocationContractInvariants:
 
         ctx = build_step_context(
             long_delay_access_pairs=frozenset(),
+            assigned_space_pairs=(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,

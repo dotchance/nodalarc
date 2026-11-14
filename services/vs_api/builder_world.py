@@ -113,7 +113,7 @@ def _builder_rule_allocations(resolved: ResolvedSession) -> tuple[BuilderRuleAll
     candidates_by_rule: dict[str, int] = {}
     for candidate in resolved.link_candidates:
         candidates_by_rule[candidate.rule_id] = candidates_by_rule.get(candidate.rule_id, 0) + 1
-        if candidate.kind == "access":
+        if candidate.assigned_terminals:
             continue
         interface_a, interface_b = candidate.fixed_interfaces
         used_by_node.setdefault(candidate.node_a, set()).add(interface_a)
@@ -146,7 +146,10 @@ def _builder_rule_allocations(resolved: ResolvedSession) -> tuple[BuilderRuleAll
                     interface.name
                     for interface in node.wan_interfaces
                     if interface.terminal_id in selected_mounts
-                    and (rule.kind == "access" or interface.name.startswith("isl"))
+                    and (
+                        rule.assigns_terminals
+                        or node.wan_terminal(interface.name).endpoint_role != "access"
+                    )
                 )
                 used = used_by_node.get(node_id, set())
                 per_node.append(
@@ -250,7 +253,7 @@ def _isl_limits(
     node's interface."""
     constraints = ctx.sat_isl_terminal_constraints
     node_iface: dict[str, str] = {}
-    if candidate is not None:
+    if candidate is not None and not candidate.assigned_terminals:
         interface_a, interface_b = candidate.fixed_interfaces
         node_iface[candidate.node_a] = interface_a
         node_iface[candidate.node_b] = interface_b
@@ -285,7 +288,7 @@ def _isl_terminal_type(node_id: str, candidate: Any, ctx: Any) -> str | None:
     """The allocated ISL terminal's type for a node in a FIXED pair, resolved by
     node identity — or None for a visible pair (no allocation) or a missing
     lookup. Keyed by identity so orientation can never cross the wires."""
-    if candidate is None:
+    if candidate is None or candidate.assigned_terminals:
         return None
     interface_a, interface_b = candidate.fixed_interfaces
     if node_id == getattr(candidate, "node_a", None):
@@ -624,6 +627,7 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             ground_defaults_applied=True,
             ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
             long_delay_access_pairs=runtime.long_delay_access_pairs,
+            assigned_space_pairs=runtime.assigned_space_pairs,
             node_metadata=runtime.node_metadata,
             body_frames=runtime.body_frames,
             physics=runtime.physics,

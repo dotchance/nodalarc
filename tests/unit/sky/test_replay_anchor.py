@@ -37,6 +37,7 @@ def _session_ctx(tmp_path):
     cfg = _load_session_config(str(session_path), run_id="run-anchor-equality")
     ctx = build_step_context(
         long_delay_access_pairs=frozenset(),
+        assigned_space_pairs=(),
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,

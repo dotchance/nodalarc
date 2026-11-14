@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import cast
+from typing import Protocol, cast
 
 from nodalarc.models.events import (
     UnscheduledReason,
@@ -25,7 +25,6 @@ from nodalarc.models.link_state import SchedulingState
 
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
 from ome.link_allocator import LinkAllocationResult
-from ome.types import GroundVisibilityDecisionMap
 
 IslVisibilityState = dict[tuple[str, str], tuple[bool, bool]]
 GroundVisibilityState = dict[tuple[str, str], tuple[bool, bool, SchedulingState]]
@@ -40,11 +39,54 @@ class IslEventDiff:
 
 
 @dataclass(frozen=True)
-class GroundEventDiff:
-    """Ground-link transition result for one OME tick."""
+class AllocatedEventDiff:
+    """Transition result for one OME tick of the links the allocator chooses."""
 
     events: tuple[VisibilityEvent, ...]
     state: GroundVisibilityState
+
+
+class PairDecision(Protocol):
+    """What physics found for one candidate pair the allocator may choose, whichever frame its
+    ends are in. A ground pair's is its ``GroundVisibilityDecision``; a pair between two space
+    nodes has a ``SpacePairDecision``."""
+
+    @property
+    def visible(self) -> bool: ...
+    @property
+    def range_km(self) -> float: ...
+    @property
+    def latency_a_to_b_ms(self) -> float: ...
+    @property
+    def latency_b_to_a_ms(self) -> float: ...
+    @property
+    def elevation_deg(self) -> float | None: ...
+    @property
+    def reject_reason(self) -> VisibilityRejectReason: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SpacePairDecision:
+    """What the space physics found for one pair whose terminals OME assigns per pass: the
+    feasibility result's facts under the names the allocator's diff reads. A pair between two
+    space nodes has no elevation."""
+
+    visible: bool
+    range_km: float
+    latency_a_to_b_ms: float
+    latency_b_to_a_ms: float
+    reject_reason: VisibilityRejectReason
+    elevation_deg: None = None
+
+    @classmethod
+    def from_feasibility(cls, result: IslFeasibilityResult) -> SpacePairDecision:
+        return cls(
+            visible=result.feasible,
+            range_km=result.range_km,
+            latency_a_to_b_ms=result.one_way_a_to_b_ms,
+            latency_b_to_a_ms=result.one_way_b_to_a_ms,
+            reject_reason=cast(VisibilityRejectReason, result.reject_reason),
+        )
 
 
 def diff_isl_visibility_events(
@@ -120,21 +162,19 @@ def diff_isl_visibility_events(
     return IslEventDiff(events=tuple(events), state=state)
 
 
-def diff_ground_visibility_events(
+def diff_allocated_visibility_events(
     *,
     sim_time: datetime,
-    visibility_decisions: GroundVisibilityDecisionMap,
+    visibility_decisions: Mapping[tuple[str, str], PairDecision],
     allocation: LinkAllocationResult,
     previous_state: Mapping[tuple[str, str], tuple[bool, bool, SchedulingState]],
     terminal_types: Mapping[tuple[str, str], str],
     long_delay_pairs: frozenset[tuple[str, str]],
-) -> GroundEventDiff:
-    """Emit ground VisibilityEvents for changed visibility/allocation state.
+) -> AllocatedEventDiff:
+    """Emit VisibilityEvents for changed visibility/allocation state of the pairs the
+    allocator chooses among: ground pairs and pairs between two space nodes alike.
 
-    Consumes the typed `GroundVisibilityDecisionMap`, which replaced the
-    positional `GroundVisibilityDetails` tuple.
-    Named field access — no positional unpacking that can silently
-    swap fields when the schema grows.
+    Consumes one typed decision per pair (``PairDecision``) by named field.
 
     Reason propagation: every emitted event carries both
     ``visibility_reject_reason`` (from the typed
@@ -159,7 +199,7 @@ def diff_ground_visibility_events(
             continue
 
         state[pair] = new_state
-        # A pass between long-delay ground peers is a contact; it opens on the event that makes
+        # A pass between long-delay peers is a contact; it opens on the event that makes
         # the pair visible and scheduled. A later change of the same pass (its teardown state)
         # continues it.
         opens_contact = (
@@ -179,7 +219,7 @@ def diff_ground_visibility_events(
         if decision.visible and not scheduled:
             if pair not in unscheduled_by_pair:
                 raise ValueError(
-                    f"Ground pair {pair} is visible+unscheduled but the "
+                    f"Pair {pair} is visible+unscheduled but the "
                     "allocator did not attribute an unscheduled_reason. "
                     "Every visible pair the allocator did not schedule "
                     "must appear in allocation.unscheduled_pairs — fix the "
@@ -210,4 +250,4 @@ def diff_ground_visibility_events(
             )
         )
 
-    return GroundEventDiff(events=tuple(events), state=state)
+    return AllocatedEventDiff(events=tuple(events), state=state)

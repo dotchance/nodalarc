@@ -298,11 +298,11 @@ def _te_link_params(node: ResolvedNode, interface: str) -> dict[str, str]:
 def _wan_links(context: SessionContext, node: ResolvedNode) -> dict[str, dict[str, Any]]:
     """Every WAN interface the node's FRR configuration names, once each.
 
-    Fixed links come from the node's non-access link candidates, in candidate
+    Fixed links come from the node's fixed link candidates, in candidate
     order, each with its peer; ``static_only`` marks a fixed link a
-    ``static_ip`` routing boundary crosses. Access links follow, with no
-    fixed peer. ``reaches_ipv6`` marks an interface some possible peer of
-    which carries IPv6.
+    ``static_ip`` routing boundary crosses. The interfaces whose peer OME
+    assigns per pass follow, with no fixed peer. ``reaches_ipv6`` marks an
+    interface some possible peer of which carries IPv6.
     """
     resolved = context.resolved
     static_rules = _static_boundary_rule_ids(resolved)
@@ -312,7 +312,10 @@ def _wan_links(context: SessionContext, node: ResolvedNode) -> dict[str, dict[st
     peers = context.wan_interface_peers
     links: dict[str, dict[str, Any]] = {}
     for candidate in resolved.link_candidates:
-        if candidate.kind == "access" or node.node_id not in (candidate.node_a, candidate.node_b):
+        if candidate.assigned_terminals or node.node_id not in (
+            candidate.node_a,
+            candidate.node_b,
+        ):
             continue
         side = 0 if candidate.node_a == node.node_id else 1
         name = candidate.fixed_interfaces[side]
@@ -330,11 +333,11 @@ def _wan_links(context: SessionContext, node: ResolvedNode) -> dict[str, dict[st
             "access": False,
             "reaches_ipv6": peer_id in carries_ipv6,
         }
-    for name in node.access_interfaces:
+    for name in resolved.assigned_interfaces_by_node()[node.node_id]:
         if name in links:
             raise AdapterRenderRefusal(
                 f"node {node.node_id!r} names WAN interface {name!r} as both a fixed "
-                "link and an access link"
+                "link and a link whose peer is assigned per pass"
             )
         links[name] = {
             "peer": None,

@@ -54,6 +54,7 @@ from nodalarc.models.resolved_session import (
     ResolvedWanInterface,
     SidBlock,
     SourceContext,
+    assigns_terminals,
     router_node_ids,
 )
 from nodalarc.models.segment_session import (
@@ -254,6 +255,7 @@ def resolve_session_with_assets(
     )
     _enforce_declared_candidate_bounds(cfg, base_resolved)
     _validate_access_terminal_bindings(cfg, base_resolved)
+    _refuse_assigned_rules_on_several_space_mounts(base_resolved)
     _refuse_selected_multi_user_terminals(cfg, base_resolved)
     _refuse_uncollapsible_access_physics(base_resolved)
     _refuse_unstated_ground_floors(base_resolved)
@@ -2809,7 +2811,7 @@ def _refuse_routing_beyond_adapter_limits(
     nodes = {node.node_id: node for node in resolved.nodes}
     fixed_interfaces: dict[str, set[str]] = {}
     for candidate in resolved.link_candidates:
-        if candidate.kind == "access":
+        if candidate.assigned_terminals:
             continue
         for node_id, interface in zip(
             (candidate.node_a, candidate.node_b), candidate.fixed_interfaces, strict=True
@@ -3297,10 +3299,10 @@ def _eligible_fixed_interfaces(
     """WAN interfaces on ``node`` whose owning terminal block matches the
     rule's terminal selector on the side(s) that include the node.
 
-    For fixed (non-access) rules only isl-manifest interfaces are eligible
-    — the same constraint ``_validate_fixed_interface_capacity`` enforces.
-    Without it, a selector that also matches an access mount would let the
-    allocator claim (and the facts display advertise as free) an interface
+    A rule that fixes its pairs may bind only the interfaces of mounts that are
+    not access mounts, the same constraint ``_validate_fixed_interface_capacity``
+    enforces. Without it, a selector that also matches an access mount would let
+    the allocator claim (and the facts display advertise as free) an interface
     the capacity validator then vetoes."""
     side_selectors = [
         selector
@@ -3317,9 +3319,18 @@ def _eligible_fixed_interfaces(
             for selector in side_selectors
         )
     ]
-    if rule.kind == "access":
+    if rule.assigns_terminals:
         return eligible
-    return [name for name in eligible if name.startswith("isl")]
+    return [
+        name
+        for name in eligible
+        if blocks_by_id[_terminal_of(node, name)].endpoint_role != "access"
+    ]
+
+
+def _terminal_of(node: ResolvedNode, interface: str) -> str:
+    """The mount that owns one of ``node``'s WAN interfaces."""
+    return next(wan.terminal_id for wan in node.wan_interfaces if wan.name == interface)
 
 
 def _resolve_link_candidates(
@@ -3362,6 +3373,8 @@ def _resolve_link_candidates(
         right = node_by_id[node_b]
         if candidate.kind == "access":
             _validate_access_candidate_endpoints(left, right, candidate.rule_id)
+        if assigns_terminals(candidate.kind, candidate.topology_mode):
+            # OME assigns one of each node's selected terminals at each pass.
             iface_a = iface_b = None
         else:
             iface_a = _fixed_iface(node_a, candidate.rule_id)
@@ -3394,8 +3407,88 @@ def _resolve_link_candidates(
             )
         )
     _validate_fixed_interface_capacity(candidates, node_by_id)
+    _refuse_mounts_bound_and_assigned(resolved, candidates, node_by_id)
     _enforce_candidate_limits(candidates, resolved)
     return candidates
+
+
+def _refuse_assigned_rules_on_several_space_mounts(resolved: ResolvedSession) -> None:
+    """A rule between space nodes that assigns terminals per pass draws on one mount at each
+    node: that mount's terminals are the pool OME assigns from, and its limits are the limits
+    of the node's end of every pass. A rule whose terminal selector matches several mounts of
+    one space node states no single pool or limits, and is refused naming the node and the
+    mounts. (An access rule's mounts are read by the surface physics, which has its own
+    checks.)"""
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    for rule in resolved.link_rules:
+        if not rule.enabled or not rule.assigns_terminals or rule.kind == "access":
+            continue
+        for endpoint in rule.endpoints:
+            for node_id in endpoint.node_ids:
+                node = node_by_id[node_id]
+                mounts = sorted(
+                    block.terminal_id
+                    for block in node.terminal_inventory
+                    if endpoint.matches_terminal(block)
+                )
+                if len(mounts) > 1:
+                    raise SessionResolutionError(
+                        f"link rule {rule.rule_id!r} selects terminal mounts {mounts} on "
+                        f"{node_id!r}; a visible_candidates rule between space nodes assigns "
+                        "terminals from one mount per node: name the mount in the endpoint's "
+                        "terminal selector",
+                        subject_kind="link_rule",
+                        subject_id=rule.rule_id,
+                        segment_id=node.segment_id,
+                        node_id=node_id,
+                    )
+
+
+def _refuse_mounts_bound_and_assigned(
+    resolved: ResolvedSession,
+    candidates: list[ResolvedLinkCandidate],
+    node_by_id: dict[str, ResolvedNode],
+) -> None:
+    """A mount's terminals serve one form of rule. A rule that fixes its pairs binds a
+    terminal's interface to one peer for the session. A rule that assigns terminals per pass
+    draws on every terminal of the mounts it selects. One mount cannot do both: a terminal
+    bound to a fixed peer would also be handed to passes. The session is refused, naming the
+    node, the mount and both rules, until fixed rules run on the assigned mechanism."""
+    assigned_rules: dict[tuple[str, str], str] = {}
+    for rule in resolved.link_rules:
+        if not rule.enabled or not rule.assigns_terminals:
+            continue
+        for endpoint in rule.endpoints:
+            for node_id in endpoint.node_ids:
+                for block in node_by_id[node_id].terminal_inventory:
+                    if endpoint.matches_terminal(block):
+                        assigned_rules.setdefault((node_id, block.terminal_id), rule.rule_id)
+    unsupported: list[UnsupportedFeature] = []
+    seen: set[tuple[str, str]] = set()
+    for candidate in candidates:
+        if candidate.assigned_terminals:
+            continue
+        for node_id, interface in zip(candidate.pair, candidate.fixed_interfaces, strict=True):
+            mount = _terminal_of(node_by_id[node_id], interface)
+            assigned_rule = assigned_rules.get((node_id, mount))
+            if assigned_rule is None or (node_id, mount) in seen:
+                continue
+            seen.add((node_id, mount))
+            unsupported.append(
+                UnsupportedFeature(
+                    category=FeatureCategory.LINK_TOPOLOGY,
+                    value="mount_bound_and_assigned",
+                    message=(
+                        f"terminal mount {mount!r} on {node_id!r} is drawn on by link rule "
+                        f"{candidate.rule_id!r}, which fixes its pairs "
+                        f"({candidate.topology_mode}), and by link rule {assigned_rule!r}, "
+                        "which assigns terminals per pass; a mount serves one form of rule: "
+                        "give each rule its own mount, or make both rules visible_candidates"
+                    ),
+                )
+            )
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
 
 
 def _largest_terminal_range_km(node: ResolvedNode, role: MountRole, rule_id: str) -> float:
@@ -3597,16 +3690,20 @@ def _validate_fixed_interface_capacity(
 ) -> None:
     used: dict[str, set[str]] = {}
     for candidate in candidates:
-        if candidate.kind == "access":
+        if candidate.assigned_terminals:
             continue
         interface_a, interface_b = candidate.fixed_interfaces
         used.setdefault(candidate.node_a, set()).add(interface_a)
         used.setdefault(candidate.node_b, set()).add(interface_b)
     for node_id, interfaces in used.items():
+        node = node_by_id[node_id]
+        access_mounts = {
+            block.terminal_id
+            for block in node.terminal_inventory
+            if block.endpoint_role == "access"
+        }
         available = {
-            iface.name
-            for iface in node_by_id[node_id].wan_interfaces
-            if iface.name.startswith("isl")
+            iface.name for iface in node.wan_interfaces if iface.terminal_id not in access_mounts
         }
         extra = sorted(interfaces - available)
         if extra:
@@ -3921,10 +4018,10 @@ def _validate_routing_boundaries(
             raise SessionResolutionError(
                 f"routing boundary over {boundary.over!r} names a disabled link rule"
             )
-        if rule.kind == "access":
+        if rule.assigns_terminals:
             raise SessionResolutionError(
-                f"routing boundary over {boundary.over!r} names an access rule; "
-                "boundaries run over fixed inter-domain links"
+                f"routing boundary over {boundary.over!r} names a rule whose terminals are "
+                "assigned per pass; boundaries run over fixed inter-domain links"
             )
         for export in boundary.export:
             if export.from_ == export.to:

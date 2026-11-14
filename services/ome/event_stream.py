@@ -30,7 +30,7 @@ from nodalarc.ground_terminals import (
     terminal_physics_profile,
     terminal_physics_profiles,
 )
-from nodalarc.models.addressing import NeighborAssignment, neighbors_by_node
+from nodalarc.models.addressing import AssignedSpacePair, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
     EphemerisNodeFixed,
@@ -45,6 +45,7 @@ from nodalarc.models.ground_policy import (
     RankingComponent,
     SelectionPolicySpec,
 )
+from nodalarc.models.link_decisions import UnscheduledPair
 from nodalarc.models.link_state import SchedulingState
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.ome_inputs import ephemeris_body_frames
@@ -59,7 +60,12 @@ from nodalarc.physics import PhysicsContext, advance_mean_elements, body_fixed_f
 from nodalarc.physics.satellites import orbit_model_for
 
 from ome.direction_checks import PairSignals
-from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
+from ome.event_diff import (
+    PairDecision,
+    SpacePairDecision,
+    diff_allocated_visibility_events,
+    diff_isl_visibility_events,
+)
 from ome.ground_visibility_engine import (
     DwellPassState,
     GroundGeometry,
@@ -70,7 +76,9 @@ from ome.isl_engine import (
     IslFeasibilityResult,
     IslTerminalConstraints,
     ScheduledIsl,
+    SpacePair,
     evaluate_isl_feasibility,
+    evaluate_space_feasibility,
     schedule_isl_links,
 )
 from ome.link_allocator import (
@@ -189,6 +197,29 @@ def ground_usable_pairs(
                     )
                 )
     return usable
+
+
+def space_usable_pairs(
+    *,
+    pairs: Sequence[AssignedSpacePair],
+    feasibility: Mapping[tuple[str, str], IslFeasibilityResult],
+) -> list[UsablePair]:
+    """The allocator's usable pairs for one tick among the pairs between two space nodes whose
+    terminals OME assigns per pass. Each carries its link rule and the pool it draws on at each
+    node. Neither node states scheduling, so the pair carries no view."""
+    return [
+        UsablePair(
+            pair=item.pair,
+            rule_id=item.rule_id,
+            pool_a=item.end_a.pool,
+            pool_b=item.end_b.pool,
+            range_km=feasibility[item.pair].range_km,
+            view_a=None,
+            view_b=None,
+        )
+        for item in pairs
+        if feasibility[item.pair].feasible
+    ]
 
 
 def build_session_ephemeris(
@@ -357,8 +388,11 @@ class StepContext:
     gs_tenant_ids: dict[str, str]
     gs_reference_bodies: dict[str, str]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
-    # The ground pairs the resolver classed long-delay: each pass between them is a contact.
+    # The pairs on terminals assigned per pass that the resolver classed long-delay: each pass
+    # between them is a contact.
     long_delay_access_pairs: frozenset[tuple[str, str]]
+    # The candidate pairs between two space nodes whose terminals OME assigns per pass.
+    assigned_space_pairs: tuple[AssignedSpacePair, ...]
     ground_pair_terminal_types: dict[tuple[str, str], str]
     node_metadata: dict[str, dict[str, object]]
     by_node: dict[str, list[NeighborAssignment]]
@@ -379,7 +413,8 @@ class StepContext:
 
     @cached_property
     def signal_pairs(self) -> list[tuple[str, str]]:
-        """Every ISL candidate (sorted ends) and ground candidate (station, satellite)."""
+        """Every fixed candidate (sorted ends), every ground candidate (station, satellite)
+        and every assigned candidate between two space nodes (sorted ends)."""
         isl = sorted(
             {
                 (min(node_id, assignment.peer_node_id), max(node_id, assignment.peer_node_id))
@@ -392,7 +427,59 @@ class StepContext:
             for gs_id, sat_ids in self.ground_candidate_satellites_by_gs.items()
             for sat_id in sat_ids
         ]
-        return isl + ground
+        return isl + ground + [item.pair for item in self.assigned_space_pairs]
+
+    @cached_property
+    def assigned_space_candidates(self) -> list[SpacePair]:
+        """The assigned pairs between two space nodes as the space feasibility check takes
+        them: each end's limits are those of the mount its rule selects there."""
+
+        def limits(end) -> IslTerminalConstraints:
+            return IslTerminalConstraints(
+                role=None,
+                max_range_km=end.max_range_km,
+                max_tracking_rate_deg_s=end.max_tracking_rate_deg_s,
+                field_of_regard_deg=end.field_of_regard_deg,
+                terminal_type=end.terminal_type,
+            )
+
+        return [
+            SpacePair(
+                pair=item.pair,
+                link_type=item.link_type,
+                constraints_a=limits(item.end_a),
+                constraints_b=limits(item.end_b),
+            )
+            for item in self.assigned_space_pairs
+        ]
+
+    @cached_property
+    def allocated_pair_terminal_types(self) -> dict[tuple[str, str], str]:
+        """The terminal type of every pair the allocator chooses among."""
+        return {
+            **self.ground_pair_terminal_types,
+            **{item.pair: item.end_a.terminal_type for item in self.assigned_space_pairs},
+        }
+
+    @cached_property
+    def allocator_tenant_ids(self) -> dict[str, str]:
+        """The tenant of every node that can lead a pair in the allocator: each ground station,
+        and each end of an assigned pair between two space nodes."""
+        tenants = dict(self.gs_tenant_ids)
+        for item in self.assigned_space_pairs:
+            for node_id, end in zip(item.pair, (item.end_a, item.end_b), strict=True):
+                tenants[node_id] = end.tenant_id
+        return tenants
+
+    @cached_property
+    def allocator_reference_bodies(self) -> dict[str, str]:
+        """The body of every node that can lead a pair in the allocator: a station's reference
+        body, a space node's central body."""
+        bodies = dict(self.gs_reference_bodies)
+        for item in self.assigned_space_pairs:
+            for node_id, end in zip(item.pair, (item.end_a, item.end_b), strict=True):
+                bodies[node_id] = end.central_body
+        return bodies
 
     @cached_property
     def long_delay_pairs(self) -> frozenset[tuple[str, str]]:
@@ -458,6 +545,17 @@ class StepResult:
     @property
     def associations(self) -> dict[tuple[str, str], tuple[int, int]]:
         return self.ground_allocation.associations
+
+    @property
+    def ground_unscheduled_pairs(self) -> tuple[UnscheduledPair, ...]:
+        """The unscheduled pairs of the ground decision snapshot: those whose decision it
+        carries. The snapshot is the surface frame's record; a pair between two space nodes
+        states its reason on its VisibilityEvent."""
+        return tuple(
+            unscheduled
+            for unscheduled in self.ground_allocation.unscheduled_pairs
+            if unscheduled.pair in self.ground_decisions
+        )
 
     @property
     def pending_teardowns(self) -> MbbTeardownState:
@@ -555,12 +653,18 @@ def build_step_context(
     physics: PhysicsContext | None = None,
     active_bodies: frozenset[str] | None = None,
     long_delay_access_pairs: frozenset[tuple[str, str]] | None = None,
+    assigned_space_pairs: Sequence[AssignedSpacePair] | None = None,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     if long_delay_access_pairs is None:
         raise ValueError(
-            "build_step_context requires the session's long-delay ground pairs (an empty set "
-            "when it has none): each pass between them is a contact OME names"
+            "build_step_context requires the session's long-delay pairs on assigned terminals "
+            "(an empty set when it has none): each pass between them is a contact OME names"
+        )
+    if assigned_space_pairs is None:
+        raise ValueError(
+            "build_step_context requires the session's assigned pairs between space nodes (an "
+            "empty sequence when it has none): OME chooses among them at every tick"
         )
     resolved_body_frames = _require_body_frames(body_frames)
     if physics is None:
@@ -758,15 +862,32 @@ def build_step_context(
         active_bodies=active_bodies,
     )
 
+    terminal_pools = ground_terminal_pools(
+        gs_terminal_indices=gs_terminal_indices,
+        sat_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
+    )
+    for item in assigned_space_pairs:
+        for node_id, end in zip(item.pair, (item.end_a, item.end_b), strict=True):
+            if node_id not in sat_isl_terminals:
+                raise ValueError(
+                    f"assigned pair {item.pair} of link rule {item.rule_id!r} names "
+                    f"{node_id!r}, which is not a space node of this session"
+                )
+            pool = terminal_pools.setdefault(node_id, {}).setdefault(
+                end.pool, tuple(end.terminal_indices)
+            )
+            if pool != tuple(end.terminal_indices):
+                raise ValueError(
+                    f"terminal pool {end.pool!r} of {node_id!r} is stated with two sets of "
+                    f"terminals: {pool} and {tuple(end.terminal_indices)}"
+                )
+
     return StepContext(
         satellites=satellites,
         addressing=addressing,
         gs_positions=gs_positions,
         gs_min_elevations=gs_min_elevations,
-        terminal_pools=ground_terminal_pools(
-            gs_terminal_indices=gs_terminal_indices,
-            sat_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
-        ),
+        terminal_pools=terminal_pools,
         gs_selection_policies=gs_selection_policies,
         gs_selection_policy_names=gs_selection_policy_names,
         gs_handover_policies=gs_handover_policies,
@@ -787,6 +908,7 @@ def build_step_context(
         gs_reference_bodies=gs_reference_bodies,
         ground_candidate_satellites_by_gs=declared_ground_candidates,
         long_delay_access_pairs=frozenset(long_delay_access_pairs),
+        assigned_space_pairs=tuple(assigned_space_pairs),
         ground_pair_terminal_types=ground_pair_terminal_types,
         node_metadata=node_metadata_map,
         by_node=by_node,
@@ -808,7 +930,7 @@ def _build_link_snapshot_source(
     isl_feasibility: Mapping[tuple[str, str], IslFeasibilityResult],
     isl_links: Mapping[tuple[str, str], ScheduledIsl],
     long_delay_contacts: LongDelayContacts,
-    ground_decisions: GroundVisibilityDecisionMap,
+    ground_decisions: Mapping[tuple[str, str], PairDecision],
     ground_allocation: LinkAllocationResult,
 ) -> LinkSnapshotSource:
     """Derive authoritative snapshot state from current tick facts.
@@ -1055,15 +1177,39 @@ def compute_step(
             station_positions_common=ctx.ground_geometry.station_positions_common(epoch_unix + dt),
         )
 
-    # 7. Scored, hysteresis-aware link allocation. Only ground links reach the allocator
-    # today, and every ground station states its scheduling.
+    # 7. The pairs between two space nodes whose terminals OME assigns per pass: the same
+    # space check as a fixed link's, with each end's limits from the mount its rule selects.
+    with timings.measure(SEG_ISL):
+        space_feasibility = evaluate_space_feasibility(
+            pairs=ctx.assigned_space_candidates,
+            sat_states=sat_states,
+            body_frames=ctx.body_frames,
+            polar_seam_enabled=ctx.polar_seam_enabled,
+            latitude_threshold_deg=ctx.latitude_threshold_deg,
+            signals=tick_signals,
+        )
+    # What physics found for every pair the allocator chooses among, in either frame.
+    allocated_decisions: dict[tuple[str, str], PairDecision] = {
+        **ground_visibility.decisions,
+        **{
+            pair: SpacePairDecision.from_feasibility(result)
+            for pair, result in space_feasibility.items()
+        },
+    }
+
+    # 8. Scored, hysteresis-aware link allocation of every usable pair on assigned terminals.
+    # A ground station states its scheduling; no space node does, so NodalArc's default
+    # chooses among the pairs between two space nodes.
     with timings.measure(SEG_ALLOCATOR):
         ground_allocation = allocate_links(
             step=step,
-            usable=ground_usable_pairs(
-                visible_per_station=ground_visibility.visible_per_station,
-                gs_reference_bodies=ctx.gs_reference_bodies,
-            ),
+            usable=[
+                *ground_usable_pairs(
+                    visible_per_station=ground_visibility.visible_per_station,
+                    gs_reference_bodies=ctx.gs_reference_bodies,
+                ),
+                *space_usable_pairs(pairs=ctx.assigned_space_pairs, feasibility=space_feasibility),
+            ],
             current_associations=current_associations,
             pending_teardowns=mbb_pending_teardowns,
             terminal_pools=ctx.terminal_pools,
@@ -1074,8 +1220,8 @@ def compute_step(
             min_elevations=ctx.gs_min_elevations,
             handover_policies=ctx.gs_handover_policies,
             service_priorities=ctx.gs_service_priorities,
-            tenant_ids=ctx.gs_tenant_ids,
-            reference_bodies=ctx.gs_reference_bodies,
+            tenant_ids=ctx.allocator_tenant_ids,
+            reference_bodies=ctx.allocator_reference_bodies,
             ranking_order=ctx.ground_ranking_order,
             handover_modes=ctx.gs_handover_modes,
             mbb_overlap_ticks=ctx.gs_mbb_overlap_ticks,
@@ -1088,21 +1234,21 @@ def compute_step(
             sim_time_unix=epoch_unix + dt,
             pair_delays_ms={
                 pair: (decision.latency_a_to_b_ms, decision.latency_b_to_a_ms)
-                for pair, decision in ground_visibility.decisions.items()
+                for pair, decision in allocated_decisions.items()
             },
             receive_windows=receive_windows if receive_windows is not None else {},
         )
     if receive_windows is not None and ground_allocation.receive_windows is not None:
         receive_windows.clear()
         receive_windows.update(ground_allocation.receive_windows)
-    # 8. Emit ground visibility events on state changes (triple state).
+    # 9. Emit visibility events on state changes of the allocated pairs (triple state).
     with timings.measure(SEG_DIFF):
-        ground_diff = diff_ground_visibility_events(
+        ground_diff = diff_allocated_visibility_events(
             sim_time=sim_time,
-            visibility_decisions=ground_visibility.decisions,
+            visibility_decisions=allocated_decisions,
             allocation=ground_allocation,
             previous_state=gs_state,
-            terminal_types=ctx.ground_pair_terminal_types,
+            terminal_types=ctx.allocated_pair_terminal_types,
             long_delay_pairs=ctx.long_delay_access_pairs,
         )
         gs_state.clear()
@@ -1121,7 +1267,7 @@ def compute_step(
             isl_feasibility=isl_feasibility,
             isl_links=isl_links,
             long_delay_contacts=long_delay_contacts,
-            ground_decisions=ground_visibility.decisions,
+            ground_decisions=allocated_decisions,
             ground_allocation=ground_allocation,
         )
 
@@ -1245,6 +1391,7 @@ def precompute_timeline_window(
     body_frames: Mapping[str, BodyFrame] | None = None,
     active_bodies: frozenset[str] | None = None,
     long_delay_access_pairs: frozenset[tuple[str, str]] | None = None,
+    assigned_space_pairs: Sequence[AssignedSpacePair] | None = None,
 ) -> TimelineWindowResult:
     """Precompute a single window of the timeline (batch mode).
 
@@ -1268,6 +1415,7 @@ def precompute_timeline_window(
         physics=physics,
         active_bodies=active_bodies,
         long_delay_access_pairs=long_delay_access_pairs,
+        assigned_space_pairs=assigned_space_pairs,
     )
     return precompute_timeline_window_from_context(
         ctx,
@@ -1303,6 +1451,7 @@ def precompute_timeline(
     body_frames: Mapping[str, BodyFrame] | None = None,
     active_bodies: frozenset[str] | None = None,
     long_delay_access_pairs: frozenset[tuple[str, str]] | None = None,
+    assigned_space_pairs: Sequence[AssignedSpacePair] | None = None,
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
 
@@ -1327,6 +1476,7 @@ def precompute_timeline(
         physics=physics,
         active_bodies=active_bodies,
         long_delay_access_pairs=long_delay_access_pairs,
+        assigned_space_pairs=assigned_space_pairs,
     )
     return result.events
 

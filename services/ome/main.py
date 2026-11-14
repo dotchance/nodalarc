@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
 from nodalarc.link_metadata import LinkRuleMetadata
+from nodalarc.models.addressing import AssignedSpacePair
 from nodalarc.models.events import (
     OpsEvent,
     PlaybackControlAccepted,
@@ -99,6 +100,7 @@ class _SessionBundle(NamedTuple):
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
     long_delay_access_pairs: frozenset[tuple[str, str]]
+    assigned_space_pairs: tuple[AssignedSpacePair, ...]
     ground_scheduling: GroundSchedulingConfig
     ground_link_model: str
     node_metadata: dict[str, dict[str, object]]
@@ -177,6 +179,7 @@ def _session_bundle_from_resolution(resolution: SessionResolution) -> _SessionBu
         rule_map=runtime.rule_map,
         ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
         long_delay_access_pairs=runtime.long_delay_access_pairs,
+        assigned_space_pairs=runtime.assigned_space_pairs,
         ground_scheduling=runtime.ground_scheduling,
         ground_link_model=runtime.ground_link_model,
         node_metadata=runtime.node_metadata,
@@ -489,6 +492,7 @@ def run(
         ground_link_model=cfg.ground_link_model,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         long_delay_access_pairs=cfg.long_delay_access_pairs,
+        assigned_space_pairs=cfg.assigned_space_pairs,
         body_frames=cfg.body_frames,
         physics=cfg.physics,
         active_bodies=cfg.active_bodies,
@@ -1041,6 +1045,7 @@ def _run_pacing(
         ground_defaults_applied=True,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         long_delay_access_pairs=cfg.long_delay_access_pairs,
+        assigned_space_pairs=cfg.assigned_space_pairs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
         physics=cfg.physics,
@@ -1232,7 +1237,7 @@ def _run_pacing(
             subj_link_decisions,
             DeferredLinkDecisionSnapshot(
                 decisions=step_result.ground_decisions,
-                unscheduled_pairs=step_result.ground_allocation.unscheduled_pairs,
+                unscheduled_pairs=step_result.ground_unscheduled_pairs,
                 policy_audit=step_result.ground_allocation.policy_audit,
                 allocation_events=step_result.ground_allocation.allocation_events,
                 sim_time=step_result.sim_time,

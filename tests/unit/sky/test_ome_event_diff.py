@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 from nodalarc.models.link_decisions import GroundPolicyAudit
-from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
+from ome.event_diff import diff_allocated_visibility_events, diff_isl_visibility_events
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
 from ome.link_allocator import LinkAllocationResult
 from ome.types import GroundVisibilityDecision, MbbTeardown
@@ -181,7 +181,7 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
     )
 
     decision = _decision(pair, visible=True, range_km=2000.0, elevation_deg=37.5)
-    diff = diff_ground_visibility_events(
+    diff = diff_allocated_visibility_events(
         long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={pair: decision},
@@ -213,7 +213,7 @@ def test_ground_event_diff_marks_mbb_teardown_state():
         allocation_events=(),
     )
 
-    diff = diff_ground_visibility_events(
+    diff = diff_allocated_visibility_events(
         long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={
@@ -251,7 +251,7 @@ def test_ground_event_diff_propagates_visibility_reject_reason_for_invisible_pai
         allocation_events=(),
     )
 
-    diff = diff_ground_visibility_events(
+    diff = diff_allocated_visibility_events(
         long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={
@@ -303,7 +303,7 @@ def test_ground_event_diff_propagates_unscheduled_reason_for_visible_but_unalloc
         allocation_events=(),
     )
 
-    diff = diff_ground_visibility_events(
+    diff = diff_allocated_visibility_events(
         long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={
@@ -325,7 +325,7 @@ def test_ground_event_diff_propagates_unscheduled_reason_for_visible_but_unalloc
 
 
 def test_ground_event_diff_fails_loud_when_allocator_omits_attribution_for_visible_unscheduled():
-    """If the allocator hands diff_ground_visibility_events a visible-but-
+    """If the allocator hands diff_allocated_visibility_events a visible-but-
     unscheduled pair without a matching UnscheduledPair attribution, the
     producer is wrong. The diff engine must refuse to emit an event with
     no scheduling reason rather than papering over the gap with None."""
@@ -340,7 +340,7 @@ def test_ground_event_diff_fails_loud_when_allocator_omits_attribution_for_visib
     )
 
     with pytest.raises(ValueError, match="did not attribute an unscheduled_reason"):
-        diff_ground_visibility_events(
+        diff_allocated_visibility_events(
             long_delay_pairs=frozenset(),
             sim_time=SIM,
             visibility_decisions={
@@ -366,7 +366,7 @@ def test_ground_event_diff_clears_unscheduled_reason_for_scheduled_pair():
         allocation_events=(),
     )
 
-    diff = diff_ground_visibility_events(
+    diff = diff_allocated_visibility_events(
         long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={
@@ -399,7 +399,7 @@ def test_a_pass_between_long_delay_ground_peers_opens_a_contact_once():
             policy_audit=_policy_audit(),
             allocation_events=(),
         )
-        return diff_ground_visibility_events(
+        return diff_allocated_visibility_events(
             long_delay_pairs=frozenset({pair}),
             sim_time=SIM,
             visibility_decisions={

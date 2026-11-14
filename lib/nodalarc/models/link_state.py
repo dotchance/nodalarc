@@ -76,7 +76,6 @@ class LinkState(BaseModel):
     # node_b to node_a. None when carrier is not UP.
     latency_a_to_b_ms: float | None
     latency_b_to_a_ms: float | None
-    link_type: Literal["isl", "ground"]
     link_rule_id: str | None = None
     topology_mode: TopologyMode | None = None
     endpoint_segments: tuple[str, str] | None = None

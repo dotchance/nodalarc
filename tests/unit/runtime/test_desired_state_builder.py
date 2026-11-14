@@ -91,7 +91,6 @@ def _terminal_event(node_a, node_b, *, terminal_index_a, terminal_index_b):
         latency_b_to_a_ms=6.0,
         elevation_deg=38.0,
         terminal_type="rf",
-        link_type="ground",
         terminal_index_a=terminal_index_a,
         terminal_index_b=terminal_index_b,
         visibility_reject_reason="ok",
@@ -111,7 +110,6 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
         latency_b_to_a_ms=7.415,
         elevation_deg=None,
         terminal_type="optical",
-        link_type="isl",
         visibility_reject_reason="ok",
         unscheduled_reason=None,
     )
@@ -144,7 +142,7 @@ def test_a_terminal_index_names_the_interface_the_resolved_session_gives_that_no
     assert pair == ("gs-a", "sat-a")
     assert info.interface_a == "uplink7"
     assert info.interface_b == "feeder4"
-    assert info.link_type == "ground"
+    assert info.assigned_terminals
 
 
 def test_each_end_takes_its_own_nodes_interface_whichever_node_sorts_first():
@@ -207,7 +205,6 @@ def test_a_link_with_no_terminals_and_no_fixed_interfaces_fails_loudly():
         latency_b_to_a_ms=7.412,
         elevation_deg=None,
         terminal_type="optical",
-        link_type="isl",
         visibility_reject_reason="ok",
         unscheduled_reason=None,
     )
@@ -228,7 +225,6 @@ def test_snapshot_row_builds_desired_link_and_a_down_row_is_not_up():
         range_km=None,
         latency_a_to_b_ms=None,
         latency_b_to_a_ms=None,
-        link_type="isl",
         sim_time=SIM,
     )
     assert not snapshot_row_is_up(down, snapshot_sim_time=SIM)
@@ -265,7 +261,6 @@ def test_snapshot_row_with_terminals_takes_each_nodes_interface():
         range_km=1800.0,
         latency_a_to_b_ms=6.0,
         latency_b_to_a_ms=6.0,
-        link_type="ground",
         sim_time=SIM,
         terminal_index_a=3,
         terminal_index_b=0,
@@ -295,7 +290,6 @@ def test_snapshot_row_sim_time_mismatch_fails_loudly():
         range_km=3333.0,
         latency_a_to_b_ms=11.118,
         latency_b_to_a_ms=11.118,
-        link_type="isl",
         sim_time=SIM - timedelta(seconds=1),
     )
 

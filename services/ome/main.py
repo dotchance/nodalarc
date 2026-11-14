@@ -715,7 +715,7 @@ def _run_pacing(
     from nodalarc.platform_config import get_platform_config
 
     from ome.event_stream import build_session_ephemeris
-    from ome.link_allocator import teardown_remaining_ticks
+    from ome.link_allocator import handing_node_of, teardown_remaining_ticks
     from ome.replay_anchor import DeferredReplayAnchor, pair_key
     from ome.snapshot_builder import (
         DeferredLinkDecisionSnapshot,
@@ -876,13 +876,6 @@ def _run_pacing(
             shutdown_event.set()
             raise SystemExit(1) from None
 
-    def _ground_pair_gs_id(pair: tuple[str, str]) -> str:
-        if pair[0] in step_ctx.gs_positions:
-            return pair[0]
-        if pair[1] in step_ctx.gs_positions:
-            return pair[1]
-        raise ValueError(f"MBB lifecycle pair {pair!r} does not contain a known ground station")
-
     def _pair_authority(
         pair: tuple[str, str],
         *,
@@ -948,7 +941,7 @@ def _run_pacing(
                 snapshot_seq=snapshot_seq,
                 allocator_step=step_result.step,
                 master_sim_time=step_result.sim_time,
-                gs_id=lifecycle_event.gs_id,
+                node_id=lifecycle_event.node_id,
                 teardown_id=lifecycle_event.teardown_id,
                 old_pair=list(lifecycle_event.old_pair),
                 successor_pair=list(lifecycle_event.successor_pair),
@@ -975,7 +968,6 @@ def _run_pacing(
     ) -> None:
         for old_pair, teardown in sorted(teardowns.items()):
             successor_pair = teardown.successor_pair
-            gs_id = _ground_pair_gs_id(old_pair)
             authority_before = {
                 "old_pair": _pair_authority(
                     old_pair, associations=associations, teardowns=teardowns
@@ -994,7 +986,7 @@ def _run_pacing(
                 snapshot_seq=snapshot_seq if snapshot_seq > 0 else None,
                 allocator_step=old_step,
                 master_sim_time=old_sim_time,
-                gs_id=gs_id,
+                node_id=handing_node_of(old_pair, successor_pair),
                 teardown_id=(
                     f"{old_pair[0]}:{old_pair[1]}->{successor_pair[0]}:{successor_pair[1]}"
                 ),

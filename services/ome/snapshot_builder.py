@@ -208,8 +208,7 @@ def build_link_state_snapshot(
                 range_km=range_km,
                 latency_a_to_b_ms=latencies[0] if latencies else None,
                 latency_b_to_a_ms=latencies[1] if latencies else None,
-                link_type="isl",
-                # An ISL has no make-before-break teardown.
+                # A link on fixed interfaces has no make-before-break teardown.
                 scheduling_state="active",
                 link_rule_id=rule_meta.link_rule_id if rule_meta is not None else None,
                 topology_mode=rule_meta.topology_mode if rule_meta is not None else None,
@@ -279,7 +278,6 @@ def build_link_state_snapshot(
                 range_km=range_km,
                 latency_a_to_b_ms=latencies[0] if latencies else None,
                 latency_b_to_a_ms=latencies[1] if latencies else None,
-                link_type="ground",
                 terminal_index_a=indices[0] if indices is not None else None,
                 terminal_index_b=indices[1] if indices is not None else None,
                 scheduling_state=sched_state,

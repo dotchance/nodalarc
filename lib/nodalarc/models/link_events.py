@@ -63,8 +63,7 @@ class LinkUp(BaseModel):
     latency_a_to_b_ms: float
     latency_b_to_a_ms: float
     range_km: float
-    reason: str  # vis_gained, gs_above_horizon, scenario_inject_up, scenario_reconciliation
-    link_type: Literal["isl", "ground"]
+    reason: str  # vis_gained, scenario_inject_up, scenario_reconciliation
     provenance: LinkDecisionProvenance | None = None
     # The contact that opened, on a fixed long-delay link (``link_state.contact_id``).
     contact_id: str | None = None
@@ -127,7 +126,6 @@ class LinkDown(BaseModel):
     # scenario or operator command that took it down, seek, or not_in_ome_snapshot when OME's
     # snapshot stopped listing the link before its reason reached the Scheduler.
     reason: str
-    link_type: Literal["isl", "ground"]
     # The contact that closed, on a fixed long-delay link (``link_state.contact_id``).
     contact_id: str | None = None
     # One entry per closed end that reported its queues.

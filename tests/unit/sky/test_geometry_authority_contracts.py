@@ -165,8 +165,9 @@ class TestOmeSnapshotGeometry:
             (event.node_a, event.node_b): (event.latency_a_to_b_ms, event.latency_b_to_a_ms)
             for event in events
         }
-        assert {link.link_type for link in up_links} == {"isl", "ground"}
-        assert {event.link_type for event in events} == {"isl", "ground"}
+        # Both kinds of link are up: on fixed interfaces and on assigned terminals.
+        assert {link.terminal_index_a is not None for link in up_links} == {False, True}
+        assert {event.terminal_index_a is not None for event in events} == {False, True}
 
         endpoints = {
             **satellite_endpoints(

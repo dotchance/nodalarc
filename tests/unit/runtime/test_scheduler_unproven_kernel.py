@@ -116,7 +116,6 @@ def _link_scheduled() -> VisibilityEvent:
         latency_b_to_a_ms=1.6678204759907602,
         elevation_deg=45.0,
         terminal_type="optical",
-        link_type="isl",
         visibility_reject_reason="ok",
         unscheduled_reason=None,
     )

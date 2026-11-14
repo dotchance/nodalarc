@@ -13,7 +13,6 @@ from scheduler.dispatch_planner import choosing_nodes, diff_link_state, stage_ch
 def _info(
     latency: float = 3.0,
     range_km: float = 1000.0,
-    link_type: str = "isl",
     *,
     b_to_a: float | None = None,
 ):
@@ -23,7 +22,7 @@ def _info(
         "isl1",
         latency,
         latency if b_to_a is None else b_to_a,
-        link_type=link_type,
+        assigned_terminals=False,
         range_km=range_km,
     )
 

@@ -114,7 +114,7 @@ class ActiveLinkInfo:
         "latency_a_to_b_ms",
         "latency_b_to_a_ms",
         "commanded_netem_ms",
-        "link_type",
+        "assigned_terminals",
         "range_km",
         "authority_sim_time",
         "authority_source",
@@ -135,7 +135,7 @@ class ActiveLinkInfo:
         latency_a_to_b_ms: float,
         latency_b_to_a_ms: float,
         *,
-        link_type: str,
+        assigned_terminals: bool,
         range_km: float | None = None,
         authority_sim_time: datetime | None = None,
         authority_source: str | None = None,
@@ -154,7 +154,10 @@ class ActiveLinkInfo:
         # against a live recomputation - compensation inputs drift between
         # dispatch and proof, and that drift is not kernel divergence.
         self.commanded_netem_ms = commanded_netem_ms
-        self.link_type = link_type
+        # Whether OME assigned the link's terminals when it scheduled the link. False for a
+        # link on interfaces the resolver fixed. The Node Agent has one actuation path for
+        # each kind.
+        self.assigned_terminals = assigned_terminals
         self.range_km = range_km
         self.authority_sim_time = authority_sim_time
         self.authority_source = authority_source
@@ -341,7 +344,7 @@ def desired_link(
         interface_b=interface_b,
         latency_a_to_b_ms=a_to_b,
         latency_b_to_a_ms=b_to_a,
-        link_type=source.link_type,
+        assigned_terminals=source.terminal_index_a is not None,
         range_km=range_km,
         authority_sim_time=authority_sim_time,
         authority_source=authority_source,

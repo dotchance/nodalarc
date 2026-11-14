@@ -351,8 +351,10 @@ def _ground_inventory_entries_for_pair(
     ground_station_ids: Collection[str],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
 ) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
-    if info.link_type != "ground":
-        raise ValueError(f"KernelInventory is ground-only; got {pair} type={info.link_type!r}")
+    if not info.assigned_terminals:
+        raise ValueError(
+            f"KernelInventory proves links with assigned terminals; {pair} sits on fixed interfaces"
+        )
     node_a, node_b = pair
     gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(pair, info, ground_station_ids)
     locality = locator.link_locality(node_a, node_b)
@@ -819,7 +821,6 @@ async def publish_link_down(
         interface_a=info.interface_a,
         interface_b=info.interface_b,
         reason=reason,
-        link_type=info.link_type,
         contact_id=info.contact.contact_id if info.contact is not None else None,
         losses=losses,
     )
@@ -846,7 +847,7 @@ def long_delay_inventory_entries(
     locality = locator.link_locality(node_a, node_b)
     cross = locality == node_agent_pb2.LOCALITY_CROSS_NODE
     ground: dict[str, str] = {}
-    if info.link_type == "ground":
+    if info.assigned_terminals:
         # A ground pass's tunnel is named from its station and satellite, as its LinkUp names it.
         gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
             pair, info, ground_station_ids
@@ -856,9 +857,7 @@ def long_delay_inventory_entries(
     else:
         vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b) if cross else 0
     link_type = (
-        node_agent_pb2.LINK_TYPE_GROUND
-        if info.link_type == "ground"
-        else node_agent_pb2.LINK_TYPE_ISL
+        node_agent_pb2.LINK_TYPE_GROUND if info.assigned_terminals else node_agent_pb2.LINK_TYPE_ISL
     )
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     ack_keys: set[InterfaceAck] = set()
@@ -1129,7 +1128,6 @@ async def _publish_link_ups(
             latency_b_to_a_ms=info.latency_b_to_a_ms,
             range_km=info.range_km,
             reason="vis_gained",
-            link_type=info.link_type,
             provenance=link_provenance(info, plan.pair_compensation[pair], sim_time),
             contact_id=info.contact.contact_id if info.contact is not None else None,
         )
@@ -1340,7 +1338,7 @@ async def send_authoritative_latency_updates(
         # Remember what was COMMANDED: kernel proofs assert against these values.
         info.commanded_netem_ms = netem
 
-        if info.link_type == "ground":
+        if info.assigned_terminals:
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
                 pair, info, ground_station_ids
             )

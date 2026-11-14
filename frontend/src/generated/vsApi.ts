@@ -357,9 +357,9 @@ export interface GroundPolicyAudit {
   readonly successor_abort_policy: string;
   readonly cross_tenant_displacement: string;
   readonly mbb_overlap_ticks: number;
-  readonly mbb_overlap_ticks_by_gs: Readonly<Record<string, number>>;
+  readonly mbb_overlap_ticks_by_node: Readonly<Record<string, number>>;
   readonly mbb_reserve: number;
-  readonly mbb_reserve_by_gs: Readonly<Record<string, number>>;
+  readonly mbb_reserve_by_node: Readonly<Record<string, number>>;
   readonly bbm_acquire_timeout_ticks: number;
   readonly ignored_capacity_fields: ReadonlyArray<string>;
 }

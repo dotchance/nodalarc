@@ -234,14 +234,14 @@ def teardown_remaining_ticks(
     hands over, less the ticks since the teardown started."""
 
     overlap = handover_overlap_ticks(
-        _handing_node(old_pair, teardown.successor_pair),
+        handing_node_of(old_pair, teardown.successor_pair),
         handover_modes=handover_modes,
         mbb_overlap_ticks=mbb_overlap_ticks,
     )
     return max(0, overlap - (step - teardown.start_step))
 
 
-def _handing_node(old_pair: tuple[str, str], successor_pair: tuple[str, str]) -> str:
+def handing_node_of(old_pair: tuple[str, str], successor_pair: tuple[str, str]) -> str:
     """The node that hands over: the one node an old link and its successor share."""
 
     shared = set(old_pair) & set(successor_pair)
@@ -564,9 +564,9 @@ def _policy_audit(
         successor_abort_policy=successor_abort_policy,
         cross_tenant_displacement=cross_tenant_displacement,
         mbb_overlap_ticks=max(mbb_overlap_ticks.values(), default=0),
-        mbb_overlap_ticks_by_gs=dict(sorted(mbb_overlap_ticks.items())),
+        mbb_overlap_ticks_by_node=dict(sorted(mbb_overlap_ticks.items())),
         mbb_reserve=max(mbb_reserve.values(), default=0),
-        mbb_reserve_by_gs=dict(sorted(mbb_reserve.items())),
+        mbb_reserve_by_node=dict(sorted(mbb_reserve.items())),
         bbm_acquire_timeout_ticks=bbm_acquire_timeout_ticks,
         ignored_capacity_fields=tuple(sorted(ignored_capacity_fields)),
     )
@@ -867,7 +867,7 @@ def allocate_links(
         lock_by_node.clear()
         protected.clear()
         for old_pair, teardown in new_pending_teardowns.items():
-            node_id = _handing_node(old_pair, teardown.successor_pair)
+            node_id = handing_node_of(old_pair, teardown.successor_pair)
             for handover_pair in (old_pair, teardown.successor_pair):
                 protected.add(handover_pair)
                 first = lock_by_node.get(node_id)
@@ -1135,7 +1135,7 @@ def allocate_links(
             if candidate_for(pair).rule_id == candidate.rule_id
             and not (
                 pair in new_pending_teardowns
-                and _handing_node(pair, new_pending_teardowns[pair].successor_pair) == node_id
+                and handing_node_of(pair, new_pending_teardowns[pair].successor_pair) == node_id
             )
         ]
         cap_reached = len(steady) >= cap_of(node_id, pool_name, candidate.rule_id)
@@ -1388,7 +1388,7 @@ def allocate_links(
                 category=category,
                 old_pair=old_pair,
                 successor_pair=successor_pair,
-                gs_id=handing_node,
+                node_id=handing_node,
                 message=message,
                 source_allocation_event_category=source_allocation_event_category or category,
                 authority_before=authority_before_for_pairs(old_pair, successor_pair),
@@ -1414,7 +1414,7 @@ def allocate_links(
         successor = teardown.successor_pair
         if successor == pair:
             raise ValueError(f"Pending teardown {pair!r} names itself as successor")
-        handing_node = _handing_node(pair, successor)
+        handing_node = handing_node_of(pair, successor)
         pair_lead, _pair_peer = _lead_and_peer(pair, stating)
         pair_visible = pair in usable_set
         successor_visible = successor in usable_set

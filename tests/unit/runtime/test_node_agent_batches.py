@@ -54,7 +54,7 @@ def test_cross_node_isl_link_up_plan_builds_two_remote_interfaces():
             interface_b="isl1",
             latency_a_to_b_ms=10.0,
             latency_b_to_a_ms=10.0,
-            link_type="isl",
+            assigned_terminals=False,
             range_km=2997.9,
         )
     }
@@ -105,7 +105,7 @@ def test_cross_node_link_up_missing_remote_ip_fails_loudly():
             interface_b="isl1",
             latency_a_to_b_ms=10.0,
             latency_b_to_a_ms=10.0,
-            link_type="isl",
+            assigned_terminals=False,
             range_km=2997.9,
         )
     }
@@ -136,7 +136,7 @@ def test_local_ground_link_down_plan_preserves_single_agent_bridge_operation():
             interface_b="gnd0",
             latency_a_to_b_ms=5.0,
             latency_b_to_a_ms=5.0,
-            link_type="ground",
+            assigned_terminals=True,
             range_km=1500.0,
         )
     }
@@ -166,7 +166,7 @@ def test_link_up_without_terminal_rates_for_an_interface_fails_loudly():
             interface_b="isl1",
             latency_a_to_b_ms=10.0,
             latency_b_to_a_ms=10.0,
-            link_type="isl",
+            assigned_terminals=False,
             range_km=2997.9,
         )
     }
@@ -206,13 +206,13 @@ def test_every_end_carries_the_delay_of_the_direction_it_transmits(locality):
     between links fails."""
     desired = {
         ("sat-a", "sat-b"): ActiveLinkInfo(
-            "isl0", "isl1", 10.0, 12.0, link_type="isl", range_km=3000.0
+            "isl0", "isl1", 10.0, 12.0, assigned_terminals=False, range_km=3000.0
         ),
         ("gs-den", "sat-c"): ActiveLinkInfo(
-            "term0", "gnd0", 5.0, 7.0, link_type="ground", range_km=1500.0
+            "term0", "gnd0", 5.0, 7.0, assigned_terminals=True, range_km=1500.0
         ),
         ("earth-sat-d", "gs-hou"): ActiveLinkInfo(
-            "gnd0", "term0", 6.0, 8.0, link_type="ground", range_km=1800.0
+            "gnd0", "term0", 6.0, 8.0, assigned_terminals=True, range_km=1800.0
         ),
     }
     transmits: dict[str, float] = {}
@@ -272,7 +272,7 @@ def _trunk(*, contact_epoch: int = 0) -> ActiveLinkInfo:
         interface_b="isl0",
         latency_a_to_b_ms=TRUNK_DELAYS_MS[0],
         latency_b_to_a_ms=TRUNK_DELAYS_MS[1],
-        link_type="isl",
+        assigned_terminals=False,
         range_km=3.338e8,
         contact=Contact(epoch_id=contact_epoch, opened_at=datetime(2027, 2, 19, tzinfo=UTC)),
     )
@@ -353,7 +353,7 @@ def test_a_local_link_has_no_admission_stage():
         interface_b="isl1",
         latency_a_to_b_ms=10.0,
         latency_b_to_a_ms=10.0,
-        link_type="isl",
+        assigned_terminals=False,
         range_km=2997.9,
     )
     with pytest.raises(ValueError, match="closes at once"):
@@ -432,7 +432,7 @@ def test_a_local_link_has_no_prepare():
         interface_b="isl1",
         latency_a_to_b_ms=10.0,
         latency_b_to_a_ms=10.0,
-        link_type="isl",
+        assigned_terminals=False,
         range_km=2997.9,
     )
     with pytest.raises(ValueError, match="opens at once"):
@@ -462,7 +462,7 @@ def test_a_long_delay_ground_pass_stages_each_end_with_its_own_contact():
         interface_b="gnd2",
         latency_a_to_b_ms=338_346.0,
         latency_b_to_a_ms=338_350.0,
-        link_type="ground",
+        assigned_terminals=True,
         range_km=1.0e8,
         contact=Contact(epoch_id=1, opened_at=datetime(2027, 2, 19, tzinfo=UTC)),
     )

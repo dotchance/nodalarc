@@ -14,10 +14,6 @@ import pytest
 from nodalarc.models.events import (
     VisibilityEvent,
 )
-from nodalarc.models.link_events import (
-    LinkDown,
-    LinkUp,
-)
 from nodalarc.models.vs_api import (
     TracedPath,
 )
@@ -36,7 +32,6 @@ class TestVisibilityEvent:
             sim_time=NOW,
             node_a="sat-P01S00",
             node_b="sat-P00S00",
-            link_type="isl",
             visible=True,
             scheduled=True,
             range_km=1000.0,
@@ -49,16 +44,16 @@ class TestVisibilityEvent:
         assert evt.node_b == "sat-P01S00"
 
     @pytest.mark.parametrize(
-        ("link_type", "given_order"),
+        ("assigned_terminals", "given_order"),
         [
-            ("isl", ("sat-P00S00", "sat-P01S00")),
-            ("isl", ("sat-P01S00", "sat-P00S00")),
-            ("ground", ("gs-den", "sat-P00S00")),
-            ("ground", ("sat-P00S00", "gs-den")),
+            (False, ("sat-P00S00", "sat-P01S00")),
+            (False, ("sat-P01S00", "sat-P00S00")),
+            (True, ("gs-den", "sat-P00S00")),
+            (True, ("sat-P00S00", "gs-den")),
         ],
-        ids=["isl-sorted", "isl-reversed", "ground-sorted", "ground-reversed"],
+        ids=["fixed-sorted", "fixed-reversed", "assigned-sorted", "assigned-reversed"],
     )
-    def test_each_delay_stays_with_its_transmitting_end(self, link_type, given_order):
+    def test_each_delay_stays_with_its_transmitting_end(self, assigned_terminals, given_order):
         """However the producer orders the nodes, the event's a_to_b is the delay of the signal
         its node_a sends and b_to_a the one its node_b sends, and a JSON round trip keeps
         them there."""
@@ -68,16 +63,15 @@ class TestVisibilityEvent:
             sim_time=NOW,
             node_a=first,
             node_b=second,
-            link_type=link_type,
             visible=True,
             scheduled=True,
             range_km=2222.0,
             latency_a_to_b_ms=sent_by[first],
             latency_b_to_a_ms=sent_by[second],
-            elevation_deg=40.0 if link_type == "ground" else None,
-            terminal_index_a=0 if link_type == "ground" else None,
-            terminal_index_b=0 if link_type == "ground" else None,
-            terminal_type="rf" if link_type == "ground" else "optical",
+            elevation_deg=40.0 if assigned_terminals else None,
+            terminal_index_a=0 if assigned_terminals else None,
+            terminal_index_b=0 if assigned_terminals else None,
+            terminal_type="rf" if assigned_terminals else "optical",
             visibility_reject_reason="ok",
             unscheduled_reason=None,
         )
@@ -96,7 +90,6 @@ class TestVisibilityEvent:
                 sim_time=NOW,
                 node_a="sat-P00S00",
                 node_b="sat-P00S01",
-                link_type="isl",
                 visible=True,
                 scheduled=True,
                 range_km=1000.0,
@@ -116,7 +109,6 @@ class TestVisibilityEvent:
                 sim_time=NOW,
                 node_a="sat-P00S00",
                 node_b="sat-P00S01",
-                link_type="isl",
                 visible=False,
                 scheduled=False,
                 range_km=1000.0,
@@ -134,7 +126,6 @@ class TestVisibilityEvent:
                 sim_time=NOW,
                 node_a="sat-P00S00",
                 node_b="sat-P00S01",
-                link_type="isl",
                 visible=True,
                 scheduled=True,
                 range_km=1000.0,
@@ -153,7 +144,6 @@ class TestVisibilityEvent:
                 sim_time=NOW,
                 node_a="sat-P00S00",
                 node_b="sat-P00S01",
-                link_type="isl",
                 visible=True,
                 scheduled=True,
                 range_km=1000.0,
@@ -172,7 +162,6 @@ class TestVisibilityEvent:
                 sim_time=NOW,
                 node_a="sat-P00S00",
                 node_b="sat-P00S01",
-                link_type="isl",
                 visible=False,
                 scheduled=False,
                 range_km=1000.0,
@@ -197,7 +186,6 @@ class TestVisibilityEvent:
                 sim_time=NOW,
                 node_a="sat-P00S00",
                 node_b="sat-P00S01",
-                link_type="isl",
                 visible=True,
                 scheduled=False,
                 range_km=1000.0,
@@ -221,7 +209,6 @@ class TestVisibilityEvent:
                 sim_time=NOW,
                 node_a="sat-P00S00",
                 node_b="sat-P00S01",
-                link_type="isl",
                 visible=False,
                 scheduled=True,
                 range_km=1000.0,
@@ -229,151 +216,6 @@ class TestVisibilityEvent:
                 terminal_type="optical",
                 visibility_reject_reason="los_blocked",
                 unscheduled_reason=None,
-            )
-
-    def test_ground_event_rejects_isl_only_reject_reason(self):
-        """A ground event stamped with an ISL-only physical reason is
-        impossible — the ground physics gate never emits those values."""
-        from pydantic import ValidationError
-
-        for isl_only in (
-            "polar_seam",
-            "terminal_type_mismatch",
-            "terminal_role_mismatch",
-        ):
-            with pytest.raises(
-                ValidationError, match="link_type='ground' rejects visibility_reject_reason"
-            ):
-                VisibilityEvent(
-                    sim_time=NOW,
-                    node_a="gs-den",
-                    node_b="sat-P00S00",
-                    link_type="ground",
-                    visible=False,
-                    scheduled=False,
-                    range_km=1000.0,
-                    elevation_deg=10.0,
-                    terminal_type="rf",
-                    visibility_reject_reason=isl_only,
-                    unscheduled_reason=None,
-                )
-
-    def test_ground_event_rejects_isl_only_unscheduled_reason(self):
-        """``isl_terminal_capacity`` is satellite-side ISL allocator state
-        and cannot describe a ground rejection."""
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError, match="link_type='ground' rejects unscheduled_reason"):
-            VisibilityEvent(
-                sim_time=NOW,
-                node_a="gs-den",
-                node_b="sat-P00S00",
-                link_type="ground",
-                visible=True,
-                scheduled=False,
-                range_km=1000.0,
-                elevation_deg=40.0,
-                terminal_type="rf",
-                visibility_reject_reason="ok",
-                unscheduled_reason="isl_terminal_capacity",
-            )
-
-    def test_isl_event_rejects_ground_only_reject_reason(self):
-        """ISL terminals have no ground elevation mask;
-        ``elevation_below_min`` is a ground-only physical reason."""
-        from pydantic import ValidationError
-
-        with pytest.raises(
-            ValidationError, match="link_type='isl' rejects visibility_reject_reason"
-        ):
-            VisibilityEvent(
-                sim_time=NOW,
-                node_a="sat-P00S00",
-                node_b="sat-P00S01",
-                link_type="isl",
-                visible=False,
-                scheduled=False,
-                range_km=1000.0,
-                elevation_deg=None,
-                terminal_type="optical",
-                visibility_reject_reason="elevation_below_min",
-                unscheduled_reason=None,
-            )
-
-    def test_isl_event_rejects_ground_only_unscheduled_reason(self):
-        """Ground allocator reasons (outranked, cap_full, etc.)
-        cannot describe an ISL rejection."""
-        from pydantic import ValidationError
-
-        for ground_only in (
-            "outranked",
-            "cap_full",
-            "hysteresis_hold",
-            "incumbent_held",
-            "bbm_no_spare",
-            "replaced_by_successor",
-        ):
-            with pytest.raises(ValidationError, match="link_type='isl' rejects unscheduled_reason"):
-                VisibilityEvent(
-                    sim_time=NOW,
-                    node_a="sat-P00S00",
-                    node_b="sat-P00S01",
-                    link_type="isl",
-                    visible=True,
-                    scheduled=False,
-                    range_km=1000.0,
-                    elevation_deg=None,
-                    terminal_type="optical",
-                    visibility_reject_reason="ok",
-                    unscheduled_reason=ground_only,
-                )
-
-    def test_link_type_required(self):
-        with pytest.raises(ValidationError, match="link_type"):
-            VisibilityEvent(
-                sim_time=NOW,
-                node_a="sat-P00S00",
-                node_b="sat-P00S01",
-                visible=True,
-                scheduled=True,
-                range_km=1000.0,
-                elevation_deg=None,
-                terminal_type="optical",
-                visibility_reject_reason="ok",
-                unscheduled_reason=None,
-            )
-
-
-# --- link_events.py ---
-
-
-class TestLinkUp:
-    def test_link_type_required(self):
-        with pytest.raises(ValidationError, match="link_type"):
-            LinkUp(
-                sim_time=NOW,
-                wall_time=NOW,
-                node_a="sat-P00S00",
-                node_b="sat-P00S01",
-                interface_a="isl0",
-                interface_b="isl1",
-                latency_ms=5.0,
-                range_km=1500.0,
-                reason="vis_gained",
-            )
-
-
-class TestLinkDown:
-    def test_link_type_required(self):
-        with pytest.raises(ValidationError, match="link_type"):
-            LinkDown(
-                sim_time=NOW,
-                wall_time=NOW,
-                node_a="sat-P00S00",
-                node_b="sat-P00S01",
-                interface_a="isl0",
-                interface_b="isl1",
-                reason="los_blocked",
             )
 
 

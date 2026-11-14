@@ -56,7 +56,7 @@ def _long_delay_pass() -> ActiveLinkInfo:
         interface_b="gnd0",
         latency_a_to_b_ms=338_278.0,
         latency_b_to_a_ms=338_276.0,
-        link_type="ground",
+        assigned_terminals=True,
         range_km=1.0e8,
         contact=Contact(epoch_id=0, opened_at=datetime(2027, 2, 19, 11, 40, tzinfo=UTC)),
         commanded_netem_ms=(338_278.0, 338_276.0),
@@ -69,7 +69,7 @@ def _local_pass() -> ActiveLinkInfo:
         interface_b="gnd0",
         latency_a_to_b_ms=1_281.0,
         latency_b_to_a_ms=1_281.0,
-        link_type="ground",
+        assigned_terminals=True,
         range_km=3.84e5,
         commanded_netem_ms=(1_281.0, 1_281.0),
     )

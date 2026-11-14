@@ -58,7 +58,7 @@ def test_a_contact_open_at_both_ends_is_adopted_with_the_delays_its_queues_carry
     found = classify_surveyed_pair(TRUNK, _survey((OLD, False), (OLD, False)))
     assert isinstance(found, AdoptedOpen)
     assert found.contact == OLD
-    info = adopted_link_info(TRUNK, INTERFACES, found, link_type="isl")
+    info = adopted_link_info(TRUNK, INTERFACES, found, assigned_terminals=False)
     # node_a's transmissions are delayed in node_b's receive queue.
     assert (info.latency_a_to_b_ms, info.latency_b_to_a_ms) == (MARS_RECEIVES_MS, EARTH_RECEIVES_MS)
     assert info.commanded_netem_ms == (MARS_RECEIVES_MS, EARTH_RECEIVES_MS)
@@ -107,7 +107,7 @@ def test_a_recovered_drain_closes_each_end_after_the_bound_from_the_proven_stop(
     resolver's bound on the link's one-way delay: a packet queued under a longer delay than the
     queue now carries still arrives before its end closes."""
     found = classify_surveyed_pair(TRUNK, _survey((NEW, True), (OLD, True)))
-    info = adopted_link_info(TRUNK, INTERFACES, found, link_type="isl")
+    info = adopted_link_info(TRUNK, INTERFACES, found, assigned_terminals=False)
     stopped_wall = datetime(2026, 11, 5, 19, tzinfo=UTC)
     drain = recover_drain(
         TRUNK,
@@ -145,7 +145,7 @@ def test_a_recovered_drain_closes_each_end_after_the_bound_from_the_proven_stop(
 
 def test_the_recovery_stop_reaches_only_carrying_ends_with_their_own_contacts():
     found = classify_surveyed_pair(TRUNK, _survey((None, False), (OLD, False)))
-    info = adopted_link_info(TRUNK, INTERFACES, found, link_type="isl")
+    info = adopted_link_info(TRUNK, INTERFACES, found, assigned_terminals=False)
     plan = build_link_down_batch_plan(
         pairs={TRUNK},
         actual_links={TRUNK: info},
@@ -164,7 +164,7 @@ def test_an_end_stopped_at_recovery_that_reports_nothing_at_the_reopen_keeps_its
         TRUNK,
         INTERFACES,
         classify_surveyed_pair(TRUNK, _survey((OLD, False), (OLD, True))),
-        link_type="isl",
+        assigned_terminals=False,
     )
     info.stage_losses = {
         TRUNK[0]: StageLoss(untransmitted_at_stop=40, transmit_dropped=1),
@@ -224,5 +224,5 @@ def test_ground_ends_are_grouped_into_passes_by_contact_and_peer():
     found = classify_surveyed_pair(pair, {node: surveys.get(node, empty) for node in pair})
     assert isinstance(found, RecoveredContact)
     assert found.carried == {station: OLD.contact_id}
-    info = adopted_link_info(pair, ("term1", "gnd1"), found, link_type="ground")
-    assert (info.link_type, info.interface_a, info.interface_b) == ("ground", "term1", "gnd1")
+    info = adopted_link_info(pair, ("term1", "gnd1"), found, assigned_terminals=True)
+    assert (info.assigned_terminals, info.interface_a, info.interface_b) == (True, "term1", "gnd1")

@@ -34,9 +34,9 @@ def _policy_audit() -> GroundPolicyAudit:
         successor_abort_policy="hard_release",
         cross_tenant_displacement="off",
         mbb_overlap_ticks=3,
-        mbb_overlap_ticks_by_gs={"gs-fixed": 3},
+        mbb_overlap_ticks_by_node={"gs-fixed": 3},
         mbb_reserve=0,
-        mbb_reserve_by_gs={"gs-fixed": 0},
+        mbb_reserve_by_node={"gs-fixed": 0},
         bbm_acquire_timeout_ticks=1,
         ignored_capacity_fields=(),
     )

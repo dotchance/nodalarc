@@ -308,12 +308,12 @@ def report_lifecycle(conn: sqlite3.Connection, session_id: str) -> str:
     if not rows:
         lines.append("  (no OME lifecycle events)")
         return "\n".join(lines)
-    lines.append(f"{'Sim time':<34} {'Station':<24} {'Old pair -> successor':<48} Outcome")
+    lines.append(f"{'Sim time':<34} {'Node':<24} {'Old pair -> successor':<48} Outcome")
     lines.append("-" * 130)
     for row in rows:
         pairs = f"{row['old_pair']} -> {row['successor_pair']}"
         lines.append(
-            f"{row['sim_time']:<34} {row['gs_id']:<24} {pairs:<48} {row['terminal_outcome']}"
+            f"{row['sim_time']:<34} {row['node_id']:<24} {pairs:<48} {row['terminal_outcome']}"
         )
     return "\n".join(lines)
 

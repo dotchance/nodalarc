@@ -113,7 +113,7 @@ def adopted_link_info(
     interfaces: tuple[str, str],
     found: AdoptedOpen | RecoveredContact,
     *,
-    link_type: str,
+    assigned_terminals: bool,
 ) -> ActiveLinkInfo:
     """The link record of an adopted contact. The orbital delays are OME's and unknown until its
     next snapshot; the record holds the delays the kernel queues carry, which the first
@@ -126,7 +126,7 @@ def adopted_link_info(
         interface_b=interfaces[1],
         latency_a_to_b_ms=a_to_b,
         latency_b_to_a_ms=b_to_a,
-        link_type=link_type,
+        assigned_terminals=assigned_terminals,
         commanded_netem_ms=(a_to_b, b_to_a),
         contact=found.contact,
     )

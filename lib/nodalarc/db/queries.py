@@ -505,7 +505,7 @@ def insert_ome_lifecycle_event(
     cur = conn.execute(
         """INSERT INTO ome_lifecycle_events (
                session_id, epoch_id, snapshot_seq, allocator_step, sim_time, event_time,
-               gs_id, old_pair, successor_pair, terminal_outcome, event_code, event_json
+               node_id, old_pair, successor_pair, terminal_outcome, event_code, event_json
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             session_id,
@@ -514,7 +514,7 @@ def insert_ome_lifecycle_event(
             details.allocator_step,
             history_time(details.master_sim_time),
             history_time(event.timestamp),
-            details.gs_id,
+            details.node_id,
             json.dumps(details.old_pair),
             json.dumps(details.successor_pair),
             details.terminal_outcome,

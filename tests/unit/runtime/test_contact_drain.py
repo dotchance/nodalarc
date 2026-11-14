@@ -36,7 +36,7 @@ def _trunk(*, epoch: int = 0, opened: datetime = OPENED, a_to_b_ms: float = A_TO
         interface_b="isl0",
         latency_a_to_b_ms=a_to_b_ms,
         latency_b_to_a_ms=B_TO_A_MS,
-        link_type="isl",
+        assigned_terminals=False,
         range_km=3.338e8,
         contact=Contact(epoch_id=epoch, opened_at=opened),
     )
@@ -225,7 +225,7 @@ def _pass(term: str, gnd: str, *, opened: datetime):
         interface_b=gnd,
         latency_a_to_b_ms=A_TO_B_MS,
         latency_b_to_a_ms=B_TO_A_MS,
-        link_type="ground",
+        assigned_terminals=True,
         range_km=3.338e8,
         contact=Contact(epoch_id=0, opened_at=opened),
     )

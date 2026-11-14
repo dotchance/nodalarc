@@ -71,9 +71,9 @@ def _audit() -> GroundPolicyAudit:
         successor_abort_policy="hard_release",
         cross_tenant_displacement="off",
         mbb_overlap_ticks=0,
-        mbb_overlap_ticks_by_gs={GS: 0},
+        mbb_overlap_ticks_by_node={GS: 0},
         mbb_reserve=0,
-        mbb_reserve_by_gs={GS: 0},
+        mbb_reserve_by_node={GS: 0},
         bbm_acquire_timeout_ticks=1,
         ignored_capacity_fields=(),
     )

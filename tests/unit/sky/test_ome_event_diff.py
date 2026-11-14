@@ -28,9 +28,9 @@ def _policy_audit() -> GroundPolicyAudit:
         successor_abort_policy="hard_release",
         cross_tenant_displacement="off",
         mbb_overlap_ticks=3,
-        mbb_overlap_ticks_by_gs={"gs-den": 3},
+        mbb_overlap_ticks_by_node={"gs-den": 3},
         mbb_reserve=0,
-        mbb_reserve_by_gs={"gs-den": 0},
+        mbb_reserve_by_node={"gs-den": 0},
         bbm_acquire_timeout_ticks=1,
         ignored_capacity_fields=(),
     )
@@ -132,7 +132,8 @@ def test_isl_event_diff_emits_only_state_changes_and_preserves_authority_values(
     assert diff.state[pair] == (True, True)
     assert len(diff.events) == 1
     event = diff.events[0]
-    assert event.link_type == "isl"
+    # A link on fixed interfaces names no assigned terminal.
+    assert (event.terminal_index_a, event.terminal_index_b) == (None, None)
     assert event.range_km == result.range_km
     # The event carries the result's committed delay of each direction, in pair order.
     assert event.latency_a_to_b_ms == result.one_way_a_to_b_ms
@@ -192,7 +193,6 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
     assert diff.state[pair] == (True, True, "active")
     assert len(diff.events) == 1
     event = diff.events[0]
-    assert event.link_type == "ground"
     # The association's two indices are in pair order: the terminal at each node.
     assert event.terminal_index_a == 1
     assert event.terminal_index_b == 0

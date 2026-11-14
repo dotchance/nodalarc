@@ -92,7 +92,9 @@ def _snapshot(instance: str, epoch: int, links, *, generation: str = GENERATION)
 
 
 def _proven(interface_a: str, interface_b: str, netem: tuple[float, float]) -> ActiveLinkInfo:
-    info = ActiveLinkInfo(interface_a, interface_b, 9.0, 9.0, link_type="isl", range_km=2700.0)
+    info = ActiveLinkInfo(
+        interface_a, interface_b, 9.0, 9.0, assigned_terminals=False, range_km=2700.0
+    )
     info.commanded_netem_ms = netem
     return info
 
@@ -149,12 +151,14 @@ def test_a_successor_holds_the_links_its_predecessor_proved_and_retimes_them() -
             proven[pair].interface_b,
         )
         assert taken[pair].commanded_netem_ms == proven[pair].commanded_netem_ms
-    assert taken[ISL].link_type == "isl" and taken[OLD_PASS].link_type == "ground"
+    assert not taken[ISL].assigned_terminals and taken[OLD_PASS].assigned_terminals
 
     # OME now wants the ISL and the station's next pass on the same terminal.
     desired = {
-        ISL: ActiveLinkInfo("isl0", "isl1", 1.25, 1.25, link_type="isl", range_km=375.0),
-        NEW_PASS: ActiveLinkInfo("term0", "gnd0", 3.0, 3.0, link_type="ground", range_km=900.0),
+        ISL: ActiveLinkInfo("isl0", "isl1", 1.25, 1.25, assigned_terminals=False, range_km=375.0),
+        NEW_PASS: ActiveLinkInfo(
+            "term0", "gnd0", 3.0, 3.0, assigned_terminals=True, range_km=900.0
+        ),
     }
     diff = diff_link_state(taken, desired)
     assert diff.to_remove == {OLD_PASS}
@@ -566,7 +570,6 @@ def _ome_states(visible: bool, scheduled: bool, reject: str, unscheduled: str | 
         latency_b_to_a_ms=1.9,
         elevation_deg=None,
         terminal_type="optical",
-        link_type="isl",
         visibility_reject_reason=reject,
         unscheduled_reason=unscheduled,
     )

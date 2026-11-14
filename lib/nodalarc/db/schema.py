@@ -16,7 +16,7 @@ to a model nested in it, or to what VS-API adds to a recorded frame bumps it.
 
 import sqlite3
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 class HistorySchemaError(RuntimeError):
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS ome_lifecycle_events (
     allocator_step INTEGER NOT NULL,
     sim_time TEXT NOT NULL,
     event_time TEXT NOT NULL,
-    gs_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
     old_pair TEXT NOT NULL,
     successor_pair TEXT NOT NULL,
     terminal_outcome TEXT NOT NULL,

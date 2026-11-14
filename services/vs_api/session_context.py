@@ -66,9 +66,16 @@ from nodalarc.models.events import (
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.link_rules import LinkLabel
 from nodalarc.models.link_state import contact_id
 from nodalarc.models.ome_lifecycle import MbbTeardownLifecycleDetails
-from nodalarc.models.resolved_session import InterfaceRates, NodeKind, NodeRole, ResolvedNode
+from nodalarc.models.resolved_session import (
+    InterfaceRates,
+    NodeKind,
+    NodeRole,
+    ResolvedNode,
+    ResolvedSession,
+)
 from nodalarc.models.scheduler_ops import (
     ActualLinkSnapshot,
     ActuationOpsDetails,
@@ -204,9 +211,7 @@ class SessionContext:
             routing_instances_by_node_id=self._routing_instances_by_node_id,
             role_by_node_id=self._role_by_node_id,
         )
-        self._resolved_link_kind_by_rule_id = {
-            rule.rule_id: rule.kind for rule in resolved.link_rules
-        }
+        self._link_class_by_pair = _link_classes_by_pair(resolved)
         self._interface_rates = resolved.interface_terminal_rates()
         self.beam_falloff_exponent: float = platform.vs_api_visual_beam_falloff_exponent
 
@@ -248,8 +253,8 @@ class SessionContext:
             self._node_primary_prefix_by_id = {}
         if not hasattr(self, "_resolved_static_nodes_by_id"):
             self._resolved_static_nodes_by_id = {}
-        if not hasattr(self, "_resolved_link_kind_by_rule_id"):
-            self._resolved_link_kind_by_rule_id = {}
+        if not hasattr(self, "_link_class_by_pair"):
+            self._link_class_by_pair = {}
         self.nodes: dict[str, NodeState] = {}
         self.links: dict[str, LinkState] = {}
         self.link_decision_traces: dict[str, LinkDecisionTrace] = {}
@@ -370,7 +375,7 @@ class SessionContext:
         self._node_addresses_by_id = {}
         self._node_primary_prefix_by_id = {}
         self._resolved_static_nodes_by_id = {}
-        self._resolved_link_kind_by_rule_id = {}
+        self._link_class_by_pair = {}
         self._interface_rates = {}
         self._routing_instances_by_node_id = {}
         self._role_by_node_id = {}
@@ -905,11 +910,7 @@ class SessionContext:
                         f"authoritative field(s): {', '.join(missing)}"
                     )
                 key = _link_key(link.node_a, link.node_b)
-                public_link_type = self._public_link_type(
-                    link.link_type,
-                    link_rule_id=link.link_rule_id,
-                    endpoint_segments=link.endpoint_segments,
-                )
+                public_link_type = self._public_link_type(link.node_a, link.node_b)
                 terminal_rates = self._link_terminal_rates(
                     link.node_a, link.interface_a, link.node_b, link.interface_b
                 )
@@ -1111,11 +1112,7 @@ class SessionContext:
         data = event.model_dump(mode="json")
         node_a, node_b = event.node_a, event.node_b
         key = _link_key(node_a, node_b)
-        public_link_type = self._public_link_type(
-            event.link_type,
-            link_rule_id=data.get("link_rule_id"),
-            endpoint_segments=data.get("endpoint_segments"),
-        )
+        public_link_type = self._public_link_type(node_a, node_b)
         trace = self._trace_from_link_event(data, link_type=public_link_type)
         terminal_rates = self._link_terminal_rates(
             node_a, data["interface_a"], node_b, data["interface_b"]
@@ -1792,22 +1789,20 @@ class SessionContext:
             "PATH_CHANGE",
         )
 
-    def _public_link_type(
-        self,
-        raw_type: Literal["isl", "ground"],
-        *,
-        link_rule_id: str | None = None,
-        endpoint_segments: tuple[str, str] | list[str] | None = None,
-    ) -> PublicLinkType:
-        return _derive_link_type(
-            raw_type,
-            resolved_kind=(
-                self._resolved_link_kind_by_rule_id.get(link_rule_id)
-                if link_rule_id is not None
-                else None
-            ),
-            endpoint_segments=endpoint_segments,
-        )
+    def _public_link_type(self, node_a: str, node_b: str) -> PublicLinkType:
+        """The class the page shows for a link, from the session's own candidate for the pair.
+
+        No message states a link's class. The resolved session does: a link exists only as a
+        candidate of one link rule, and the rule's kind and the two endpoint segments decide
+        the class. A link no candidate names is refused here; showing it under a guessed class
+        would display a link the session never declared.
+        """
+        link_class = self._link_class_by_pair.get(_link_key(node_a, node_b))
+        if link_class is None:
+            raise ValueError(
+                f"link {node_a}<->{node_b} is not a link candidate of the resolved session"
+            )
+        return link_class
 
     @staticmethod
     def _trace_from_snapshot_link(link, snapshot, *, link_type: str) -> LinkDecisionTrace:
@@ -2138,22 +2133,25 @@ def _link_key(node_a: str, node_b: str) -> str:
     return f"{min(node_a, node_b)}:{max(node_a, node_b)}"
 
 
-def _derive_link_type(
-    raw_type: Literal["isl", "ground"],
-    *,
-    resolved_kind: str | None = None,
-    endpoint_segments: tuple[str, str] | list[str] | None = None,
-) -> PublicLinkType:
-    if raw_type == "ground":
+def _link_class(kind: LinkLabel, endpoint_segments: tuple[str, str]) -> PublicLinkType:
+    """The class the page shows for a link of one rule kind between two segments."""
+    if kind == "access":
         return "ground"
-    if resolved_kind == "inter_body":
+    if kind == "inter_body":
         return "inter_body_relay"
-    if resolved_kind not in (None, "isl"):
-        raise ValueError(
-            f"resolved link kind {resolved_kind!r} cannot classify runtime link_type='isl'"
-        )
-    if resolved_kind == "isl" and endpoint_segments is not None and len(endpoint_segments) == 2:
-        a, b = endpoint_segments
-        if a != b:
-            return "inter_constellation"
-    return "isl"
+    segment_a, segment_b = endpoint_segments
+    return "isl" if segment_a == segment_b else "inter_constellation"
+
+
+def _link_classes_by_pair(resolved: ResolvedSession) -> dict[str, PublicLinkType]:
+    """Each candidate pair's class. Two rules that give one pair different classes are refused."""
+    classes: dict[str, PublicLinkType] = {}
+    for candidate in resolved.link_candidates:
+        key = _link_key(candidate.node_a, candidate.node_b)
+        link_class = _link_class(candidate.kind, candidate.endpoint_segments)
+        if classes.setdefault(key, link_class) != link_class:
+            raise ValueError(
+                f"link {candidate.node_a}<->{candidate.node_b} is a candidate of rules of "
+                f"different classes: {classes[key]!r} and {link_class!r}"
+            )
+    return classes

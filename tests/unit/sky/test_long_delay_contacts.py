@@ -196,7 +196,6 @@ def _link(**overrides) -> dict:
         "range_km": 1.0e8,
         "latency_a_to_b_ms": 333_564.1,
         "latency_b_to_a_ms": 333_571.9,
-        "link_type": "isl",
         "contact_opened_at": T0,
         "sim_time": T0 + timedelta(seconds=10),
     }
@@ -227,7 +226,6 @@ def test_the_models_refuse_a_contact_where_no_contact_can_be():
             range_km=1.0e8,
             elevation_deg=None,
             terminal_type="optical",
-            link_type="isl",
             visibility_reject_reason="ok",
             unscheduled_reason=None,
             contact_opened_at=T0 - timedelta(seconds=1),

@@ -109,7 +109,6 @@ def diff_isl_visibility_events(
                 latency_b_to_a_ms=result.one_way_b_to_a_ms,
                 elevation_deg=None,
                 terminal_type=result.terminal_type,
-                link_type="isl",
                 visibility_reject_reason=visibility_reject_reason,
                 unscheduled_reason=unscheduled_reason,
                 contact_opened_at=(
@@ -202,7 +201,6 @@ def diff_ground_visibility_events(
                 latency_b_to_a_ms=decision.latency_b_to_a_ms,
                 elevation_deg=decision.elevation_deg,
                 terminal_type=terminal_types[pair],
-                link_type="ground",
                 terminal_index_a=indices[0] if indices else None,
                 terminal_index_b=indices[1] if indices else None,
                 scheduling_state=sched_state,

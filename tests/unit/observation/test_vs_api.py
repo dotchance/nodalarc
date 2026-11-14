@@ -45,7 +45,7 @@ from nodalarc.prepared_session import (
 )
 from nodalarc.project_info import project_version
 from nodalarc.resolve_session import resolve_session_with_assets
-from vs_api.session_context import SessionContext, _derive_link_type, _link_key
+from vs_api.session_context import SessionContext, _link_class, _link_key
 
 from tests.asgi_client import ASGITestClient as TestClient
 from tests.catalog_session_fixtures import shipped_read_view
@@ -154,38 +154,18 @@ class TestOpsEventVisibility:
         assert visible == events[2:]
 
 
-class TestLinkTypeDerivation:
-    def test_generic_isl_does_not_parse_node_ids_for_intra_cross_guess(self):
-        assert _derive_link_type("isl") == "isl"
+class TestLinkClass:
+    def test_an_isl_inside_one_segment_is_an_isl(self):
+        assert _link_class("isl", ("leo", "leo")) == "isl"
 
-    def test_endpoint_segments_classify_declared_inter_constellation_links(self):
-        assert (
-            _derive_link_type(
-                "isl",
-                resolved_kind="isl",
-                endpoint_segments=("leo", "meo"),
-            )
-            == "inter_constellation"
-        )
+    def test_an_isl_between_two_segments_is_inter_constellation(self):
+        assert _link_class("isl", ("leo", "meo")) == "inter_constellation"
 
-    def test_resolved_cross_body_link_classifies_as_inter_body_relay(self):
-        assert (
-            _derive_link_type(
-                "isl",
-                resolved_kind="inter_body",
-                endpoint_segments=("earth-relay", "luna-relay"),
-            )
-            == "inter_body_relay"
-        )
+    def test_an_inter_body_link_is_an_inter_body_relay(self):
+        assert _link_class("inter_body", ("earth-relay", "luna-relay")) == "inter_body_relay"
 
-    def test_segment_names_do_not_guess_cross_body_without_resolved_kind(self):
-        assert (
-            _derive_link_type(
-                "isl",
-                endpoint_segments=("earth-relay", "luna-relay"),
-            )
-            == "isl"
-        )
+    def test_an_access_link_is_a_ground_link(self):
+        assert _link_class("access", ("ground", "leo")) == "ground"
 
 
 def _session_yaml_text(name: str = "earth-leo-simple") -> str:
@@ -330,6 +310,8 @@ _ISL_RATES = {
     ("sat-P00S00", "isl0"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=1500.0),
     ("sat-P00S01", "isl1"): InterfaceRates(transmit_mbps=100.0, receive_mbps=2000.0),
 }
+# The class of the one link a state-only context's session declares.
+_ISL_CLASSES = {_link_key("sat-P00S00", "sat-P00S01"): "isl"}
 
 
 def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
@@ -345,7 +327,6 @@ def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
         "reason": "vis_gained",
         "sim_time": datetime.now(UTC).isoformat(),
         "wall_time": datetime.now(UTC).isoformat(),
-        "link_type": "isl",
         "provenance": _make_provenance(),
     }
     event.update(overrides)
@@ -362,7 +343,6 @@ def _make_link_down_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides)
         "reason": "los_blocked",
         "sim_time": datetime.now(UTC).isoformat(),
         "wall_time": datetime.now(UTC).isoformat(),
-        "link_type": "isl",
     }
     event.update(overrides)
     return event
@@ -513,22 +493,17 @@ class TestSessionContextNetworkIdentity:
             history_path=None,
         )
 
-        assert (
-            ctx._public_link_type(
-                "isl",
-                link_rule_id="leo_to_heo",
-                endpoint_segments=("leo_b", "heo_relay"),
-            )
-            == "inter_constellation"
-        )
-        assert (
-            ctx._public_link_type(
-                "isl",
-                link_rule_id="geo_to_luna",
-                endpoint_segments=("geo_relay", "luna_relay"),
-            )
-            == "inter_body_relay"
-        )
+        candidates = {
+            candidate.rule_id: candidate
+            for candidate in ctx.session_resolution.resolved.link_candidates
+        }
+        leo_to_heo = candidates["leo_to_heo"]
+        geo_to_luna = candidates["geo_to_luna"]
+
+        assert ctx._public_link_type(leo_to_heo.node_a, leo_to_heo.node_b) == "inter_constellation"
+        assert ctx._public_link_type(geo_to_luna.node_b, geo_to_luna.node_a) == "inter_body_relay"
+        with pytest.raises(ValueError, match="not a link candidate"):
+            ctx._public_link_type(leo_to_heo.node_a, geo_to_luna.node_b)
 
     def test_exposes_loopback_and_site_prefix_addresses(self, tmp_path):
         session_path = tmp_path / "session.yaml"
@@ -1094,6 +1069,7 @@ class TestLinkDecisionTraceState:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx._interface_rates = _ISL_RATES
+        ctx._link_class_by_pair = _ISL_CLASSES
 
         import asyncio
 
@@ -1135,6 +1111,7 @@ class TestLinkDecisionTraceState:
     def test_link_up_requires_provenance(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._link_class_by_pair = _ISL_CLASSES
 
         import asyncio
 
@@ -1149,6 +1126,7 @@ class TestLinkDecisionTraceState:
     def test_link_up_rejects_contradictory_provenance(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._link_class_by_pair = _ISL_CLASSES
 
         import asyncio
 
@@ -1165,6 +1143,7 @@ class TestLinkDecisionTraceState:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx._interface_rates = _ISL_RATES
+        ctx._link_class_by_pair = _ISL_CLASSES
 
         import asyncio
 
@@ -1187,7 +1166,6 @@ class TestLinkDecisionTraceState:
                         "range_km": 900.0,
                         "latency_a_to_b_ms": 3.0,
                         "latency_b_to_a_ms": 3.25,
-                        "link_type": "isl",
                         "sim_time": "2025-01-01T00:00:00+00:00",
                     }
                 ],
@@ -1212,6 +1190,7 @@ class TestLinkDecisionTraceState:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx._interface_rates = _ISL_RATES
+        ctx._link_class_by_pair = _ISL_CLASSES
 
         import asyncio
 
@@ -1267,6 +1246,7 @@ class TestLinkDecisionTraceState:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx._interface_rates = _ISL_RATES
+        ctx._link_class_by_pair = _ISL_CLASSES
 
         import asyncio
 
@@ -1383,6 +1363,7 @@ class TestSubscriberResilience:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx._interface_rates = _ISL_RATES
+        ctx._link_class_by_pair = _ISL_CLASSES
 
         import asyncio
 
@@ -1405,7 +1386,6 @@ class TestSubscriberResilience:
                         "range_km": 900.0,
                         "latency_a_to_b_ms": 3.0,
                         "latency_b_to_a_ms": 3.0,
-                        "link_type": "isl",
                         "scheduling_state": "teardown",
                         "teardown_remaining_ticks": 7,
                         "successor_pair": ["sat-P00S00", "sat-P00S02"],
@@ -1438,6 +1418,7 @@ class TestSubscriberResilience:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx._interface_rates = {("sat-P00S00", "isl0"): _ISL_RATES[("sat-P00S00", "isl0")]}
+        ctx._link_class_by_pair = _ISL_CLASSES
 
         import asyncio
 
@@ -1460,7 +1441,6 @@ class TestSubscriberResilience:
                         "range_km": 900.0,
                         "latency_a_to_b_ms": 3.0,
                         "latency_b_to_a_ms": 3.0,
-                        "link_type": "isl",
                         "scheduling_state": "teardown",
                         "teardown_remaining_ticks": 7,
                         "successor_pair": ["sat-P00S00", "sat-P00S02"],
@@ -1518,7 +1498,6 @@ class TestSubscriberResilience:
                         "routing": "UNKNOWN",
                         "latency_a_to_b_ms": 3.0,
                         "latency_b_to_a_ms": 3.0,
-                        "link_type": "isl",
                         "sim_time": "2025-01-01T00:00:00+00:00",
                     }
                 ],
@@ -1531,33 +1510,17 @@ class TestSubscriberResilience:
         assert ctx.last_snapshot_seq == 11
         assert ctx.links[existing_key].range_km == 1500.0
 
-    def test_link_up_requires_explicit_link_type(self):
+    def test_a_link_up_for_a_pair_the_session_does_not_declare_is_refused(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
 
         import asyncio
 
-        event = _make_link_up_event()
-        event.pop("link_type")
         msg = _Message()
-        msg.data = json.dumps(event).encode()
+        msg.data = json.dumps(_make_link_up_event()).encode()
 
-        with pytest.raises(ValueError, match="link_type"):
+        with pytest.raises(ValueError, match="not a link candidate"):
             asyncio.run(ctx._on_link_up(msg))
-
-    def test_link_down_requires_explicit_link_type(self):
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-
-        import asyncio
-
-        event = _make_link_down_event()
-        event.pop("link_type")
-        msg = _Message()
-        msg.data = json.dumps(event).encode()
-
-        with pytest.raises(ValueError, match="link_type"):
-            asyncio.run(ctx._on_link_down(msg))
 
     def test_ready_requires_ephemeris_and_snapshot(self):
         """is_ready() only returns True when both ephemeris AND snapshot
@@ -1739,9 +1702,9 @@ def _decision_snapshot_payload() -> dict:
             "successor_abort_policy": "hard_release",
             "cross_tenant_displacement": "off",
             "mbb_overlap_ticks": 3,
-            "mbb_overlap_ticks_by_gs": {"gs-den": 0},
+            "mbb_overlap_ticks_by_node": {"gs-den": 0},
             "mbb_reserve": 0,
-            "mbb_reserve_by_gs": {"gs-den": 0},
+            "mbb_reserve_by_node": {"gs-den": 0},
             "bbm_acquire_timeout_ticks": 1,
             "ignored_capacity_fields": [],
         },
@@ -2446,6 +2409,7 @@ def _recorded_context(history_path, *, max_bytes: int = 262_144_000) -> SessionC
     ctx._init_state_only()
     ctx.session_id = "run-history-0001"
     ctx._interface_rates = _ISL_RATES
+    ctx._link_class_by_pair = _ISL_CLASSES
     ctx.history = (
         HistoryRecorder(
             history_path,
@@ -2832,6 +2796,7 @@ class TestSessionHistory:
             ("sat-P00S05", "isl0"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=2000.0),
             ("sat-P00S06", "isl1"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=2000.0),
         }
+        ctx._link_class_by_pair = {**_ISL_CLASSES, _link_key("sat-P00S05", "sat-P00S06"): "isl"}
         ctx._record_history("session metadata", ctx._open_history)
         asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
         asyncio.run(
@@ -3480,6 +3445,7 @@ class TestLongDelayContacts:
             ("dss-43", "isl0"): InterfaceRates(transmit_mbps=20.0, receive_mbps=2.0),
             ("mars-orbiter", "isl1"): InterfaceRates(transmit_mbps=2.0, receive_mbps=20.0),
         }
+        ctx._link_class_by_pair = {_link_key("dss-43", "mars-orbiter"): "inter_body_relay"}
         older, newer = "0@2027-02-18T12:00:00.000000Z", "0@2027-02-18T12:20:00.000000Z"
         asyncio.run(
             ctx._on_link_up(

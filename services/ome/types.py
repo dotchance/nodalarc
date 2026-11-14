@@ -57,7 +57,7 @@ class MbbTeardownLifecycleEvent:
     category: GroundAllocationEventCategory
     old_pair: tuple[str, str]
     successor_pair: tuple[str, str]
-    gs_id: str
+    node_id: str
     message: str
     source_allocation_event_category: GroundAllocationEventCategory | None = None
     authority_before: dict[str, dict[str, object]] = field(default_factory=dict)

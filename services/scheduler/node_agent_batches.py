@@ -134,7 +134,7 @@ def build_link_down_batch_plan(
                 f"long-delay link {pair} closes end by end; the close names no end of it"
             )
 
-        if info.link_type == "ground":
+        if info.assigned_terminals:
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
                 pair, info, ground_station_ids
             )
@@ -324,7 +324,7 @@ def build_link_up_batch_plan(
         # reports normal measurement drift as kernel divergence.
         info.commanded_netem_ms = netem
 
-        if info.link_type == "ground":
+        if info.assigned_terminals:
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
                 pair, info, ground_station_ids
             )

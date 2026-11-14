@@ -198,9 +198,9 @@ class GroundPolicyAudit(BaseModel):
     successor_abort_policy: str
     cross_tenant_displacement: str
     mbb_overlap_ticks: int
-    mbb_overlap_ticks_by_gs: dict[str, int]
+    mbb_overlap_ticks_by_node: dict[str, int]
     mbb_reserve: int
-    mbb_reserve_by_gs: dict[str, int]
+    mbb_reserve_by_node: dict[str, int]
     bbm_acquire_timeout_ticks: int
     ignored_capacity_fields: tuple[str, ...]
 

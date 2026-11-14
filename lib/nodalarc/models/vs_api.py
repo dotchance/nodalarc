@@ -129,8 +129,8 @@ class NodeState(BaseModel):
 # Where VS-API's session manager stands; see SessionManager.
 type SessionStatus = Literal["idle", "switching", "wiring", "ready", "error"]
 
-# The kinds VS-API reports for a link: OME and the Scheduler carry "isl" and
-# "ground"; VS-API refines an ISL by its resolved rule (see _derive_link_type).
+# The kinds VS-API reports for a link. No OME or Scheduler message states one: VS-API reads
+# it from the resolved link candidate of the pair, by the rule's kind and the two segments.
 type PublicLinkType = Literal["ground", "isl", "inter_constellation", "inter_body_relay"]
 
 

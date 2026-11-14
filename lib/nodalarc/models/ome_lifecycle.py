@@ -52,7 +52,7 @@ class MbbTeardownLifecycleDetails(BaseModel):
     snapshot_seq: int | None
     allocator_step: int
     master_sim_time: datetime
-    gs_id: str
+    node_id: str
     teardown_id: str
     old_pair: list[str]
     successor_pair: list[str]

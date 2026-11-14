@@ -221,9 +221,9 @@ def inherited_actual_links(
                     f"Scheduler {snapshot.scheduler_instance_id} proved {pair} up on {interfaces}; "
                     f"the session wires it on {interface_map[pair]}"
                 )
-            link_type = "isl"
+            assigned_terminals = False
         elif all(node_id in terminal_capacities for node_id in pair):
-            link_type = "ground"
+            assigned_terminals = True
         else:
             raise RuntimeError(
                 f"Scheduler {snapshot.scheduler_instance_id} proved {pair} up; it is neither a "
@@ -231,8 +231,10 @@ def inherited_actual_links(
                 "assigns"
             )
         ends_rewired = len(set(pair) & rewired)
-        if ends_rewired == 1 and link_type == "ground":
-            stale[pair] = ActiveLinkInfo(interfaces[0], interfaces[1], 0.0, 0.0, link_type="ground")
+        if ends_rewired == 1 and assigned_terminals:
+            stale[pair] = ActiveLinkInfo(
+                interfaces[0], interfaces[1], 0.0, 0.0, assigned_terminals=True
+            )
         if ends_rewired:
             continue
         netem = (row.netem_ms[0], row.netem_ms[1])
@@ -241,7 +243,7 @@ def inherited_actual_links(
             interfaces[1],
             netem[0],
             netem[1],
-            link_type=link_type,
+            assigned_terminals=assigned_terminals,
             commanded_netem_ms=netem,
         )
     return links, stale
@@ -265,7 +267,7 @@ def inherited_node_state(
         return NodeActuationState(node_id=node_id), {}
     stale = {
         (row.pair[0], row.pair[1]): ActiveLinkInfo(
-            row.interfaces[0], row.interfaces[1], 0.0, 0.0, link_type="ground"
+            row.interfaces[0], row.interfaces[1], 0.0, 0.0, assigned_terminals=True
         )
         for row in details.stale_links
     }

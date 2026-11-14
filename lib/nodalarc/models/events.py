@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Annotated, Literal, get_args
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -124,19 +124,10 @@ IslVisibilityRejectReason = Literal[
 IslUnscheduledReason = Literal["isl_terminal_capacity"]
 
 VisibilityRejectReason = GroundVisibilityRejectReason | IslVisibilityRejectReason
-"""Every physical or geometric rejection reason across ground and ISL.
-
-`VisibilityEvent` carries either axis; its model validator holds a ground
-event to the ground set and an ISL event to the ISL set."""
+"""Every physical or geometric reason a pair is not visible, whichever engine evaluated it."""
 
 UnscheduledReason = GroundUnscheduledReason | IslUnscheduledReason
-"""Every allocation reason across ground and ISL, held to the link type's set
-by the `VisibilityEvent` validator."""
-
-_GROUND_REJECT_REASONS: frozenset[str] = frozenset(get_args(GroundVisibilityRejectReason.__value__))
-_ISL_REJECT_REASONS: frozenset[str] = frozenset(get_args(IslVisibilityRejectReason))
-_GROUND_UNSCHEDULED_REASONS: frozenset[str] = frozenset(get_args(GroundUnscheduledReason.__value__))
-_ISL_UNSCHEDULED_REASONS: frozenset[str] = frozenset(get_args(IslUnscheduledReason))
+"""Every reason a visible pair is not scheduled, whichever chooser decided it."""
 
 
 class VisibilityEvent(BaseModel):
@@ -180,7 +171,6 @@ class VisibilityEvent(BaseModel):
     latency_b_to_a_ms: float | None = None
     elevation_deg: float | None  # None for ISLs, float for ground links
     terminal_type: str  # "optical" or "rf"
-    link_type: Literal["isl", "ground"]  # set by OME from node type registry
     # The terminal OME assigned the link at node_a and at node_b, on a scheduled link whose
     # terminals are chosen per association. None on a link with fixed interfaces and on a pair
     # that is not scheduled.
@@ -230,51 +220,6 @@ class VisibilityEvent(BaseModel):
                 values.get("terminal_index_a"),
             )
         return values
-
-    @model_validator(mode="after")
-    def _reasons_match_link_type(self) -> VisibilityEvent:
-        """Link-type-domain enforcement: ground reasons on ground events,
-        ISL reasons on ISL events.
-
-        The Literal unions are unioned across both domains so a single
-        model can serialize either, but a ground event stamped with an
-        ISL-only value (``polar_seam``, ``isl_terminal_capacity``, etc.)
-        is an impossible state — producer bug. Reject at construction so
-        consumers downstream do not have to defensively re-validate.
-        """
-        if self.link_type == "ground":
-            if self.visibility_reject_reason not in _GROUND_REJECT_REASONS:
-                raise ValueError(
-                    f"link_type='ground' rejects visibility_reject_reason="
-                    f"{self.visibility_reject_reason!r}. Allowed for ground: "
-                    f"{sorted(_GROUND_REJECT_REASONS)!r}."
-                )
-            if (
-                self.unscheduled_reason is not None
-                and self.unscheduled_reason not in _GROUND_UNSCHEDULED_REASONS
-            ):
-                raise ValueError(
-                    f"link_type='ground' rejects unscheduled_reason="
-                    f"{self.unscheduled_reason!r}. Allowed for ground: "
-                    f"{sorted(_GROUND_UNSCHEDULED_REASONS)!r}."
-                )
-        elif self.link_type == "isl":
-            if self.visibility_reject_reason not in _ISL_REJECT_REASONS:
-                raise ValueError(
-                    f"link_type='isl' rejects visibility_reject_reason="
-                    f"{self.visibility_reject_reason!r}. Allowed for ISL: "
-                    f"{sorted(_ISL_REJECT_REASONS)!r}."
-                )
-            if (
-                self.unscheduled_reason is not None
-                and self.unscheduled_reason not in _ISL_UNSCHEDULED_REASONS
-            ):
-                raise ValueError(
-                    f"link_type='isl' rejects unscheduled_reason="
-                    f"{self.unscheduled_reason!r}. Allowed for ISL: "
-                    f"{sorted(_ISL_UNSCHEDULED_REASONS)!r}."
-                )
-        return self
 
     @model_validator(mode="after")
     def _reasons_consistent_with_state(self) -> VisibilityEvent:

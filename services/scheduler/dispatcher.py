@@ -2872,14 +2872,12 @@ class Dispatcher:
             if pair in self._actual_links
         }
 
-        isl = sum(1 for info in desired.values() if info.link_type == "isl")
-        gs = sum(1 for info in desired.values() if info.link_type == "ground")
+        assigned = sum(1 for info in desired.values() if info.assigned_terminals)
         log.debug(
-            "LinkStateSnapshot seq=%d: %d links (%d ISL, %d GS)",
+            "LinkStateSnapshot seq=%d: %d links (%d on assigned terminals)",
             snapshot.snapshot_seq,
             len(desired),
-            isl,
-            gs,
+            assigned,
         )
         return desired
 
@@ -4470,7 +4468,7 @@ class Dispatcher:
                     },
                 )
                 if found is not None:
-                    info = adopted_link_info(pair, interfaces, found, link_type="isl")
+                    info = adopted_link_info(pair, interfaces, found, assigned_terminals=False)
                     adopted.append((pair, pair, info, found))
 
         ground = {pair for pair in self._long_delay_bounds_s if pair not in self._interface_map}
@@ -4518,7 +4516,10 @@ class Dispatcher:
                     pair, {node_id: surveys.get(node_id, empty) for node_id in pair}
                 )
                 info = adopted_link_info(
-                    pair, (interfaces[pair[0]], interfaces[pair[1]]), found, link_type="ground"
+                    pair,
+                    (interfaces[pair[0]], interfaces[pair[1]]),
+                    found,
+                    assigned_terminals=True,
                 )
                 by_pair.setdefault(pair, []).append((info, found))
             for pair, passes in sorted(by_pair.items()):

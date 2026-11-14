@@ -1,13 +1,17 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
 # Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
-"""Pure ground-link candidate selection policies for the OME allocator.
+"""Pure candidate selection policies for the OME link allocator.
 
-Selection policies score physically visible GS/satellite candidates. They do
+A selection policy scores a usable candidate for the node that chooses it. It does
 not inspect incumbent state, terminal occupancy, or pending handovers. That
 separation is the allocator contract: selection answers "which candidate is
 best on its own merits?"; handover policy answers "may that candidate
 displace the current incumbent?"
+
+The stated policies score the choosing node's view of the pair (its elevation, its
+remaining pass), so they need a node with a sky. Their table holds exactly the names
+the grammar offers.
 """
 
 from __future__ import annotations
@@ -28,11 +32,11 @@ from ome.visibility import GroundVisibility
 
 @dataclass(frozen=True)
 class SelectionContext:
-    """Context available to pure selection policies."""
+    """Context available to pure selection policies: the choosing node and its peer."""
 
     step: int
-    gs_id: str
-    sat_id: str
+    node_id: str
+    peer_id: str
 
 
 ScoreFunction = Callable[[GroundVisibility, SelectionContext, Mapping[str, Any]], float]
@@ -78,7 +82,7 @@ def _longest_remaining_pass(
         )
     if visibility.remaining_visible_s is None:
         raise ValueError(
-            "Ground selection policy 'longest-remaining-pass' requires OME pass "
+            "Selection policy 'longest-remaining-pass' requires OME pass "
             "lookahead; missing remaining_visible_s"
         )
     return float(visibility.remaining_visible_s)
@@ -92,7 +96,7 @@ def validate_selection_score_scale_compatibility(
     """Runtime backstop for the pre-deploy scale-compatibility gate."""
 
     _validate_scale_compatibility(
-        policy_names={gs_id: policy.name for gs_id, policy in policies.items()},
+        policy_names={node_id: policy.name for node_id, policy in policies.items()},
         ranking_order=ranking_order,
     )
 
@@ -119,11 +123,11 @@ def score_candidate(
 
     fn = SCORE_FUNCTIONS.get(policy.name)
     if fn is None:
-        raise ValueError(f"Unknown ground selection policy: {policy.name!r}")
+        raise ValueError(f"Unknown selection policy: {policy.name!r}")
     score = fn(visibility, context, policy.params)
     if score < 0:
         raise ValueError(
-            f"Ground selection policy {policy.name!r} returned negative score "
-            f"{score} for {(context.gs_id, context.sat_id)!r}"
+            f"Selection policy {policy.name!r} returned negative score "
+            f"{score} for {(context.node_id, context.peer_id)!r}"
         )
     return score

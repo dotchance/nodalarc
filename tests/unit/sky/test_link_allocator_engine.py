@@ -11,11 +11,14 @@ from nodalarc.models.ground_policy import (
     HysteresisParameters,
     SelectionPolicySpec,
 )
-from ome.link_allocator import allocate_links
 from ome.types import MbbTeardown, ReceiveWindow
 from ome.visibility import GroundVisibility
 
-from tests.ome_runtime_fixtures import UniformPairDelays, allocator_timing_kwargs
+from tests.ome_runtime_fixtures import (
+    UniformPairDelays,
+    allocate_ground_scenario,
+    allocator_timing_kwargs,
+)
 
 
 def _selection_policy(name: str) -> SelectionPolicySpec:
@@ -106,7 +109,7 @@ def _allocate(
         handover_mode="mbb" if mbb_reserve > 0 else "bbm",
     )
     policy_kwargs.update(timing or {})
-    return allocate_links(
+    return allocate_ground_scenario(
         step=10,
         visible_per_station={"gs-A": visible},
         ground_station_ids={"gs-A"},
@@ -118,7 +121,6 @@ def _allocate(
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
         gs_reference_bodies={"gs-A": "earth"},
-        sat_ground_terminals=sat_caps,
         sat_ground_terminal_indices_by_body=_sat_body_pools(sat_caps),
     )
 
@@ -255,7 +257,7 @@ def test_pending_teardown_expires_after_overlap_window():
     old_pair = ("gs-A", "sat-old")
     new_pair = ("gs-A", "sat-new")
 
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=13,
         visible_per_station={
             "gs-A": [
@@ -286,7 +288,6 @@ def test_pending_teardown_expires_after_overlap_window():
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
         gs_reference_bodies={"gs-A": "earth"},
-        sat_ground_terminals={"sat-old": 1, "sat-new": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-new": 1}),
     )
 
@@ -386,7 +387,7 @@ def test_acquire_avoids_satellite_terminal_vacated_by_another_station():
     """gs-A's link to sat-X dies this tick while gs-B acquires sat-X: the
     satellite-side index gs-A is still wired to must not be reused."""
     sat_caps = {"sat-X": 2}
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=10,
         visible_per_station={
             "gs-A": [],
@@ -410,7 +411,6 @@ def test_acquire_avoids_satellite_terminal_vacated_by_another_station():
         gs_service_priorities={"gs-A": 10, "gs-B": 10},
         gs_tenant_ids={"gs-A": "default", "gs-B": "default"},
         gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
-        sat_ground_terminals=sat_caps,
         sat_ground_terminal_indices_by_body=_sat_body_pools(sat_caps),
     )
 
@@ -441,7 +441,7 @@ def test_new_challenger_avoids_terminal_freed_by_expiring_teardown():
         ),
     ]
     sat_caps = {"sat-old": 1, "sat-new": 1, "sat-third": 1}
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=13,
         visible_per_station={"gs-A": visible},
         ground_station_ids={"gs-A"},
@@ -453,7 +453,6 @@ def test_new_challenger_avoids_terminal_freed_by_expiring_teardown():
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
         gs_reference_bodies={"gs-A": "earth"},
-        sat_ground_terminals=sat_caps,
         sat_ground_terminal_indices_by_body=_sat_body_pools(sat_caps),
     )
 
@@ -504,7 +503,7 @@ def test_unscheduled_pair_sat_capacity_exhausted():
             reject_reason="ok",
         )
     ]
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=0,
         visible_per_station={"gs-A": visible, "gs-B": visible},
         ground_station_ids={"gs-A", "gs-B"},
@@ -516,7 +515,6 @@ def test_unscheduled_pair_sat_capacity_exhausted():
         gs_service_priorities={"gs-A": 10, "gs-B": 10},
         gs_tenant_ids={"gs-A": "default", "gs-B": "default"},
         gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
-        sat_ground_terminals={"sat-shared": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": 1}),
     )
 
@@ -619,7 +617,7 @@ def test_unscheduled_pair_replaced_by_successor_when_teardown_expires():
     old_pair = ("gs-A", "sat-old")
     new_pair = ("gs-A", "sat-new")
 
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=13,  # 10 + 3 overlap = expired
         visible_per_station={
             "gs-A": [
@@ -650,7 +648,6 @@ def test_unscheduled_pair_replaced_by_successor_when_teardown_expires():
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
         gs_reference_bodies={"gs-A": "earth"},
-        sat_ground_terminals={"sat-old": 1, "sat-new": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-new": 1}),
     )
 
@@ -728,7 +725,7 @@ def test_allocator_rejects_unsupported_multi_overlap_mbb_reserve():
     import pytest
 
     with pytest.raises(ValueError, match="multi-overlap allocator support"):
-        allocate_links(
+        allocate_ground_scenario(
             step=0,
             visible_per_station={
                 "gs-A": [
@@ -751,7 +748,6 @@ def test_allocator_rejects_unsupported_multi_overlap_mbb_reserve():
             gs_service_priorities={"gs-A": 10},
             gs_tenant_ids={"gs-A": "default"},
             gs_reference_bodies={"gs-A": "earth"},
-            sat_ground_terminals={"sat-a": 4},
             sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 4}),
         )
 
@@ -762,7 +758,7 @@ def test_missing_tenant_id_fails_loudly():
     import pytest
 
     with pytest.raises(ValueError, match="tenant_id"):
-        allocate_links(
+        allocate_ground_scenario(
             step=0,
             visible_per_station={
                 "gs-A": [
@@ -785,7 +781,6 @@ def test_missing_tenant_id_fails_loudly():
             gs_service_priorities={"gs-A": 10},
             gs_tenant_ids={},  # empty — must fail
             gs_reference_bodies={"gs-A": "earth"},
-            sat_ground_terminals={"sat-a": 1},
             sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 1}),
         )
 
@@ -796,7 +791,7 @@ def test_missing_reference_body_fails_loudly():
     import pytest
 
     with pytest.raises(ValueError, match="reference_body"):
-        allocate_links(
+        allocate_ground_scenario(
             step=0,
             visible_per_station={
                 "gs-A": [
@@ -819,7 +814,6 @@ def test_missing_reference_body_fails_loudly():
             gs_service_priorities={"gs-A": 10},
             gs_tenant_ids={"gs-A": "default"},
             gs_reference_bodies={},  # empty — must fail
-            sat_ground_terminals={"sat-a": 1},
             sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 1}),
         )
 
@@ -897,7 +891,7 @@ def test_handover_policy_none_displaces_without_hysteresis_margin():
 )
 def test_station_ranking_arbitrates_satellite_capacity(candidates, capacity, expected):
     stations = {name for name, *_ in candidates}
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=10,
         visible_per_station={
             name: [
@@ -927,7 +921,6 @@ def test_station_ranking_arbitrates_satellite_capacity(candidates, capacity, exp
         },
         gs_tenant_ids=dict.fromkeys(stations, "default"),
         gs_reference_bodies=dict.fromkeys(stations, "earth"),
-        sat_ground_terminals={"sat-shared": capacity},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": capacity}),
     )
     assert result.scheduled_pairs == frozenset((name, "sat-shared") for name in expected)
@@ -936,7 +929,7 @@ def test_station_ranking_arbitrates_satellite_capacity(candidates, capacity, exp
 
 def test_default_ranking_order_prefers_candidate_specific_scarce_satellite_capacity():
     """Default ties prefer the satellite with fewer terminals for the candidate body."""
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=0,
         visible_per_station={
             "gs-A": [
@@ -967,7 +960,6 @@ def test_default_ranking_order_prefers_candidate_specific_scarce_satellite_capac
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
         gs_reference_bodies={"gs-A": "earth"},
-        sat_ground_terminals={"sat-a-wide": 3, "sat-z-scarce": 3},
         sat_ground_terminal_indices_by_body={
             "sat-a-wide": {"earth": (0, 1), "luna": (2,)},
             "sat-z-scarce": {"earth": (0,), "luna": (1, 2)},
@@ -1006,7 +998,7 @@ def test_configured_ranking_order_can_prioritize_per_gs_rank_before_service_prio
         )
     ]
 
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=0,
         visible_per_station={"gs-A": visible_a, "gs-B": visible_b},
         ground_station_ids={"gs-A", "gs-B"},
@@ -1021,7 +1013,6 @@ def test_configured_ranking_order_can_prioritize_per_gs_rank_before_service_prio
         gs_service_priorities={"gs-A": 20, "gs-B": 1},
         gs_tenant_ids={"gs-A": "default", "gs-B": "default"},
         gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
-        sat_ground_terminals={"sat-shared": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": 1}),
     )
 
@@ -1034,7 +1025,7 @@ def test_mbb_failed_successor_hard_release_drops_visible_old_pair():
     old_pair = ("gs-A", "sat-old")
     successor_pair = ("gs-A", "sat-missing")
 
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=11,
         visible_per_station={
             "gs-A": [
@@ -1057,7 +1048,6 @@ def test_mbb_failed_successor_hard_release_drops_visible_old_pair():
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
         gs_reference_bodies={"gs-A": "earth"},
-        sat_ground_terminals={"sat-old": 1, "sat-missing": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-missing": 1}),
     )
 
@@ -1075,7 +1065,7 @@ def test_mbb_visible_successor_missing_from_current_emits_failed_acquire_event()
     old_pair = ("gs-A", "sat-old")
     successor_pair = ("gs-A", "sat-successor")
 
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=11,
         visible_per_station={
             "gs-A": [
@@ -1106,7 +1096,6 @@ def test_mbb_visible_successor_missing_from_current_emits_failed_acquire_event()
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
         gs_reference_bodies={"gs-A": "earth"},
-        sat_ground_terminals={"sat-old": 1, "sat-successor": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-successor": 1}),
     )
 
@@ -1129,7 +1118,7 @@ def test_mbb_failed_successor_soft_retain_keeps_visible_old_pair():
     kwargs = _policy_kwargs({"gs-A"}, handover_mode="mbb")
     kwargs["successor_abort_policy"] = "soft_retain"
 
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=11,
         visible_per_station={
             "gs-A": [
@@ -1152,7 +1141,6 @@ def test_mbb_failed_successor_soft_retain_keeps_visible_old_pair():
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
         gs_reference_bodies={"gs-A": "earth"},
-        sat_ground_terminals={"sat-old": 1, "sat-missing": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-old": 1, "sat-missing": 1}),
     )
 
@@ -1186,7 +1174,7 @@ def test_sat_capacity_rechecked_after_same_tick_release_from_other_partition():
         reject_reason="ok",
     )
 
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=10,
         visible_per_station={
             "gs-A": [
@@ -1218,7 +1206,6 @@ def test_sat_capacity_rechecked_after_same_tick_release_from_other_partition():
         gs_service_priorities={"gs-A": 10, "gs-B": 1},
         gs_tenant_ids={"gs-A": "tenant-a", "gs-B": "tenant-b"},
         gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
-        sat_ground_terminals={"sat-shared": 1, "sat-new": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": 1, "sat-new": 1}),
     )
 
@@ -1243,7 +1230,7 @@ def test_sat_capacity_arbitration_can_displace_lower_rank_same_partition_incumbe
         )
     ]
 
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=10,
         visible_per_station={"gs-A": visible, "gs-B": visible},
         ground_station_ids={"gs-A", "gs-B"},
@@ -1255,7 +1242,6 @@ def test_sat_capacity_arbitration_can_displace_lower_rank_same_partition_incumbe
         gs_service_priorities={"gs-A": 10, "gs-B": 1},
         gs_tenant_ids={"gs-A": "default", "gs-B": "default"},
         gs_reference_bodies={"gs-A": "earth", "gs-B": "earth"},
-        sat_ground_terminals={"sat-shared": 1},
         sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": 1}),
     )
 
@@ -1328,7 +1314,7 @@ def test_satellite_terminal_indices_are_allocated_from_matching_reference_body_p
         )
     ]
 
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=0,
         visible_per_station={"gs-luna": visible, "gs-earth": visible},
         ground_station_ids={"gs-earth", "gs-luna"},
@@ -1340,7 +1326,6 @@ def test_satellite_terminal_indices_are_allocated_from_matching_reference_body_p
         gs_service_priorities={"gs-earth": 10, "gs-luna": 1},
         gs_tenant_ids={"gs-earth": "default", "gs-luna": "default"},
         gs_reference_bodies={"gs-earth": "earth", "gs-luna": "luna"},
-        sat_ground_terminals={"sat-relay": 2},
         sat_ground_terminal_indices_by_body={
             "sat-relay": {"earth": (0,), "luna": (1,)},
         },
@@ -1352,7 +1337,7 @@ def test_satellite_terminal_indices_are_allocated_from_matching_reference_body_p
 
 
 def test_allocator_preserves_nonzero_global_access_interface_indices():
-    result = allocate_links(
+    result = allocate_ground_scenario(
         step=0,
         visible_per_station={
             "gs-A": [
@@ -1375,7 +1360,6 @@ def test_allocator_preserves_nonzero_global_access_interface_indices():
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
         gs_reference_bodies={"gs-A": "earth"},
-        sat_ground_terminals={"sat-relay": 2},
         sat_ground_terminal_indices_by_body={"sat-relay": {"earth": (5, 6)}},
     )
 
@@ -1387,8 +1371,8 @@ def test_existing_association_with_wrong_body_terminal_index_fails_loudly():
 
     pair = ("gs-luna", "sat-relay")
 
-    with pytest.raises(ValueError, match="reference_body='luna'"):
-        allocate_links(
+    with pytest.raises(ValueError, match=r"ground_terminals\[luna\]"):
+        allocate_ground_scenario(
             step=0,
             visible_per_station={
                 "gs-luna": [
@@ -1411,7 +1395,6 @@ def test_existing_association_with_wrong_body_terminal_index_fails_loudly():
             gs_service_priorities={"gs-luna": 1},
             gs_tenant_ids={"gs-luna": "default"},
             gs_reference_bodies={"gs-luna": "luna"},
-            sat_ground_terminals={"sat-relay": 2},
             sat_ground_terminal_indices_by_body={
                 "sat-relay": {"earth": (0,), "luna": (1,)},
             },
@@ -1422,7 +1405,7 @@ def test_allocator_rejects_unimplemented_multi_tick_bbm_gap_timeout():
     import pytest
 
     with pytest.raises(ValueError, match="bbm_acquire_timeout_ticks"):
-        allocate_links(
+        allocate_ground_scenario(
             step=0,
             visible_per_station={
                 "gs-A": [
@@ -1448,7 +1431,6 @@ def test_allocator_rejects_unimplemented_multi_tick_bbm_gap_timeout():
             gs_service_priorities={"gs-A": 10},
             gs_tenant_ids={"gs-A": "default"},
             gs_reference_bodies={"gs-A": "earth"},
-            sat_ground_terminals={"sat-a": 1},
             sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 1}),
         )
 

@@ -42,7 +42,7 @@ def _visibility(sat_id: str, elevation: float) -> GroundVisibility:
 def _context() -> HandoverContext:
     return HandoverContext(
         step=10,
-        gs_id="gs-A",
+        node_id="gs-A",
         incumbent_pair=("gs-A", "sat-old"),
         challenger_pair=("gs-A", "sat-new"),
         incumbent_visibility=_visibility("sat-old", 40.0),

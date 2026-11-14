@@ -18,11 +18,10 @@ from nodalarc.models.ground_policy import (
     SelectionPolicySpec,
 )
 from ome.handover_policies import compute_effective_hysteresis_discount
-from ome.link_allocator import allocate_links
 from ome.selection_policies import SelectionContext, score_candidate
 from ome.visibility import GroundVisibility
 
-from tests.ome_runtime_fixtures import allocator_timing_kwargs
+from tests.ome_runtime_fixtures import allocate_ground_scenario, allocator_timing_kwargs
 
 
 def _selection_policy(name: str) -> SelectionPolicySpec:
@@ -93,7 +92,7 @@ def _score(
             remaining_visible_s=remaining_visible_s,
             reject_reason="ok",
         ),
-        context=SelectionContext(step=0, gs_id="gs-test", sat_id="sat-test"),
+        context=SelectionContext(step=0, node_id="gs-test", peer_id="sat-test"),
     )
 
 
@@ -138,7 +137,7 @@ class TestSelectionScore:
         # The grammar model refuses an unknown name; build the spec without validation so the
         # scorer's own refusal at its dispatch boundary is what this test reaches.
         unknown = SelectionPolicySpec.model_construct(name="unknown", params={})
-        with pytest.raises(ValueError, match="Unknown ground selection policy"):
+        with pytest.raises(ValueError, match="Unknown selection policy"):
             _score(50.0, unknown)
 
 
@@ -190,7 +189,7 @@ class TestHysteresisDiscount:
         mbb_reserve: int = 1,
     ):
         sat_terminals = {gv.sat_id: 1 for gv in visible}
-        return allocate_links(
+        return allocate_ground_scenario(
             step=10,
             visible_per_station={"gs-test": visible},
             ground_station_ids={"gs-test"},
@@ -202,7 +201,6 @@ class TestHysteresisDiscount:
             gs_service_priorities={"gs-test": 10},
             gs_tenant_ids={"gs-test": "default"},
             gs_reference_bodies={"gs-test": "earth"},
-            sat_ground_terminals=sat_terminals,
             sat_ground_terminal_indices_by_body=_sat_body_pools(sat_terminals),
         )
 

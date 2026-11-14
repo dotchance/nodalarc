@@ -1,10 +1,16 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
 # Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
-"""Ground-link incumbent displacement policies for the OME allocator.
+"""Held-link displacement rules for the OME link allocator.
 
-Handover policies are pure functions over a challenger, an incumbent, and
-resolved policy params. They do not allocate terminals or publish events.
+One base rule decides every displacement: a new pair takes a held link's place only on a
+strictly higher score (``strictly_higher``). The stated handover policies are that rule on the
+choosing node's selection scores: ``none`` compares the scores as they are, and ``hysteresis``
+raises the held link's score first. The allocator applies the same rule to the cases no node
+states, with a score of its own for each.
+
+Handover policies are pure functions over a challenger, an incumbent, and resolved policy
+params. They do not allocate terminals or publish events.
 """
 
 from __future__ import annotations
@@ -21,10 +27,10 @@ from ome.visibility import GroundVisibility
 
 @dataclass(frozen=True)
 class HandoverContext:
-    """Context available to pure handover policies."""
+    """Context available to pure handover policies. ``node_id`` is the choosing node."""
 
     step: int
-    gs_id: str
+    node_id: str
     incumbent_pair: tuple[str, str]
     challenger_pair: tuple[str, str]
     incumbent_visibility: GroundVisibility
@@ -42,6 +48,12 @@ class HandoverDecision:
 
 
 HandoverFunction = Callable[[float, float, HandoverContext, Mapping[str, Any]], HandoverDecision]
+
+
+def strictly_higher(challenger_score: float, incumbent_score: float) -> bool:
+    """The base displacement rule: a new pair takes a held link's place only on a strictly
+    higher score. An equal score holds the link, so nothing moves on a tie."""
+    return challenger_score > incumbent_score
 
 
 def compute_effective_hysteresis_discount(
@@ -70,7 +82,7 @@ def _none(
 ) -> HandoverDecision:
     if params:
         raise ValueError("handover_policy.name='none' requires empty params")
-    if challenger_score > incumbent_score:
+    if strictly_higher(challenger_score, incumbent_score):
         return HandoverDecision(
             action="displace",
             unscheduled_reason=None,
@@ -96,7 +108,7 @@ def _hysteresis(
         params=hysteresis,
     )
     hold_score = incumbent_score * discount
-    if challenger_score > hold_score:
+    if strictly_higher(challenger_score, hold_score):
         return HandoverDecision(
             action="displace",
             unscheduled_reason=None,
@@ -126,5 +138,5 @@ def evaluate_handover(
 
     fn = HOLD_SCORE_FUNCTIONS.get(policy.name)
     if fn is None:
-        raise ValueError(f"Unknown ground handover policy: {policy.name!r}")
+        raise ValueError(f"Unknown handover policy: {policy.name!r}")
     return fn(incumbent_score, challenger_score, context, policy.params)

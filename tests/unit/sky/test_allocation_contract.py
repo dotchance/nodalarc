@@ -13,7 +13,7 @@ Runs against a real fixture constellation with hysteresis active.
 
 from __future__ import annotations
 
-from ome.event_stream import build_step_context, compute_step
+from ome.event_stream import GROUND_STATION_POOL, build_step_context, compute_step
 
 from tests.conftest import load_runtime_ome_test_inputs
 
@@ -79,7 +79,7 @@ class TestAllocationContractInvariants:
                 gs_counts[gs_id] = gs_counts.get(gs_id, 0) + 1
 
             for gs_id, count in gs_counts.items():
-                cap = ctx.gs_terminal_counts[gs_id]
+                cap = len(ctx.terminal_pools[gs_id][GROUND_STATION_POOL])
                 assert count <= cap, (
                     f"Step {step}: {gs_id} has {count} associations but capacity is {cap}"
                 )
@@ -90,7 +90,7 @@ class TestAllocationContractInvariants:
                 sat_counts[sat_id] = sat_counts.get(sat_id, 0) + 1
 
             for sat_id, count in sat_counts.items():
-                cap = ctx.sat_ground_terminals[sat_id]
+                cap = len({index for pool in ctx.terminal_pools[sat_id].values() for index in pool})
                 assert count <= cap, (
                     f"Step {step}: {sat_id} has {count} GS associations "
                     f"but ground_terminal_count is {cap}"

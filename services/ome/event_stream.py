@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path
@@ -75,6 +75,7 @@ from ome.isl_engine import (
 )
 from ome.link_allocator import (
     LinkAllocationResult,
+    UsablePair,
     allocate_links,
 )
 from ome.propagation_engine import (
@@ -103,8 +104,91 @@ from ome.types import (
     MbbTeardownState,
     ReceiveWindows,
 )
+from ome.visibility import GroundVisibility
 
 logger = logging.getLogger(__name__)
+
+# The names OME gives the terminal pools that ground links draw on. The allocator treats a
+# pool's name as opaque; the name is the second half of the capacity text of a refusal
+# ("<node>.<pool>"), which is why these two keep their published wording.
+GROUND_STATION_POOL = "terminals"
+
+
+def satellite_ground_pool(reference_body: str) -> str:
+    """The pool of a satellite's terminals that serve ground stations on one body."""
+    return f"ground_terminals[{reference_body}]"
+
+
+def ground_terminal_pools(
+    *,
+    gs_terminal_indices: Mapping[str, Sequence[int]],
+    sat_terminal_indices_by_body: Mapping[str, Mapping[str, Sequence[int]]],
+) -> dict[str, dict[str, tuple[int, ...]]]:
+    """Every node's named terminal pools for ground links: a ground station's one pool, and
+    one pool per target body on a satellite."""
+    pools: dict[str, dict[str, tuple[int, ...]]] = {
+        gs_id: {GROUND_STATION_POOL: tuple(indices)}
+        for gs_id, indices in gs_terminal_indices.items()
+    }
+    for sat_id, by_body in sat_terminal_indices_by_body.items():
+        if sat_id in pools:
+            raise ValueError(f"Node {sat_id} is both a ground station and a satellite")
+        pools[sat_id] = {
+            satellite_ground_pool(reference_body): tuple(indices)
+            for reference_body, indices in by_body.items()
+        }
+    return pools
+
+
+def ground_usable_pairs(
+    *,
+    visible_per_station: Mapping[str, Sequence[GroundVisibility]],
+    gs_reference_bodies: Mapping[str, str],
+) -> list[UsablePair]:
+    """The allocator's usable pairs for one tick of ground visibility.
+
+    The station is the node that states scheduling, so the pair carries the station's view.
+    The satellite's pool is the one that serves the station's body. The declared ground
+    candidates reach OME without their link rule, so the pairs name none.
+    """
+    usable: list[UsablePair] = []
+    for gs_id, visibles in sorted(visible_per_station.items()):
+        if not visibles:
+            continue
+        reference_body = gs_reference_bodies.get(gs_id)
+        if reference_body is None:
+            raise ValueError(
+                f"Ground station {gs_id} has no reference_body; the pool its satellites "
+                "serve it from cannot be named"
+            )
+        served_pool = satellite_ground_pool(reference_body)
+        for visibility in visibles:
+            sat_id = visibility.sat_id
+            if gs_id < sat_id:
+                usable.append(
+                    UsablePair(
+                        pair=(gs_id, sat_id),
+                        rule_id=None,
+                        pool_a=GROUND_STATION_POOL,
+                        pool_b=served_pool,
+                        range_km=visibility.range_km,
+                        view_a=visibility,
+                        view_b=None,
+                    )
+                )
+            else:
+                usable.append(
+                    UsablePair(
+                        pair=(sat_id, gs_id),
+                        rule_id=None,
+                        pool_a=served_pool,
+                        pool_b=GROUND_STATION_POOL,
+                        range_km=visibility.range_km,
+                        view_a=None,
+                        view_b=visibility,
+                    )
+                )
+    return usable
 
 
 def build_session_ephemeris(
@@ -248,8 +332,8 @@ class StepContext:
     addressing: OmeAddressing
     gs_positions: dict[str, tuple[EcefVec3, GeoPosition]]
     gs_min_elevations: dict[str, float]
-    gs_terminal_counts: dict[str, int]
-    gs_terminal_indices: dict[str, tuple[int, ...]]
+    # Every node's named terminal pools, as the link allocator takes them.
+    terminal_pools: dict[str, dict[str, tuple[int, ...]]]
     gs_selection_policies: dict[str, SelectionPolicySpec]
     gs_selection_policy_names: dict[str, str]
     gs_handover_policies: dict[str, HandoverPolicySpec]
@@ -266,7 +350,6 @@ class StepContext:
     ground_link_model: Literal["geometry_only", "terminal_physics"]
     gs_terminal_profiles: dict[str, TerminalPhysicsProfile]
     sat_ground_terminal_profiles: dict[str, tuple[TerminalPhysicsProfile, ...]]
-    sat_ground_terminal_indices_by_body: dict[str, dict[str, tuple[int, ...]]]
     # Per-GS tenant scope (Direction 2 — multi-tenant from day one) and
     # reference body (Direction 3 — multi-body from day one). Both
     # already exist on resolved ground-station facts; the StepContext carries them
@@ -281,7 +364,6 @@ class StepContext:
     by_node: dict[str, list[NeighborAssignment]]
     sat_isl_terminals: dict[str, int]
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]]
-    sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity
     propagator_id: SessionPropagatorId
     body_frames: dict[str, BodyFrame]
     physics: PhysicsContext
@@ -497,7 +579,6 @@ def build_step_context(
     ground_scheduling = ground_scheduling or GroundSchedulingConfig()
     sat_isl_terminals: dict[str, int] = {}
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]] = {}
-    sat_ground_terminals: dict[str, int] = {}
     sat_ground_terminal_types: dict[str, str] = {}
     sat_ground_terminal_profiles: dict[str, tuple[TerminalPhysicsProfile, ...]] = {}
     sat_ground_terminal_indices_by_body: dict[str, dict[str, tuple[int, ...]]] = {}
@@ -507,7 +588,6 @@ def build_step_context(
         nid = satellite_node_id(sat, addressing)
         sat_isl_terminals[nid] = sat.isl_terminal_count
         if has_ground_stations:
-            sat_ground_terminals[nid] = sat.ground_terminal_count
             sat_ground_terminal_indices_by_body[nid] = (
                 satellite_terminal_index_pools_by_target_body(
                     tuple(sat.ground_terminals),
@@ -543,7 +623,6 @@ def build_step_context(
 
     gs_positions: dict[str, tuple[EcefVec3, GeoPosition]] = {}
     gs_min_elevations: dict[str, float] = {}
-    gs_terminal_counts: dict[str, int] = {}
     gs_terminal_indices: dict[str, tuple[int, ...]] = {}
     gs_selection_policies: dict[str, SelectionPolicySpec] = {}
     gs_selection_policy_names: dict[str, str] = {}
@@ -589,7 +668,6 @@ def build_step_context(
                 apply_ground_defaults=not ground_defaults_applied,
             )
             station_scheduling = station_resolution.scheduling
-            gs_terminal_counts[node_id] = station_resolution.terminal_capacity
             gs_terminal_types[node_id] = station_ground_terminal_type(gs_file, station)
             effective_terminals = station.terminals or gs_file.default_terminals
             gs_terminal_indices[node_id] = ground_terminal_interface_indices(
@@ -685,8 +763,10 @@ def build_step_context(
         addressing=addressing,
         gs_positions=gs_positions,
         gs_min_elevations=gs_min_elevations,
-        gs_terminal_counts=gs_terminal_counts,
-        gs_terminal_indices=gs_terminal_indices,
+        terminal_pools=ground_terminal_pools(
+            gs_terminal_indices=gs_terminal_indices,
+            sat_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
+        ),
         gs_selection_policies=gs_selection_policies,
         gs_selection_policy_names=gs_selection_policy_names,
         gs_handover_policies=gs_handover_policies,
@@ -703,7 +783,6 @@ def build_step_context(
         ground_link_model=ground_link_model,
         gs_terminal_profiles=gs_terminal_profiles,
         sat_ground_terminal_profiles=sat_ground_terminal_profiles,
-        sat_ground_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
         gs_tenant_ids=gs_tenant_ids,
         gs_reference_bodies=gs_reference_bodies,
         ground_candidate_satellites_by_gs=declared_ground_candidates,
@@ -713,7 +792,6 @@ def build_step_context(
         by_node=by_node,
         sat_isl_terminals=sat_isl_terminals,
         sat_isl_terminal_constraints=sat_isl_terminal_constraints,
-        sat_ground_terminals=sat_ground_terminals,
         propagator_id=propagator_id,
         body_frames=resolved_body_frames,
         physics=physics,
@@ -977,27 +1055,29 @@ def compute_step(
             station_positions_common=ctx.ground_geometry.station_positions_common(epoch_unix + dt),
         )
 
-    # 7. Scored, hysteresis-aware ground link allocation.
+    # 7. Scored, hysteresis-aware link allocation. Only ground links reach the allocator
+    # today, and every ground station states its scheduling.
     with timings.measure(SEG_ALLOCATOR):
         ground_allocation = allocate_links(
             step=step,
-            visible_per_station=ground_visibility.visible_per_station,
-            ground_station_ids=set(ctx.gs_positions),
+            usable=ground_usable_pairs(
+                visible_per_station=ground_visibility.visible_per_station,
+                gs_reference_bodies=ctx.gs_reference_bodies,
+            ),
             current_associations=current_associations,
             pending_teardowns=mbb_pending_teardowns,
-            gs_terminal_indices=ctx.gs_terminal_indices,
-            gs_selection_policies=ctx.gs_selection_policies,
-            gs_min_elevations=ctx.gs_min_elevations,
-            gs_handover_policies=ctx.gs_handover_policies,
-            gs_service_priorities=ctx.gs_service_priorities,
-            gs_tenant_ids=ctx.gs_tenant_ids,
-            gs_reference_bodies=ctx.gs_reference_bodies,
-            sat_ground_terminals=ctx.sat_ground_terminals,
-            sat_ground_terminal_indices_by_body=ctx.sat_ground_terminal_indices_by_body,
+            terminal_pools=ctx.terminal_pools,
+            stating_nodes=ctx.gs_positions.keys(),
+            selection_policies=ctx.gs_selection_policies,
+            min_elevations=ctx.gs_min_elevations,
+            handover_policies=ctx.gs_handover_policies,
+            service_priorities=ctx.gs_service_priorities,
+            tenant_ids=ctx.gs_tenant_ids,
+            reference_bodies=ctx.gs_reference_bodies,
             ranking_order=ctx.ground_ranking_order,
-            gs_handover_modes=ctx.gs_handover_modes,
-            gs_mbb_overlap_ticks=ctx.gs_mbb_overlap_ticks,
-            gs_mbb_reserve=ctx.gs_mbb_reserve,
+            handover_modes=ctx.gs_handover_modes,
+            mbb_overlap_ticks=ctx.gs_mbb_overlap_ticks,
+            mbb_reserve=ctx.gs_mbb_reserve,
             mbb_preemption=ctx.ground_mbb_preemption,
             successor_abort_policy=ctx.ground_successor_abort_policy,
             cross_tenant_displacement=ctx.ground_cross_tenant_displacement,

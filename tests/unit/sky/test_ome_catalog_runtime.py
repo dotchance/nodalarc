@@ -14,7 +14,7 @@ from nodalarc.models.resolved_session import InterfaceRates, SourceContext
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.ome_inputs import ResolvedAddressingView, build_ome_inputs_from_resolved
 from nodalarc.resolve_session import SessionResolutionError, load_session_resolution_from_file
-from ome.event_stream import build_step_context
+from ome.event_stream import GROUND_STATION_POOL, build_step_context, satellite_ground_pool
 from ome.main import (
     _effective_ground_scheduling_for_runtime,
     _load_session_config,
@@ -184,10 +184,11 @@ def test_tdrs_access_rule_selects_reciprocal_ka_mounts_with_global_indices() -> 
 
     context = _step_context_from_bundle(cfg)
 
-    assert set(context.gs_terminal_indices.values()) == {(2, 3)}
-    assert set(context.gs_terminal_counts.values()) == {2}
     assert {
-        tuple(pool["earth"]) for pool in context.sat_ground_terminal_indices_by_body.values()
+        context.terminal_pools[gs_id][GROUND_STATION_POOL] for gs_id in context.gs_positions
+    } == {(2, 3)}
+    assert {
+        context.terminal_pools[node_id][satellite_ground_pool("earth")] for node_id in satellites
     } == {(5, 6)}
 
 

@@ -1,20 +1,31 @@
 # Copyright 2024-2026 .chance (dotchance)
 # SPDX-License-Identifier: AGPL-3.0-only
 # Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
-"""Ground-link allocation engine.
+"""Link allocation engine.
 
-This module owns the OME allocation role for ground links: given physical
-visibility decisions and prior scheduling state, it applies operator-selected
-selection and handover policy to produce the authoritative terminal allocation
-for one tick. It does not propagate or evaluate orbital physics, and it does
-not publish NATS events.
+This module owns the OME allocation role: given the candidate pairs physics found usable at a
+tick and the prior scheduling state, it chooses which pairs are linked and on which terminals,
+and gives every other usable pair a typed reason. It does not propagate or evaluate orbital
+physics, and it does not publish NATS events.
+
+The allocator knows nodes, named terminal pools, caps, held links, handovers in progress and
+the session's rank order. It does not know what a ground station or a satellite is. Who chooses
+a pair is read from the configuration: the nodes the caller names as stating scheduling. A node
+that states scheduling chooses among its candidates by its selection policy and gives up a held
+link by its handover policy and mode. The other node of such a pair does not choose: contention
+for its terminals is resolved in the session's rank order, and a link it gives up is released at
+once.
+
+Both nodes of a pair run one routine (``check_end``). The two cases differ only in what they
+pass to it: the score the displacement rule compares, and how the held link ends.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
@@ -35,7 +46,7 @@ from nodalarc.models.link_decisions import (
     UnscheduledPair,
 )
 
-from ome.handover_policies import HandoverContext, evaluate_handover
+from ome.handover_policies import HandoverContext, evaluate_handover, strictly_higher
 from ome.selection_policies import SelectionContext, score_candidate
 from ome.types import (
     MbbTeardown,
@@ -47,14 +58,39 @@ from ome.types import (
 from ome.visibility import GroundVisibility
 
 
+class UsablePair(NamedTuple):
+    """One candidate pair that physics found usable at this tick, as the allocator needs it.
+
+    The caller builds one per usable pair from OME's physics results. ``pair`` is in node-pair
+    order. ``pool_a`` and ``pool_b`` name the terminal pool the pair draws on at each node.
+    ``view_a`` and ``view_b`` are each node's own view of the pair, which a stated selection
+    policy scores; a node that states no scheduling has no view.
+
+    ``rule_id`` is the link rule the pair belongs to. A node's cap is counted per rule, while a
+    pool's terminals are shared by every rule that draws on it. ``None`` means the caller names
+    no rule for the pair; such pairs form one group at each node.
+    """
+
+    pair: tuple[str, str]
+    rule_id: str | None
+    pool_a: str
+    pool_b: str
+    range_km: float
+    view_a: GroundVisibility | None
+    view_b: GroundVisibility | None
+
+
 @dataclass(frozen=True)
 class LinkAllocationResult:
-    """Result of the ground allocation pass for one OME tick.
+    """Result of the allocation pass for one OME tick.
 
-    ``unscheduled_pairs`` carries one entry per visible pair that the allocator
+    ``unscheduled_pairs`` carries one entry per usable pair that the allocator
     considered but did not schedule, with the attributed reason. Active MBB
     teardown pairs remain scheduled and are represented in ``pending_teardowns``
     rather than as unscheduled pairs.
+
+    An association's two terminal indices are the lead node's, then the other node's
+    (``_lead_and_peer``).
     """
 
     associations: dict[tuple[str, str], tuple[int, int]]
@@ -71,13 +107,22 @@ class LinkAllocationResult:
 @dataclass(frozen=True)
 class _Candidate:
     pair: tuple[str, str]
-    gs_id: str
-    sat_id: str
+    # The node whose terminal index comes first in the association: the node that chooses the
+    # pair. ``peer`` is the other node.
+    lead: str
+    peer: str
+    lead_pool: str
+    peer_pool: str
+    rule_id: str | None
+    # The lead's view of the pair, which its policies score.
     visibility: GroundVisibility
     selection_score: float
     service_priority: int
-    per_gs_rank: int
-    satellite_ground_terminal_capacity: int
+    # The pair's rank among the lead's own candidates (ranking component ``per_gs_rank``).
+    lead_rank: int
+    # The size of the pool the pair draws on at the peer (ranking component
+    # ``satellite_ground_terminal_capacity``).
+    peer_pool_size: int
     rank_key: tuple
 
 
@@ -101,23 +146,40 @@ _LOCKED_REJECTION_REASONS: frozenset[GroundUnscheduledReason] = frozenset(
 )
 
 
-def _normalized_pair(gs_id: str, sat_id: str) -> tuple[str, str]:
-    return (min(gs_id, sat_id), max(gs_id, sat_id))
+def _lead_and_peer(pair: tuple[str, str], stating_nodes: AbstractSet[str]) -> tuple[str, str]:
+    """Return ``(lead, peer)`` for a pair: the node that chooses it, then the other node.
 
+    The lead is the pair's one node that states scheduling. It needs no listing of this tick's
+    usable pairs, so a held pair that is no longer usable still has an orientation for its
+    terminal indices and its events.
+    """
 
-def _ground_and_satellite_ids(
-    pair: tuple[str, str],
-    ground_station_ids: set[str],
-) -> tuple[str, str]:
-    """Return `(ground_station_id, satellite_id)` for a normalized pair."""
-
-    if pair[0] in ground_station_ids and pair[1] in ground_station_ids:
-        raise ValueError(f"Pair {pair!r} contains two ground-station ids")
-    if pair[0] in ground_station_ids:
+    a_states = pair[0] in stating_nodes
+    b_states = pair[1] in stating_nodes
+    if a_states and b_states:
+        raise ValueError(
+            f"Pair {pair!r} has scheduling stated at both of its nodes; the allocator has no "
+            "rule for that yet"
+        )
+    if a_states:
         return pair[0], pair[1]
-    if pair[1] in ground_station_ids:
+    if b_states:
         return pair[1], pair[0]
-    raise ValueError(f"Pair {pair!r} does not contain a known ground-station id")
+    raise ValueError(
+        f"Pair {pair!r} has no node that states scheduling; the allocator has no rule for that yet"
+    )
+
+
+def _handing_node(old_pair: tuple[str, str], successor_pair: tuple[str, str]) -> str:
+    """The node that hands over: the one node an old link and its successor share."""
+
+    shared = set(old_pair) & set(successor_pair)
+    if len(shared) != 1:
+        raise ValueError(
+            f"Pending teardown {old_pair!r} and its successor {successor_pair!r} must share "
+            "exactly one node, the node that hands over"
+        )
+    return next(iter(shared))
 
 
 def _validate_ranking_order(
@@ -125,35 +187,37 @@ def _validate_ranking_order(
 ) -> tuple[RankingComponent, ...]:
     order = tuple(ranking_order)
     if not order:
-        raise ValueError("ground allocator ranking_order must not be empty")
+        raise ValueError("link allocator ranking_order must not be empty")
     if order[-1] != "lex_pair":
-        raise ValueError("ground allocator ranking_order must end with 'lex_pair'")
+        raise ValueError("link allocator ranking_order must end with 'lex_pair'")
     if len(order) == 1:
-        raise ValueError(
-            "ground allocator ranking_order needs a decision component before lex_pair"
-        )
+        raise ValueError("link allocator ranking_order needs a decision component before lex_pair")
     if len(set(order)) != len(order):
-        raise ValueError("ground allocator ranking_order must not contain duplicates")
+        raise ValueError("link allocator ranking_order must not contain duplicates")
     return order
 
 
-def _candidate_rank_key(
+def _rank_key(
     *,
-    candidate: _Candidate,
     ranking_order: Sequence[RankingComponent],
+    pair: tuple[str, str],
+    selection_score: float,
+    service_priority: int,
+    lead_rank: int,
+    peer_pool_size: int,
 ) -> tuple:
     values: list[object] = []
     for component in ranking_order:
         if component == "service_priority":
-            values.append(candidate.service_priority)
+            values.append(service_priority)
         elif component == "selection_score":
-            values.append(-candidate.selection_score)
+            values.append(-selection_score)
         elif component == "per_gs_rank":
-            values.append(candidate.per_gs_rank)
+            values.append(lead_rank)
         elif component == "satellite_ground_terminal_capacity":
-            values.append(candidate.satellite_ground_terminal_capacity)
+            values.append(peer_pool_size)
         elif component == "lex_pair":
-            values.append(candidate.pair)
+            values.append(pair)
         else:  # pragma: no cover - Literal/model validation should prevent this.
             raise ValueError(f"Unknown ranking component {component!r}")
     return tuple(values)
@@ -162,92 +226,81 @@ def _candidate_rank_key(
 def _build_candidates(
     *,
     step: int,
-    visible_per_station: Mapping[str, list[GroundVisibility]],
-    gs_selection_policies: Mapping[str, SelectionPolicySpec],
-    gs_service_priorities: Mapping[str, int],
-    gs_reference_bodies: Mapping[str, str],
-    sat_terminal_pools: Mapping[str, Mapping[str, Sequence[int]]],
+    usable: Sequence[UsablePair],
+    stating_nodes: AbstractSet[str],
+    selection_policies: Mapping[str, SelectionPolicySpec],
+    service_priorities: Mapping[str, int],
+    pools: Mapping[str, Mapping[str, Sequence[int]]],
     ranking_order: Sequence[RankingComponent],
 ) -> tuple[list[_Candidate], dict[tuple[str, str], _Candidate], set[tuple[str, str]]]:
-    by_gs: dict[str, list[_Candidate]] = {}
-    visible_set: set[tuple[str, str]] = set()
-    candidate_by_pair: dict[tuple[str, str], _Candidate] = {}
+    # One row per usable pair: (item, lead, peer, view, score). The candidate itself is built
+    # once, after the lead's own ranking is known.
+    by_lead: dict[str, list[tuple[UsablePair, str, GroundVisibility, float]]] = {}
+    usable_set: set[tuple[str, str]] = set()
 
-    for gs_id, visible_sats in sorted(visible_per_station.items()):
-        if gs_id not in gs_selection_policies:
-            raise ValueError(f"Ground allocator is missing selection policy for {gs_id}")
-        if gs_id not in gs_service_priorities:
-            raise ValueError(f"Ground allocator is missing service_priority for {gs_id}")
-        station_candidates: list[_Candidate] = []
-        for gv in visible_sats:
-            if not gv.visible:
-                raise ValueError(
-                    f"visible_per_station[{gs_id!r}] contains invisible satellite "
-                    f"{gv.sat_id!r}; visibility filtering belongs to the physics role"
-                )
-            pair = _normalized_pair(gs_id, gv.sat_id)
-            if pair in visible_set:
-                raise ValueError(f"Duplicate ground visibility candidate for pair {pair!r}")
-            visible_set.add(pair)
-            policy = gs_selection_policies[gs_id]
-            score = score_candidate(
-                policy=policy,
-                visibility=gv,
-                context=SelectionContext(step=step, gs_id=gs_id, sat_id=gv.sat_id),
+    for item in usable:
+        pair = item.pair
+        if pair[0] >= pair[1]:
+            raise ValueError(f"Usable pair {pair!r} is not in node-pair order")
+        if pair in usable_set:
+            raise ValueError(f"Duplicate usable candidate for pair {pair!r}")
+        usable_set.add(pair)
+        lead, peer = _lead_and_peer(pair, stating_nodes)
+        view = item.view_a if lead == pair[0] else item.view_b
+        if view is None:
+            raise ValueError(
+                f"Usable pair {pair!r} carries no view for {lead}, the node that chooses it"
             )
-            reference_body = gs_reference_bodies[gs_id]
-            station_candidates.append(
-                _Candidate(
-                    pair=pair,
-                    gs_id=gs_id,
-                    sat_id=gv.sat_id,
-                    visibility=gv,
-                    selection_score=score,
-                    service_priority=gs_service_priorities[gs_id],
-                    per_gs_rank=-1,
-                    satellite_ground_terminal_capacity=len(
-                        sat_terminal_pools.get(gv.sat_id, {}).get(reference_body, ())
-                    ),
-                    rank_key=(),
-                )
+        if not view.visible:
+            raise ValueError(
+                f"Usable pair {pair!r} carries a view that is not visible; visibility "
+                "filtering belongs to the physics role"
             )
-        by_gs[gs_id] = station_candidates
-
-    ranked: list[_Candidate] = []
-    for _gs_id, station_candidates in by_gs.items():
-        station_candidates.sort(key=lambda c: (-c.selection_score, c.pair))
-        for idx, candidate in enumerate(station_candidates):
-            ranked_candidate = _Candidate(
-                pair=candidate.pair,
-                gs_id=candidate.gs_id,
-                sat_id=candidate.sat_id,
-                visibility=candidate.visibility,
-                selection_score=candidate.selection_score,
-                service_priority=candidate.service_priority,
-                per_gs_rank=idx,
-                satellite_ground_terminal_capacity=candidate.satellite_ground_terminal_capacity,
-                rank_key=(),
-            )
-            ranked.append(ranked_candidate)
-
-    ranked_with_keys: list[_Candidate] = []
-    for candidate in ranked:
-        keyed = _Candidate(
-            pair=candidate.pair,
-            gs_id=candidate.gs_id,
-            sat_id=candidate.sat_id,
-            visibility=candidate.visibility,
-            selection_score=candidate.selection_score,
-            service_priority=candidate.service_priority,
-            per_gs_rank=candidate.per_gs_rank,
-            satellite_ground_terminal_capacity=candidate.satellite_ground_terminal_capacity,
-            rank_key=_candidate_rank_key(candidate=candidate, ranking_order=ranking_order),
+        if lead not in selection_policies:
+            raise ValueError(f"Link allocator is missing selection policy for {lead}")
+        if lead not in service_priorities:
+            raise ValueError(f"Link allocator is missing service_priority for {lead}")
+        score = score_candidate(
+            policy=selection_policies[lead],
+            visibility=view,
+            context=SelectionContext(step=step, node_id=lead, peer_id=peer),
         )
-        ranked_with_keys.append(keyed)
-        candidate_by_pair[keyed.pair] = keyed
+        by_lead.setdefault(lead, []).append((item, peer, view, score))
 
-    ranked_with_keys.sort(key=lambda c: c.rank_key)
-    return ranked_with_keys, candidate_by_pair, visible_set
+    candidates: list[_Candidate] = []
+    candidate_by_pair: dict[tuple[str, str], _Candidate] = {}
+    for lead, rows in by_lead.items():
+        rows.sort(key=lambda row: (-row[3], row[0].pair))
+        for lead_rank, (item, peer, view, score) in enumerate(rows):
+            lead_is_a = lead == item.pair[0]
+            peer_pool = item.pool_b if lead_is_a else item.pool_a
+            peer_pool_size = len(pools.get(peer, {}).get(peer_pool, ()))
+            candidate = _Candidate(
+                pair=item.pair,
+                lead=lead,
+                peer=peer,
+                lead_pool=item.pool_a if lead_is_a else item.pool_b,
+                peer_pool=peer_pool,
+                rule_id=item.rule_id,
+                visibility=view,
+                selection_score=score,
+                service_priority=service_priorities[lead],
+                lead_rank=lead_rank,
+                peer_pool_size=peer_pool_size,
+                rank_key=_rank_key(
+                    ranking_order=ranking_order,
+                    pair=item.pair,
+                    selection_score=score,
+                    service_priority=service_priorities[lead],
+                    lead_rank=lead_rank,
+                    peer_pool_size=peer_pool_size,
+                ),
+            )
+            candidates.append(candidate)
+            candidate_by_pair[candidate.pair] = candidate
+
+    candidates.sort(key=lambda c: c.rank_key)
+    return candidates, candidate_by_pair, usable_set
 
 
 def _record_rejection(
@@ -269,9 +322,9 @@ def _make_event(
     *,
     category: GroundAllocationEventCategory,
     pair: tuple[str, str],
-    gs_id: str,
-    gs_tenant_ids: Mapping[str, str],
-    gs_reference_bodies: Mapping[str, str],
+    lead: str,
+    tenant_ids: Mapping[str, str],
+    reference_bodies: Mapping[str, str],
     message: str,
     successor_pair: tuple[str, str] | None = None,
     challenger_pair: tuple[str, str] | None = None,
@@ -285,8 +338,8 @@ def _make_event(
     return GroundAllocationEvent(
         category=category,
         pair=pair,
-        tenant_id=gs_tenant_ids[gs_id],
-        reference_body=gs_reference_bodies[gs_id],
+        tenant_id=tenant_ids[lead],
+        reference_body=reference_bodies[lead],
         message=message,
         successor_pair=successor_pair,
         challenger_pair=challenger_pair,
@@ -301,144 +354,91 @@ def _make_event(
 
 def _policy_audit(
     *,
-    gs_selection_policies: Mapping[str, SelectionPolicySpec],
-    gs_handover_policies: Mapping[str, HandoverPolicySpec],
+    selection_policies: Mapping[str, SelectionPolicySpec],
+    handover_policies: Mapping[str, HandoverPolicySpec],
     ranking_order: Sequence[RankingComponent],
-    gs_handover_modes: Mapping[str, Literal["bbm", "mbb"]],
-    gs_mbb_overlap_ticks: Mapping[str, int],
-    gs_mbb_reserve: Mapping[str, int],
+    handover_modes: Mapping[str, Literal["bbm", "mbb"]],
+    mbb_overlap_ticks: Mapping[str, int],
+    mbb_reserve: Mapping[str, int],
     mbb_preemption: MbbPreemptionPolicy,
     successor_abort_policy: SuccessorAbortPolicy,
     cross_tenant_displacement: CrossTenantDisplacementPolicy,
     bbm_acquire_timeout_ticks: int,
     ignored_capacity_fields: Sequence[str],
 ) -> GroundPolicyAudit:
-    handover_mode_values = set(gs_handover_modes.values())
+    handover_mode_values = set(handover_modes.values())
     return GroundPolicyAudit(
-        selection_policies={k: v.name for k, v in sorted(gs_selection_policies.items())},
-        selection_policy_params={
-            k: dict(v.params) for k, v in sorted(gs_selection_policies.items())
-        },
-        handover_policies={k: v.name for k, v in sorted(gs_handover_policies.items())},
-        handover_policy_params={k: dict(v.params) for k, v in sorted(gs_handover_policies.items())},
+        selection_policies={k: v.name for k, v in sorted(selection_policies.items())},
+        selection_policy_params={k: dict(v.params) for k, v in sorted(selection_policies.items())},
+        handover_policies={k: v.name for k, v in sorted(handover_policies.items())},
+        handover_policy_params={k: dict(v.params) for k, v in sorted(handover_policies.items())},
         ranking_order=tuple(ranking_order),
         handover_mode=(
             next(iter(handover_mode_values)) if len(handover_mode_values) == 1 else "mixed"
         ),
-        handover_modes=dict(sorted(gs_handover_modes.items())),
+        handover_modes=dict(sorted(handover_modes.items())),
         mbb_preemption=mbb_preemption,
         successor_abort_policy=successor_abort_policy,
         cross_tenant_displacement=cross_tenant_displacement,
-        mbb_overlap_ticks=max(gs_mbb_overlap_ticks.values(), default=0),
-        mbb_overlap_ticks_by_gs=dict(sorted(gs_mbb_overlap_ticks.items())),
-        mbb_reserve=max(gs_mbb_reserve.values(), default=0),
-        mbb_reserve_by_gs=dict(sorted(gs_mbb_reserve.items())),
+        mbb_overlap_ticks=max(mbb_overlap_ticks.values(), default=0),
+        mbb_overlap_ticks_by_gs=dict(sorted(mbb_overlap_ticks.items())),
+        mbb_reserve=max(mbb_reserve.values(), default=0),
+        mbb_reserve_by_gs=dict(sorted(mbb_reserve.items())),
         bbm_acquire_timeout_ticks=bbm_acquire_timeout_ticks,
         ignored_capacity_fields=tuple(sorted(ignored_capacity_fields)),
     )
 
 
-def _normalize_satellite_terminal_pools(
+def _normalize_terminal_pools(
     *,
-    sat_ground_terminals: Mapping[str, int],
-    sat_ground_terminal_indices_by_body: Mapping[str, Mapping[str, Sequence[int]]],
+    terminal_pools: Mapping[str, Mapping[str, Sequence[int]]],
+    stating_nodes: AbstractSet[str],
 ) -> dict[str, dict[str, tuple[int, ...]]]:
-    """Validate the satellite terminal indices available for each target body."""
+    """Validate each node's named terminal pools.
 
-    missing = sorted(set(sat_ground_terminals) - set(sat_ground_terminal_indices_by_body))
-    if missing:
-        raise ValueError(
-            "Ground allocator is missing satellite ground-terminal index pools for "
-            + ", ".join(missing)
-        )
+    A pool of a node that states scheduling must not be empty: such a node chooses, and a
+    chooser with no terminal is a configuration fault. A node that states nothing may have an
+    empty pool; a pair that draws on it is refused for capacity.
+    """
 
     normalized: dict[str, dict[str, tuple[int, ...]]] = {}
-    for sat_id, total in sorted(sat_ground_terminals.items()):
-        if total < 0:
-            raise ValueError(f"Satellite {sat_id} ground terminal count must be >= 0")
-        body_map = sat_ground_terminal_indices_by_body[sat_id]
-        if total > 0 and not body_map:
-            raise ValueError(
-                f"Satellite {sat_id} has {total} ground terminal(s) but no target-body pools"
-            )
-        normalized[sat_id] = {}
-        for reference_body, indices in sorted(body_map.items()):
-            pool = tuple(int(idx) for idx in indices)
+    for node_id, node_pools in sorted(terminal_pools.items()):
+        normalized[node_id] = {}
+        for pool_name, indices in sorted(node_pools.items()):
+            pool = tuple(int(index) for index in indices)
+            if not pool and node_id in stating_nodes:
+                raise ValueError(f"Node {node_id} terminal pool {pool_name!r} must not be empty")
             if len(set(pool)) != len(pool):
                 raise ValueError(
-                    f"Satellite {sat_id} target_body={reference_body!r} terminal pool "
-                    "contains duplicate indices"
+                    f"Node {node_id} terminal pool {pool_name!r} contains duplicate indices"
                 )
-            invalid = [idx for idx in pool if idx < 0]
+            invalid = [index for index in pool if index < 0]
             if invalid:
                 raise ValueError(
-                    f"Satellite {sat_id} target_body={reference_body!r} terminal pool "
-                    f"contains negative indices {invalid}"
+                    f"Node {node_id} terminal pool {pool_name!r} contains negative indices "
+                    f"{invalid}"
                 )
-            normalized[sat_id][str(reference_body)] = pool
-        unique_indices = {index for indices in normalized[sat_id].values() for index in indices}
-        if len(unique_indices) != total:
-            raise ValueError(
-                f"Satellite {sat_id} terminal capacity={total} does not match its "
-                f"global interface index pools {sorted(unique_indices)}"
-            )
+            normalized[node_id][str(pool_name)] = pool
     return normalized
-
-
-def _normalize_ground_terminal_pools(
-    *,
-    gs_terminal_indices: Mapping[str, Sequence[int]],
-) -> dict[str, tuple[int, ...]]:
-    """Validate the selected global ground-interface pool for each station."""
-    normalized: dict[str, tuple[int, ...]] = {}
-    for gs_id, indices in sorted(gs_terminal_indices.items()):
-        pool = tuple(int(index) for index in indices)
-        if not pool:
-            raise ValueError(f"Ground station {gs_id} terminal pool must not be empty")
-        if len(set(pool)) != len(pool):
-            raise ValueError(f"Ground station {gs_id} terminal pool contains duplicate indices")
-        invalid = [index for index in pool if index < 0]
-        if invalid:
-            raise ValueError(
-                f"Ground station {gs_id} terminal pool contains negative indices {invalid}"
-            )
-        normalized[gs_id] = pool
-    return normalized
-
-
-def _visible_incumbent_for_pair(
-    *,
-    pair: tuple[str, str],
-    candidate_by_pair: Mapping[tuple[str, str], _Candidate],
-) -> _Candidate:
-    candidate = candidate_by_pair.get(pair)
-    if candidate is None:
-        raise ValueError(
-            f"Internal allocator invariant violated: current association {pair!r} "
-            "is visible but has no selection candidate."
-        )
-    return candidate
 
 
 def allocate_links(
     *,
     step: int,
-    visible_per_station: Mapping[str, list[GroundVisibility]],
-    ground_station_ids: set[str],
+    usable: Sequence[UsablePair],
     current_associations: Mapping[tuple[str, str], tuple[int, int]],
     pending_teardowns: MbbTeardownState,
-    gs_terminal_indices: Mapping[str, Sequence[int]],
-    gs_selection_policies: Mapping[str, SelectionPolicySpec],
-    gs_min_elevations: Mapping[str, float],
-    gs_handover_policies: Mapping[str, HandoverPolicySpec],
-    gs_handover_modes: Mapping[str, Literal["bbm", "mbb"]],
-    gs_mbb_overlap_ticks: Mapping[str, int],
-    gs_mbb_reserve: Mapping[str, int],
-    gs_service_priorities: Mapping[str, int],
-    gs_tenant_ids: Mapping[str, str],
-    gs_reference_bodies: Mapping[str, str],
-    sat_ground_terminals: Mapping[str, int],
-    sat_ground_terminal_indices_by_body: Mapping[str, Mapping[str, Sequence[int]]],
+    terminal_pools: Mapping[str, Mapping[str, Sequence[int]]],
+    stating_nodes: AbstractSet[str],
+    selection_policies: Mapping[str, SelectionPolicySpec],
+    min_elevations: Mapping[str, float],
+    handover_policies: Mapping[str, HandoverPolicySpec],
+    handover_modes: Mapping[str, Literal["bbm", "mbb"]],
+    mbb_overlap_ticks: Mapping[str, int],
+    mbb_reserve: Mapping[str, int],
+    service_priorities: Mapping[str, int],
+    tenant_ids: Mapping[str, str],
+    reference_bodies: Mapping[str, str],
     ranking_order: Sequence[RankingComponent],
     mbb_preemption: MbbPreemptionPolicy,
     successor_abort_policy: SuccessorAbortPolicy,
@@ -449,15 +449,19 @@ def allocate_links(
     pair_delays_ms: Mapping[tuple[str, str], tuple[float, float]],
     receive_windows: ReceiveWindows,
 ) -> LinkAllocationResult:
-    """Allocate ground links for one tick.
+    """Allocate links for one tick.
 
     This function is the state-machine mechanism. Operator policy enters only
     through named policy specs, ranking_order, and handover mode parameters.
     Scheduler state, Node Agent state, and orbital physics do not enter this
     function.
 
+    ``stating_nodes`` names the nodes that state scheduling. The per-node policy maps hold
+    their stated values; ``terminal_pools`` holds every node's named terminal pools. Within a
+    node, terminal indices are one index space across its pools.
+
     Terminal selection: surviving links keep their indices (sticky). New
-    links take the lowest free allowed global index, preferring indices that
+    links take the lowest free allowed index, preferring indices that
     were idle in the previously published authority state — an index vacated
     this tick may still be physically wired until the release is actuated, so
     reusing it forces the handover to break-before-make. When every free index
@@ -477,7 +481,7 @@ def allocate_links(
     """
 
     if step < 0:
-        raise ValueError("Ground allocator step must be non-negative")
+        raise ValueError("Link allocator step must be non-negative")
     if mbb_preemption != "off":
         raise ValueError(
             f"mbb_preemption={mbb_preemption!r} is not implemented; "
@@ -496,19 +500,16 @@ def allocate_links(
             "multi-tick BBMGap wait-state algorithm"
         )
     order = _validate_ranking_order(ranking_order)
-    gs_terminal_pools = _normalize_ground_terminal_pools(
-        gs_terminal_indices=gs_terminal_indices,
-    )
-    gs_terminal_counts = {gs_id: len(indices) for gs_id, indices in gs_terminal_pools.items()}
+    stating = frozenset(stating_nodes)
+    pools = _normalize_terminal_pools(terminal_pools=terminal_pools, stating_nodes=stating)
 
-    known_gs = set(ground_station_ids) | set(gs_terminal_counts)
     for label, mapping in (
-        ("handover mode", gs_handover_modes),
-        ("MBB overlap ticks", gs_mbb_overlap_ticks),
-        ("MBB reserve", gs_mbb_reserve),
+        ("handover mode", handover_modes),
+        ("MBB overlap ticks", mbb_overlap_ticks),
+        ("MBB reserve", mbb_reserve),
     ):
-        missing = sorted(known_gs - set(mapping))
-        extra = sorted(set(mapping) - known_gs)
+        missing = sorted(stating - set(mapping))
+        extra = sorted(set(mapping) - stating)
         if missing or extra:
             detail = []
             if missing:
@@ -516,78 +517,84 @@ def allocate_links(
             if extra:
                 detail.append("extra=" + ", ".join(extra))
             raise ValueError(
-                f"Ground allocator {label} map does not match stations: {'; '.join(detail)}"
+                f"Link allocator {label} map does not match the nodes that state scheduling: "
+                f"{'; '.join(detail)}"
             )
 
-    for gs_id in sorted(known_gs):
-        mode = gs_handover_modes[gs_id]
+    for node_id in sorted(stating):
+        mode = handover_modes[node_id]
         if mode not in ("bbm", "mbb"):
-            raise ValueError(f"Unknown handover_mode for {gs_id}: {mode!r}")
-        overlap_ticks = gs_mbb_overlap_ticks[gs_id]
-        reserve = gs_mbb_reserve[gs_id]
+            raise ValueError(f"Unknown handover_mode for {node_id}: {mode!r}")
+        overlap_ticks = mbb_overlap_ticks[node_id]
+        reserve = mbb_reserve[node_id]
         if overlap_ticks < 0:
-            raise ValueError(f"mbb_overlap_ticks for {gs_id} must be >= 0")
+            raise ValueError(f"mbb_overlap_ticks for {node_id} must be >= 0")
         if reserve < 0:
-            raise ValueError(f"mbb_reserve for {gs_id} must be >= 0")
+            raise ValueError(f"mbb_reserve for {node_id} must be >= 0")
         # BIG HONESTY NOTE / MBB-002:
-        # This allocator has a deliberate single-overlap state machine per GS. When a
-        # GS is already in MBBOverlap, new challengers are rejected as
+        # This allocator has a deliberate single-overlap state machine per node. When a
+        # node is already in MBBOverlap, new challengers are rejected as
         # `mbb_overlap_locked`; a second reserved terminal is not consumed for a second
         # parallel overlap. Letting mbb_reserve=2+ through would silently strand
         # capacity and lie about supported gateway behavior. Remove this guard only
         # when MBB-002 adds multi-overlap pending-teardown state and proves it.
         if reserve > 1:
             raise ValueError(
-                f"mbb_reserve > 1 for {gs_id} requires future MBB-002 multi-overlap "
+                f"mbb_reserve > 1 for {node_id} requires future MBB-002 multi-overlap "
                 "allocator support; current allocator supports at most one concurrent "
-                "MBB overlap per GS"
+                "MBB overlap per node"
             )
         if mode == "mbb":
             if overlap_ticks <= 0 or reserve <= 0:
                 raise ValueError(
-                    f"MBB handover for {gs_id} requires mbb_overlap_ticks > 0 and mbb_reserve > 0"
+                    f"MBB handover for {node_id} requires mbb_overlap_ticks > 0 and mbb_reserve > 0"
                 )
-            if gs_terminal_counts[gs_id] <= reserve:
-                raise ValueError(
-                    f"MBB handover for {gs_id} requires terminal capacity greater "
-                    f"than mbb_reserve; capacity={gs_terminal_counts[gs_id]}, reserve={reserve}"
-                )
+            node_pools = pools.get(node_id)
+            if not node_pools:
+                raise ValueError(f"MBB handover for {node_id} requires a terminal pool")
+            for pool_name, pool in node_pools.items():
+                if len(pool) <= reserve:
+                    raise ValueError(
+                        f"MBB handover for {node_id} requires terminal capacity greater "
+                        f"than mbb_reserve; pool {pool_name!r} capacity={len(pool)}, "
+                        f"reserve={reserve}"
+                    )
         elif reserve != 0 or overlap_ticks != 0:
             raise ValueError(
-                f"BBM handover for {gs_id} must carry mbb_reserve=0 and mbb_overlap_ticks=0"
+                f"BBM handover for {node_id} must carry mbb_reserve=0 and mbb_overlap_ticks=0"
             )
 
-    visible_gs = set(visible_per_station)
-    missing_tenant = sorted(visible_gs - set(gs_tenant_ids))
+    leads = {_lead_and_peer(item.pair, stating)[0] for item in usable}
+    missing_tenant = sorted(leads - set(tenant_ids))
     if missing_tenant:
         raise ValueError(
-            "Ground allocator is missing tenant_id for "
+            "Link allocator is missing tenant_id for "
             f"{', '.join(missing_tenant)}; every unscheduled pair needs tenant scope"
         )
-    missing_body = sorted(visible_gs - set(gs_reference_bodies))
+    missing_body = sorted(leads - set(reference_bodies))
     if missing_body:
         raise ValueError(
-            "Ground allocator is missing reference_body for "
+            "Link allocator is missing reference_body for "
             f"{', '.join(missing_body)}; every unscheduled pair needs a body anchor"
         )
-    missing_handover = sorted(visible_gs - set(gs_handover_policies))
+    missing_handover = sorted(leads - set(handover_policies))
     if missing_handover:
         raise ValueError(
-            f"Ground allocator is missing handover_policy for {', '.join(missing_handover)}"
+            f"Link allocator is missing handover_policy for {', '.join(missing_handover)}"
         )
-    missing_min_elevation = sorted(visible_gs - set(gs_min_elevations))
+    missing_min_elevation = sorted(leads - set(min_elevations))
     if missing_min_elevation:
         raise ValueError(
-            f"Ground allocator is missing min elevation for {', '.join(missing_min_elevation)}"
+            f"Link allocator is missing min elevation for {', '.join(missing_min_elevation)}"
         )
 
     policy_audit = _policy_audit(
-        gs_selection_policies=gs_selection_policies,
-        gs_handover_policies=gs_handover_policies,
+        selection_policies=selection_policies,
+        handover_policies=handover_policies,
         ranking_order=order,
-        gs_handover_modes=gs_handover_modes,
-        gs_mbb_overlap_ticks=gs_mbb_overlap_ticks,
-        gs_mbb_reserve=gs_mbb_reserve,
+        handover_modes=handover_modes,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
         mbb_preemption=mbb_preemption,
         successor_abort_policy=successor_abort_policy,
         cross_tenant_displacement=cross_tenant_displacement,
@@ -595,96 +602,117 @@ def allocate_links(
         ignored_capacity_fields=ignored_capacity_fields,
     )
 
-    sat_terminal_pools = _normalize_satellite_terminal_pools(
-        sat_ground_terminals=sat_ground_terminals,
-        sat_ground_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
-    )
-    candidates, candidate_by_pair, visible_set = _build_candidates(
+    candidates, candidate_by_pair, usable_set = _build_candidates(
         step=step,
-        visible_per_station=visible_per_station,
-        gs_selection_policies=gs_selection_policies,
-        gs_service_priorities=gs_service_priorities,
-        gs_reference_bodies=gs_reference_bodies,
-        sat_terminal_pools=sat_terminal_pools,
+        usable=usable,
+        stating_nodes=stating,
+        selection_policies=selection_policies,
+        service_priorities=service_priorities,
+        pools=pools,
         ranking_order=order,
     )
-    gs_occupied: dict[str, set[int]] = {gs: set() for gs in gs_terminal_counts}
-    sat_occupied: dict[str, set[int]] = {sat: set() for sat in sat_ground_terminals}
+    # A pair's place in the session's rank order. The end that does not choose compares
+    # places: a lower place is a better rank.
+    rank_place = {candidate.pair: place for place, candidate in enumerate(candidates)}
+
+    occupied: dict[str, set[int]] = {}
     # Which association held each terminal index in the previously published authority
     # state. An index released this tick still receives from its old peer (and may still be
     # wired until the Scheduler actuates the release), so new links prefer indices with no
     # reception in progress (window_for below) and fall back to one only when nothing else is
     # free; the Scheduler's dispatch staging orders that release before the acquire.
     prior_holder: dict[tuple[str, int], tuple[str, str]] = {}
-    for _pair, (_gs_idx, _sat_idx) in current_associations.items():
-        _gs_id, _sat_id = _ground_and_satellite_ids(_pair, ground_station_ids)
-        prior_holder[(_gs_id, _gs_idx)] = _pair
-        prior_holder[(_sat_id, _sat_idx)] = _pair
+    for _pair, (_lead_idx, _peer_idx) in current_associations.items():
+        _lead, _peer = _lead_and_peer(_pair, stating)
+        prior_holder[(_lead, _lead_idx)] = _pair
+        prior_holder[(_peer, _peer_idx)] = _pair
     # Why each association released this tick was released; the first cause recorded stands.
     release_cause: dict[tuple[str, str], GroundTerminalReleaseCause] = {}
     new_associations: dict[tuple[str, str], tuple[int, int]] = {}
-    # Per-station / per-satellite association indexes, maintained at the
-    # three mutation points below. dicts-as-ordered-sets so per-GS pair
-    # order matches new_associations insertion order exactly (incumbent
-    # selection iterates it); without these, steady_pairs_for_gs and
-    # sat_occupants_for_candidate rescan every association per candidate
-    # (measured ~75% of allocator runtime at scale).
-    assoc_by_gs: dict[str, dict[tuple[str, str], None]] = {}
-    assoc_by_sat: dict[str, dict[tuple[str, str], None]] = {}
+    # Per-node association index, maintained at the three mutation points below. A
+    # dict-as-ordered-set so each node's pair order matches new_associations insertion order;
+    # without it every capacity check rescans every association per candidate (measured ~75%
+    # of allocator runtime at scale).
+    assoc_by_node: dict[str, dict[tuple[str, str], None]] = {}
     new_pending_teardowns: MbbTeardownState = {}
     rejected: dict[tuple[str, str], _Rejected] = {}
     allocation_events: list[GroundAllocationEvent] = []
     lifecycle_events: list[MbbTeardownLifecycleEvent] = []
     drop_current_pairs: set[tuple[str, str]] = set()
 
+    # Handovers in progress, indexed by the node that hands over. `lock_by_node` holds, for
+    # each such node, the first in pair order of its old link and that link's successor;
+    # `protected` holds every link that is part of a handover. Both are rebuilt whenever
+    # new_pending_teardowns changes, so a check costs one lookup.
+    lock_by_node: dict[str, tuple[str, str]] = {}
+    protected: set[tuple[str, str]] = set()
+    pool_members: dict[tuple[str, str], frozenset[int]] = {}
+
+    def rebuild_handover_index() -> None:
+        lock_by_node.clear()
+        protected.clear()
+        for old_pair, teardown in new_pending_teardowns.items():
+            node_id = _handing_node(old_pair, teardown.successor_pair)
+            for handover_pair in (old_pair, teardown.successor_pair):
+                protected.add(handover_pair)
+                first = lock_by_node.get(node_id)
+                if first is None or handover_pair < first:
+                    lock_by_node[node_id] = handover_pair
+
+    def candidate_for(pair: tuple[str, str]) -> _Candidate:
+        candidate = candidate_by_pair.get(pair)
+        if candidate is None:
+            raise ValueError(
+                f"Internal allocator invariant violated: association {pair!r} is held "
+                "but has no usable candidate."
+            )
+        return candidate
+
+    def pool_of(node_id: str, pool_name: str) -> tuple[int, ...]:
+        return pools.get(node_id, {}).get(pool_name, ())
+
+    def members_of(node_id: str, pool_name: str) -> frozenset[int]:
+        key = (node_id, pool_name)
+        members = pool_members.get(key)
+        if members is None:
+            members = frozenset(pool_of(node_id, pool_name))
+            pool_members[key] = members
+        return members
+
+    def index_at(pair: tuple[str, str], node_id: str) -> int:
+        lead_idx, peer_idx = new_associations[pair]
+        return lead_idx if node_id == candidate_for(pair).lead else peer_idx
+
     def add_existing(pair: tuple[str, str], indices: tuple[int, int]) -> None:
-        gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
-        if gs_id not in gs_terminal_pools:
-            raise ValueError(f"Missing ground terminal index pool for {gs_id}")
-        if sat_id not in sat_terminal_pools:
-            raise ValueError(f"Missing satellite ground terminal index pool for {sat_id}")
-        gs_idx, sat_idx = indices
-        if gs_idx not in gs_terminal_pools[gs_id]:
-            raise ValueError(
-                f"Association {pair!r} uses GS terminal index {gs_idx}, but "
-                f"{gs_id}.terminals allows {gs_terminal_pools[gs_id]}"
-            )
-        if gs_idx in gs_occupied.setdefault(gs_id, set()):
-            raise ValueError(f"Duplicate GS terminal occupancy {gs_id}.term{gs_idx}")
-        reference_body = gs_reference_bodies[gs_id]
-        sat_pool = sat_terminal_pools[sat_id].get(reference_body, ())
-        if sat_idx not in sat_pool:
-            raise ValueError(
-                f"Association {pair!r} uses satellite terminal index {sat_idx}, but "
-                f"{sat_id}.ground_terminals has no such index for "
-                f"reference_body={reference_body!r}"
-            )
-        if sat_idx in sat_occupied.setdefault(sat_id, set()):
-            raise ValueError(f"Duplicate satellite ground terminal occupancy {sat_id}.gnd{sat_idx}")
-        gs_occupied[gs_id].add(gs_idx)
-        sat_occupied[sat_id].add(sat_idx)
+        candidate = candidate_for(pair)
+        ends = (
+            (candidate.lead, candidate.lead_pool, indices[0]),
+            (candidate.peer, candidate.peer_pool, indices[1]),
+        )
+        for node_id, pool_name, index in ends:
+            if node_id not in pools:
+                raise ValueError(f"Missing terminal pools for {node_id}")
+            if index not in members_of(node_id, pool_name):
+                raise ValueError(
+                    f"Association {pair!r} uses terminal index {index} at {node_id}, but "
+                    f"{node_id}.{pool_name} holds {pool_of(node_id, pool_name)}"
+                )
+            if index in occupied.setdefault(node_id, set()):
+                raise ValueError(f"Duplicate terminal occupancy {node_id}[{index}]")
+        for node_id, _pool_name, index in ends:
+            occupied[node_id].add(index)
+            assoc_by_node.setdefault(node_id, {})[pair] = None
         new_associations[pair] = indices
-        assoc_by_gs.setdefault(gs_id, {})[pair] = None
-        assoc_by_sat.setdefault(sat_id, {})[pair] = None
 
     def remove_association(pair: tuple[str, str]) -> tuple[int, int]:
+        candidate = candidate_for(pair)
         indices = new_associations.pop(pair)
-        gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
-        gs_idx, sat_idx = indices
-        gs_occupied.setdefault(gs_id, set()).discard(gs_idx)
-        sat_occupied.setdefault(sat_id, set()).discard(sat_idx)
-        assoc_by_gs.get(gs_id, {}).pop(pair, None)
-        assoc_by_sat.get(sat_id, {}).pop(pair, None)
-        new_pending_teardowns.pop(pair, None)
+        for node_id, index in ((candidate.lead, indices[0]), (candidate.peer, indices[1])):
+            occupied.setdefault(node_id, set()).discard(index)
+            assoc_by_node.get(node_id, {}).pop(pair, None)
+        if new_pending_teardowns.pop(pair, None) is not None:
+            rebuild_handover_index()
         return indices
-
-    def sat_terminal_pool(candidate: _Candidate) -> tuple[int, ...]:
-        reference_body = gs_reference_bodies[candidate.gs_id]
-        return sat_terminal_pools.get(candidate.sat_id, {}).get(reference_body, ())
-
-    def sat_capacity_constraint(candidate: _Candidate) -> str:
-        reference_body = gs_reference_bodies[candidate.gs_id]
-        return f"{candidate.sat_id}.ground_terminals[{reference_body}]"
 
     def released(pair: tuple[str, str], cause: GroundTerminalReleaseCause) -> None:
         release_cause.setdefault(pair, cause)
@@ -694,7 +722,7 @@ def allocate_links(
             a_to_b, b_to_a = pair_delays_ms[pair]
         except KeyError as exc:
             raise ValueError(
-                f"released ground pair {pair!r} has no delays this tick; its terminals' "
+                f"released pair {pair!r} has no delays this tick; its terminals' "
                 "reception windows cannot be bounded"
             ) from exc
         return a_to_b if node_id == pair[1] else b_to_a
@@ -734,9 +762,9 @@ def allocate_links(
             _make_event(
                 category="retargeted_before_last_arrival",
                 pair=window.old_pair,
-                gs_id=candidate.gs_id,
-                gs_tenant_ids=gs_tenant_ids,
-                gs_reference_bodies=gs_reference_bodies,
+                lead=candidate.lead,
+                tenant_ids=tenant_ids,
+                reference_bodies=reference_bodies,
                 message=(
                     f"terminal {node_id}[{index}] turned from {window.old_pair!r} to "
                     f"{candidate.pair!r} while the old peer's signals were still arriving for "
@@ -752,139 +780,187 @@ def allocate_links(
             )
         )
 
-    def next_sat_terminal_index(candidate: _Candidate) -> int | None:
-        """A free index of the satellite's pool for the candidate's body, preferring one that
-        is not still receiving from a released peer."""
-        occupied = sat_occupied.setdefault(candidate.sat_id, set())
-        pool = sat_terminal_pool(candidate)
+    def has_free_terminal(node_id: str, pool_name: str) -> bool:
+        held = occupied.get(node_id, ())
+        return any(index not in held for index in pool_of(node_id, pool_name))
+
+    def free_terminal(node_id: str, pool_name: str) -> int | None:
+        """A free index of the pool, preferring one that is not still receiving from a
+        released peer."""
+        held = occupied.setdefault(node_id, set())
+        pool = pool_of(node_id, pool_name)
         quiet = next(
-            (
-                idx
-                for idx in pool
-                if idx not in occupied and window_for(candidate.sat_id, idx) is None
-            ),
+            (index for index in pool if index not in held and window_for(node_id, index) is None),
             None,
         )
         if quiet is not None:
             return quiet
-        return next((idx for idx in pool if idx not in occupied), None)
-
-    def satellite_has_capacity(candidate: _Candidate) -> bool:
-        return next_sat_terminal_index(candidate) is not None
+        return next((index for index in pool if index not in held), None)
 
     def allocate_new(candidate: _Candidate) -> bool:
-        gs_occ = gs_occupied.setdefault(candidate.gs_id, set())
-        sat_occ = sat_occupied.setdefault(candidate.sat_id, set())
-        gs_pool = gs_terminal_pools[candidate.gs_id]
-        gs_idx = next(
-            (
-                index
-                for index in gs_pool
-                if index not in gs_occ and window_for(candidate.gs_id, index) is None
-            ),
-            None,
-        )
-        if gs_idx is None:
-            gs_idx = next((index for index in gs_pool if index not in gs_occ), None)
-        sat_idx = next_sat_terminal_index(candidate)
-        if gs_idx is None or sat_idx is None:
+        lead_idx = free_terminal(candidate.lead, candidate.lead_pool)
+        peer_idx = free_terminal(candidate.peer, candidate.peer_pool)
+        if lead_idx is None or peer_idx is None:
             return False
-        retargeted(candidate.gs_id, gs_idx, candidate)
-        retargeted(candidate.sat_id, sat_idx, candidate)
-        gs_occ.add(gs_idx)
-        sat_occ.add(sat_idx)
-        new_associations[candidate.pair] = (gs_idx, sat_idx)
-        assoc_by_gs.setdefault(candidate.gs_id, {})[candidate.pair] = None
-        assoc_by_sat.setdefault(candidate.sat_id, {})[candidate.pair] = None
+        retargeted(candidate.lead, lead_idx, candidate)
+        retargeted(candidate.peer, peer_idx, candidate)
+        occupied[candidate.lead].add(lead_idx)
+        occupied[candidate.peer].add(peer_idx)
+        new_associations[candidate.pair] = (lead_idx, peer_idx)
+        assoc_by_node.setdefault(candidate.lead, {})[candidate.pair] = None
+        assoc_by_node.setdefault(candidate.peer, {})[candidate.pair] = None
         rejected.pop(candidate.pair, None)
         return True
 
-    def handover_mode_for(gs_id: str) -> Literal["bbm", "mbb"]:
-        return gs_handover_modes[gs_id]
+    def handover_mode_for(node_id: str) -> Literal["bbm", "mbb"]:
+        try:
+            return handover_modes[node_id]
+        except KeyError:
+            raise ValueError(f"Node {node_id} states no handover mode") from None
 
-    def mbb_overlap_ticks_for(gs_id: str) -> int:
-        return gs_mbb_overlap_ticks[gs_id] if handover_mode_for(gs_id) == "mbb" else 0
+    def mbb_overlap_ticks_for(node_id: str) -> int:
+        return mbb_overlap_ticks[node_id] if handover_mode_for(node_id) == "mbb" else 0
 
-    def mbb_reserve_for(gs_id: str) -> int:
-        return gs_mbb_reserve[gs_id] if handover_mode_for(gs_id) == "mbb" else 0
-
-    def steady_limit(gs_id: str) -> int:
-        tc = gs_terminal_counts[gs_id]
-        return tc - mbb_reserve_for(gs_id) if handover_mode_for(gs_id) == "mbb" else tc
-
-    def steady_pairs_for_gs(gs_id: str) -> list[tuple[str, str]]:
-        return [pair for pair in assoc_by_gs.get(gs_id, ()) if pair not in new_pending_teardowns]
-
-    def worst_steady_incumbent(gs_id: str) -> _Candidate | None:
-        incumbents = [
-            _visible_incumbent_for_pair(pair=pair, candidate_by_pair=candidate_by_pair)
-            for pair in steady_pairs_for_gs(gs_id)
-        ]
-        if not incumbents:
-            return None
-        return max(incumbents, key=lambda c: c.rank_key)
+    def cap_of(node_id: str, pool_name: str) -> int:
+        """A node's cap on a rule: the pool's terminals, less the make-before-break reserve
+        the node states."""
+        size = len(pool_of(node_id, pool_name))
+        if node_id in stating and handover_modes[node_id] == "mbb":
+            return size - mbb_reserve[node_id]
+        return size
 
     def rejection_locked(pair: tuple[str, str]) -> bool:
         rejection = rejected.get(pair)
         return rejection is not None and rejection.reason in _LOCKED_REJECTION_REASONS
 
-    def protected_mbb_pairs() -> set[tuple[str, str]]:
-        protected = set(new_pending_teardowns)
-        protected.update(teardown.successor_pair for teardown in new_pending_teardowns.values())
-        return protected
+    def end_load(
+        candidate: _Candidate, node_id: str, pool_name: str
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]], bool, bool]:
+        """What one node already holds against a candidate: the pool's occupants, the node's
+        steady links of the candidate's rule, whether those reach its cap, and whether the
+        pool has a free terminal.
 
-    def protected_mbb_pair_for_gs(gs_id: str) -> tuple[str, str] | None:
-        for pair in sorted(protected_mbb_pairs()):
-            pair_gs, _pair_sat = _ground_and_satellite_ids(pair, ground_station_ids)
-            if pair_gs == gs_id:
-                return pair
-        return None
-
-    def same_partition(candidate: _Candidate, pair: tuple[str, str]) -> bool:
-        pair_gs, _pair_sat = _ground_and_satellite_ids(pair, ground_station_ids)
-        return (
-            gs_tenant_ids[pair_gs] == gs_tenant_ids[candidate.gs_id]
-            and gs_reference_bodies[pair_gs] == gs_reference_bodies[candidate.gs_id]
-        )
-
-    def sat_occupants_for_candidate(candidate: _Candidate) -> list[_Candidate]:
-        target_pool = set(sat_terminal_pool(candidate))
-        occupants: list[_Candidate] = []
-        for pair in sorted(assoc_by_sat.get(candidate.sat_id, ())):
-            sat_idx = new_associations[pair][1]
-            if sat_idx in target_pool:
-                occupants.append(
-                    _visible_incumbent_for_pair(pair=pair, candidate_by_pair=candidate_by_pair)
-                )
-        return occupants
-
-    def sat_capacity_blocker(candidate: _Candidate) -> tuple[str, str] | None:
-        occupants = sat_occupants_for_candidate(candidate)
-        if not occupants:
-            return None
-        return max(occupants, key=lambda c: c.rank_key).pair
-
-    def displaceable_sat_incumbent(candidate: _Candidate) -> _Candidate | None:
-        protected = protected_mbb_pairs()
-        incumbents = [
-            incumbent
-            for incumbent in sat_occupants_for_candidate(candidate)
-            if incumbent.pair not in protected
-            and same_partition(candidate, incumbent.pair)
-            and candidate.rank_key < incumbent.rank_key
+        A cap is counted per rule and a pool is shared by rules, so both tests are needed. A
+        link the node itself is handing over does not count against its cap.
+        """
+        members = members_of(node_id, pool_name)
+        occupants = [
+            pair for pair in assoc_by_node.get(node_id, ()) if index_at(pair, node_id) in members
         ]
-        if not incumbents:
+        steady = [
+            pair
+            for pair in occupants
+            if candidate_for(pair).rule_id == candidate.rule_id
+            and not (
+                pair in new_pending_teardowns
+                and _handing_node(pair, new_pending_teardowns[pair].successor_pair) == node_id
+            )
+        ]
+        cap_reached = len(steady) >= cap_of(node_id, pool_name)
+        return occupants, steady, cap_reached, has_free_terminal(node_id, pool_name)
+
+    def worst_of(pairs: Sequence[tuple[str, str]]) -> _Candidate | None:
+        if not pairs:
             return None
-        return max(incumbents, key=lambda c: c.rank_key)
+        return max((candidate_for(pair) for pair in pairs), key=lambda c: c.rank_key)
+
+    def check_end(
+        candidate: _Candidate, node_id: str, pool_name: str, *, chooses: bool
+    ) -> tuple[_Candidate | None, _Rejected | None]:
+        """Decide one node's end of a candidate pair.
+
+        Returns the held link the candidate takes the place of (``None`` when the node has
+        room) and a rejection (``None`` when the candidate may link at this end).
+
+        Every case decides with the one base rule, a strictly higher score. A node that
+        chooses the pair applies its handover policy to its own scores. A node that does not
+        choose compares places in the session's rank order.
+
+        A capacity refusal is published as ``gs_capacity`` at a node that chooses and as
+        ``sat_capacity`` at a node that does not. Both names are part of the published reason
+        vocabulary, so they stay until that vocabulary loses its ground and satellite roles.
+        """
+        occupants, steady, cap_reached, terminal_free = end_load(candidate, node_id, pool_name)
+        if not cap_reached and terminal_free:
+            return None, None
+
+        capacity_text = f"{node_id}.{pool_name}"
+        # The links whose release would make room: the node's links of the same rule when its
+        # cap is reached, and any occupant of the pool when only the terminals are used up.
+        # A link in a handover cannot be taken, and no link of another tenant.
+        takeable = [
+            pair
+            for pair in (steady if cap_reached else occupants)
+            if pair not in protected
+            and tenant_ids[candidate_for(pair).lead] == tenant_ids[candidate.lead]
+        ]
+        incumbent = worst_of(takeable)
+
+        if chooses:
+            if incumbent is None:
+                return None, _Rejected(
+                    reason="gs_capacity", incumbent_pair=None, capacity_constraint=capacity_text
+                )
+            handover_policy = handover_policies[node_id]
+            decision = evaluate_handover(
+                policy=handover_policy,
+                incumbent_score=incumbent.selection_score,
+                challenger_score=candidate.selection_score,
+                context=HandoverContext(
+                    step=step,
+                    node_id=node_id,
+                    incumbent_pair=incumbent.pair,
+                    challenger_pair=candidate.pair,
+                    incumbent_visibility=incumbent.visibility,
+                    challenger_visibility=candidate.visibility,
+                    min_elevation_deg=min_elevations[node_id],
+                ),
+            )
+            if decision.action == "hold":
+                if decision.unscheduled_reason is None:
+                    raise ValueError(
+                        f"Handover policy {handover_policy.name!r} held {candidate.pair!r} "
+                        "but did not provide an unscheduled reason"
+                    )
+                return None, _Rejected(
+                    reason=decision.unscheduled_reason,
+                    incumbent_pair=incumbent.pair,
+                    capacity_constraint=None,
+                )
+            if decision.action != "displace":
+                raise ValueError(
+                    f"Handover policy {handover_policy.name!r} returned unknown action "
+                    f"{decision.action!r}"
+                )
+            if handover_mode_for(node_id) == "mbb" and not terminal_free:
+                return None, _Rejected(
+                    reason="bbm_no_spare",
+                    incumbent_pair=incumbent.pair,
+                    capacity_constraint=capacity_text,
+                )
+            return incumbent, None
+
+        # The node does not choose the pair. A refusal names the pool's worst-ranked occupant,
+        # whether or not that link could be taken.
+        if incumbent is None or not strictly_higher(
+            -rank_place[candidate.pair], -rank_place[incumbent.pair]
+        ):
+            blocker = worst_of(occupants)
+            return None, _Rejected(
+                reason="sat_capacity",
+                incumbent_pair=blocker.pair if blocker is not None else None,
+                capacity_constraint=capacity_text,
+            )
+        return incumbent, None
 
     def emit_bbm_gap(incumbent: _Candidate, challenger: _Candidate) -> None:
         allocation_events.append(
             _make_event(
                 category="bbm_gap",
                 pair=incumbent.pair,
-                gs_id=challenger.gs_id,
-                gs_tenant_ids=gs_tenant_ids,
-                gs_reference_bodies=gs_reference_bodies,
+                lead=challenger.lead,
+                tenant_ids=tenant_ids,
+                reference_bodies=reference_bodies,
                 message=(
                     f"BBM released incumbent {incumbent.pair!r} before acquiring "
                     f"challenger {challenger.pair!r}; timeout_ticks={bbm_acquire_timeout_ticks}. "
@@ -899,14 +975,14 @@ def allocate_links(
 
     def emit_incumbent_lost(pair: tuple[str, str], message: str) -> None:
         released(pair, "incumbent_lost")
-        gs_id, _sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
+        lead, _peer = _lead_and_peer(pair, stating)
         allocation_events.append(
             _make_event(
                 category="incumbent_lost",
                 pair=pair,
-                gs_id=gs_id,
-                gs_tenant_ids=gs_tenant_ids,
-                gs_reference_bodies=gs_reference_bodies,
+                lead=lead,
+                tenant_ids=tenant_ids,
+                reference_bodies=reference_bodies,
                 message=message,
             )
         )
@@ -920,7 +996,7 @@ def allocate_links(
                 "pair": list(pair),
                 "scheduled": pair in current_associations,
                 "pending_teardown": pair in pending_teardowns,
-                "visible": pair in visible_set,
+                "visible": pair in usable_set,
                 "terminal_indices": list(indices) if indices is not None else None,
             }
 
@@ -934,7 +1010,7 @@ def allocate_links(
         category: GroundAllocationEventCategory,
         old_pair: tuple[str, str],
         successor_pair: tuple[str, str],
-        gs_id: str,
+        handing_node: str,
         message: str,
         source_allocation_event_category: GroundAllocationEventCategory | None = None,
     ) -> None:
@@ -943,7 +1019,7 @@ def allocate_links(
                 category=category,
                 old_pair=old_pair,
                 successor_pair=successor_pair,
-                gs_id=gs_id,
+                gs_id=handing_node,
                 message=message,
                 source_allocation_event_category=source_allocation_event_category or category,
                 authority_before=authority_before_for_pairs(old_pair, successor_pair),
@@ -966,18 +1042,20 @@ def allocate_links(
         teardown = pending_teardowns[pair]
         if teardown.start_step > step:
             raise ValueError(f"Pending teardown {pair!r} starts in the future")
-        gs_id, _sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
         successor = teardown.successor_pair
         if successor == pair:
             raise ValueError(f"Pending teardown {pair!r} names itself as successor")
-        pair_visible = pair in visible_set
-        successor_visible = successor in visible_set
+        handing_node = _handing_node(pair, successor)
+        pair_lead, _pair_peer = _lead_and_peer(pair, stating)
+        pair_visible = pair in usable_set
+        successor_visible = successor in usable_set
         successor_current = successor in current_associations and successor not in pending_teardowns
         elapsed = step - teardown.start_step
-        if handover_mode_for(gs_id) != "mbb":
+        if handover_mode_for(handing_node) != "mbb":
             raise ValueError(
-                f"Pending MBB teardown {pair!r} exists for BBM ground station {gs_id}; "
-                "runtime handover policy and allocator state are inconsistent"
+                f"Pending MBB teardown {pair!r} exists for {handing_node}, which hands over "
+                "break before make; runtime handover policy and allocator state are "
+                "inconsistent"
             )
 
         if not successor_visible or not successor_current:
@@ -990,9 +1068,9 @@ def allocate_links(
                 _make_event(
                     category=category,
                     pair=pair,
-                    gs_id=gs_id,
-                    gs_tenant_ids=gs_tenant_ids,
-                    gs_reference_bodies=gs_reference_bodies,
+                    lead=pair_lead,
+                    tenant_ids=tenant_ids,
+                    reference_bodies=reference_bodies,
                     message=message,
                     successor_pair=successor,
                     policy_kind="successor_abort_policy",
@@ -1003,7 +1081,7 @@ def allocate_links(
                 category=category,
                 old_pair=pair,
                 successor_pair=successor,
-                gs_id=gs_id,
+                handing_node=handing_node,
                 message=message,
             )
             if not pair_visible:
@@ -1019,16 +1097,14 @@ def allocate_links(
                     "during prior-state recovery",
                 )
             if successor_visible and not successor_current:
-                successor_gs, _successor_sat = _ground_and_satellite_ids(
-                    successor, ground_station_ids
-                )
+                successor_lead, _successor_peer = _lead_and_peer(successor, stating)
                 allocation_events.append(
                     _make_event(
                         category="failed_acquire",
                         pair=successor,
-                        gs_id=successor_gs,
-                        gs_tenant_ids=gs_tenant_ids,
-                        gs_reference_bodies=gs_reference_bodies,
+                        lead=successor_lead,
+                        tenant_ids=tenant_ids,
+                        reference_bodies=reference_bodies,
                         message=(
                             f"MBB successor {successor!r} was visible but was not present "
                             "in current associations during prior-state recovery"
@@ -1062,7 +1138,7 @@ def allocate_links(
                 )
             continue
 
-        if elapsed >= mbb_overlap_ticks_for(gs_id) or not pair_visible:
+        if elapsed >= mbb_overlap_ticks_for(handing_node) or not pair_visible:
             drop_current_pairs.add(pair)
             released(pair, "teardown_completed")
             completion_message = (
@@ -1073,9 +1149,9 @@ def allocate_links(
                 _make_event(
                     category="teardown_completed",
                     pair=pair,
-                    gs_id=gs_id,
-                    gs_tenant_ids=gs_tenant_ids,
-                    gs_reference_bodies=gs_reference_bodies,
+                    lead=pair_lead,
+                    tenant_ids=tenant_ids,
+                    reference_bodies=reference_bodies,
                     message=completion_message,
                     successor_pair=successor,
                     policy_kind="handover_mode",
@@ -1086,7 +1162,7 @@ def allocate_links(
                 category="teardown_completed",
                 old_pair=pair,
                 successor_pair=successor,
-                gs_id=gs_id,
+                handing_node=handing_node,
                 message=completion_message,
             )
             if not pair_visible:
@@ -1106,13 +1182,14 @@ def allocate_links(
 
         add_existing(pair, current_associations[pair])
         new_pending_teardowns[pair] = teardown
+    rebuild_handover_index()
 
-    # Steady-state continuity: visible current links not in teardown survive as
+    # Steady-state continuity: usable current links not in teardown survive as
     # incumbents. They may still be displaced later by handover policy.
     for pair, indices in sorted(current_associations.items()):
         if pair in pending_teardowns or pair in drop_current_pairs:
             continue
-        if pair not in visible_set:
+        if pair not in usable_set:
             emit_incumbent_lost(
                 pair,
                 f"Scheduled incumbent {pair!r} lost physical visibility",
@@ -1132,130 +1209,84 @@ def allocate_links(
             if candidate.pair in new_associations or rejection_locked(candidate.pair):
                 continue
 
-            gs_id = candidate.gs_id
-            sat_id = candidate.sat_id
-            tc = gs_terminal_counts[gs_id]
+            # The node that does not choose is checked first, then the node that chooses, so
+            # a pair refused at both ends carries the first end's reason.
+            ends = (
+                (candidate.peer, candidate.peer_pool, False),
+                (candidate.lead, candidate.lead_pool, True),
+            )
 
-            protected_pair = protected_mbb_pair_for_gs(gs_id)
-            if protected_pair is not None:
+            # A node in a handover of its own takes no other link until the handover ends,
+            # whether or not it has room.
+            locked = False
+            for node_id, pool_name in (
+                (candidate.lead, candidate.lead_pool),
+                (candidate.peer, candidate.peer_pool),
+            ):
+                handover_pair = lock_by_node.get(node_id)
+                if handover_pair is not None:
+                    _record_rejection(
+                        rejected,
+                        candidate.pair,
+                        reason="mbb_overlap_locked",
+                        incumbent_pair=handover_pair,
+                        capacity_constraint=f"{node_id}.{pool_name}",
+                    )
+                    locked = True
+                    break
+            if locked:
+                continue
+
+            # Both ends decide before any link is released.
+            displaced: list[tuple[str, str, bool, _Candidate]] = []
+            rejection: _Rejected | None = None
+            for node_id, pool_name, chooses in ends:
+                incumbent, rejection = check_end(candidate, node_id, pool_name, chooses=chooses)
+                if rejection is not None:
+                    break
+                if incumbent is not None:
+                    displaced.append((node_id, pool_name, chooses, incumbent))
+            if rejection is not None:
                 _record_rejection(
                     rejected,
                     candidate.pair,
-                    reason="mbb_overlap_locked",
-                    incumbent_pair=protected_pair,
-                    capacity_constraint=f"{gs_id}.terminals",
+                    reason=rejection.reason,
+                    incumbent_pair=rejection.incumbent_pair,
+                    capacity_constraint=rejection.capacity_constraint,
                 )
                 continue
 
-            sat_displacement: _Candidate | None = None
-            if not satellite_has_capacity(candidate):
-                sat_displacement = displaceable_sat_incumbent(candidate)
-                if sat_displacement is None:
-                    _record_rejection(
-                        rejected,
-                        candidate.pair,
-                        reason="sat_capacity",
-                        incumbent_pair=sat_capacity_blocker(candidate),
-                        capacity_constraint=sat_capacity_constraint(candidate),
-                    )
-                    continue
-
-            gs_displacement: _Candidate | None = None
-            steady_count = len(steady_pairs_for_gs(gs_id))
-            logical_room = steady_count < steady_limit(gs_id)
-            physical_room = len(gs_occupied.get(gs_id, set())) < tc
-
-            if not logical_room:
-                incumbent = worst_steady_incumbent(gs_id)
-                if incumbent is None:
-                    _record_rejection(
-                        rejected,
-                        candidate.pair,
-                        reason="gs_capacity",
-                        incumbent_pair=None,
-                        capacity_constraint=f"{gs_id}.terminals",
-                    )
-                    continue
-
-                handover_policy = gs_handover_policies[gs_id]
-                decision = evaluate_handover(
-                    policy=handover_policy,
-                    incumbent_score=incumbent.selection_score,
-                    challenger_score=candidate.selection_score,
-                    context=HandoverContext(
-                        step=step,
-                        gs_id=gs_id,
-                        incumbent_pair=incumbent.pair,
-                        challenger_pair=candidate.pair,
-                        incumbent_visibility=incumbent.visibility,
-                        challenger_visibility=candidate.visibility,
-                        min_elevation_deg=gs_min_elevations[gs_id],
-                    ),
-                )
-                if decision.action == "hold":
-                    if decision.unscheduled_reason is None:
-                        raise ValueError(
-                            f"Handover policy {handover_policy.name!r} held {candidate.pair!r} "
-                            "but did not provide an unscheduled reason"
+            # A choosing node that breaks before it makes releases its held link now. That
+            # link is final for the tick.
+            for node_id, _pool_name, chooses, incumbent in displaced:
+                if chooses and handover_mode_for(node_id) == "bbm":
+                    released(incumbent.pair, "bbm_gap")
+                    remove_association(incumbent.pair)
+                    if incumbent.pair in usable_set:
+                        _record_rejection(
+                            rejected,
+                            incumbent.pair,
+                            reason="replaced_by_successor",
+                            incumbent_pair=candidate.pair,
+                            capacity_constraint=None,
                         )
-                    _record_rejection(
-                        rejected,
-                        candidate.pair,
-                        reason=decision.unscheduled_reason,
-                        incumbent_pair=incumbent.pair,
-                        capacity_constraint=None,
-                    )
-                    continue
-                if decision.action != "displace":
-                    raise ValueError(
-                        f"Handover policy {handover_policy.name!r} returned unknown action "
-                        f"{decision.action!r}"
-                    )
-                gs_displacement = incumbent
-                if handover_mode_for(gs_id) == "mbb" and not physical_room:
-                    _record_rejection(
-                        rejected,
-                        candidate.pair,
-                        reason="bbm_no_spare",
-                        incumbent_pair=incumbent.pair,
-                        capacity_constraint=f"{gs_id}.terminals",
-                    )
-                    continue
-            elif not physical_room:
-                _record_rejection(
-                    rejected,
-                    candidate.pair,
-                    reason="gs_capacity",
-                    incumbent_pair=protected_pair,
-                    capacity_constraint=f"{gs_id}.terminals",
-                )
-                continue
+                    emit_bbm_gap(incumbent, candidate)
+                    progress = True
 
-            if gs_displacement is not None and handover_mode_for(gs_id) == "bbm":
-                released(gs_displacement.pair, "bbm_gap")
-                remove_association(gs_displacement.pair)
-                if gs_displacement.pair in visible_set:
+            # A node that does not choose releases its held link at once. That link's pair
+            # may be considered again in this tick.
+            for node_id, pool_name, chooses, incumbent in displaced:
+                if not chooses:
+                    released(incumbent.pair, "sat_capacity")
+                    remove_association(incumbent.pair)
                     _record_rejection(
                         rejected,
-                        gs_displacement.pair,
-                        reason="replaced_by_successor",
+                        incumbent.pair,
+                        reason="sat_capacity",
                         incumbent_pair=candidate.pair,
-                        capacity_constraint=None,
+                        capacity_constraint=f"{node_id}.{pool_name}",
                     )
-                emit_bbm_gap(gs_displacement, candidate)
-                progress = True
-
-            if sat_displacement is not None:
-                released(sat_displacement.pair, "sat_capacity")
-                remove_association(sat_displacement.pair)
-                _record_rejection(
-                    rejected,
-                    sat_displacement.pair,
-                    reason="sat_capacity",
-                    incumbent_pair=candidate.pair,
-                    capacity_constraint=sat_capacity_constraint(candidate),
-                )
-                progress = True
+                    progress = True
 
             if not allocate_new(candidate):
                 raise ValueError(
@@ -1264,63 +1295,69 @@ def allocate_links(
                 )
             progress = True
 
-            if gs_displacement is not None and handover_mode_for(gs_id) == "mbb":
-                new_pending_teardowns[gs_displacement.pair] = MbbTeardown(
-                    start_step=step,
-                    successor_pair=candidate.pair,
-                )
-                allocation_events.append(
-                    _make_event(
-                        category="mbb_overlap_started",
-                        pair=gs_displacement.pair,
-                        gs_id=gs_id,
-                        gs_tenant_ids=gs_tenant_ids,
-                        gs_reference_bodies=gs_reference_bodies,
-                        message=(
-                            f"MBB overlap started for incumbent {gs_displacement.pair!r} "
-                            f"with successor {candidate.pair!r}; "
-                            f"overlap_ticks={mbb_overlap_ticks_for(gs_id)}"
-                        ),
+            # A choosing node that makes before it breaks keeps its held link for the overlap.
+            for node_id, _pool_name, chooses, incumbent in displaced:
+                if chooses and handover_mode_for(node_id) == "mbb":
+                    new_pending_teardowns[incumbent.pair] = MbbTeardown(
+                        start_step=step,
                         successor_pair=candidate.pair,
-                        challenger_pair=candidate.pair,
-                        policy_kind="handover_mode",
-                        policy_name="mbb",
                     )
-                )
+                    rebuild_handover_index()
+                    allocation_events.append(
+                        _make_event(
+                            category="mbb_overlap_started",
+                            pair=incumbent.pair,
+                            lead=candidate.lead,
+                            tenant_ids=tenant_ids,
+                            reference_bodies=reference_bodies,
+                            message=(
+                                f"MBB overlap started for incumbent {incumbent.pair!r} "
+                                f"with successor {candidate.pair!r}; "
+                                f"overlap_ticks={mbb_overlap_ticks_for(node_id)}"
+                            ),
+                            successor_pair=candidate.pair,
+                            challenger_pair=candidate.pair,
+                            policy_kind="handover_mode",
+                            policy_name="mbb",
+                        )
+                    )
 
         if not progress:
             break
     else:
         raise ValueError(
-            "Ground allocator did not converge after deterministic capacity arbitration passes"
+            "Link allocator did not converge after deterministic capacity arbitration passes"
         )
 
     unscheduled: list[UnscheduledPair] = []
-    for pair in sorted(visible_set - set(new_associations)):
-        gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
+    for pair in sorted(usable_set - set(new_associations)):
+        candidate = candidate_by_pair.get(pair)
+        if candidate is None:
+            raise ValueError(
+                f"Usable unscheduled pair {pair!r} has no allocation candidate; "
+                "visibility and allocation inputs are inconsistent"
+            )
         rejection = rejected.get(pair)
         if rejection is None:
-            candidate = candidate_by_pair.get(pair)
-            if candidate is None:
-                raise ValueError(
-                    f"Visible unscheduled pair {pair!r} has no allocation candidate; "
-                    "visibility and allocation inputs are inconsistent"
-                )
-            if not satellite_has_capacity(candidate):
+            peer_occupants, _steady, _cap_reached, peer_terminal_free = end_load(
+                candidate, candidate.peer, candidate.peer_pool
+            )
+            _occupants, lead_steady, lead_cap_reached, lead_terminal_free = end_load(
+                candidate, candidate.lead, candidate.lead_pool
+            )
+            if not peer_terminal_free:
+                blocker = worst_of(peer_occupants)
                 rejection = _Rejected(
                     reason="sat_capacity",
-                    incumbent_pair=sat_capacity_blocker(candidate),
-                    capacity_constraint=sat_capacity_constraint(candidate),
+                    incumbent_pair=blocker.pair if blocker is not None else None,
+                    capacity_constraint=f"{candidate.peer}.{candidate.peer_pool}",
                 )
-            elif (
-                len(steady_pairs_for_gs(gs_id)) >= steady_limit(gs_id)
-                or len(gs_occupied.get(gs_id, set())) >= gs_terminal_counts[gs_id]
-            ):
-                incumbent = worst_steady_incumbent(gs_id)
+            elif lead_cap_reached or not lead_terminal_free:
+                incumbent = worst_of([p for p in lead_steady if p not in new_pending_teardowns])
                 rejection = _Rejected(
                     reason="gs_capacity",
                     incumbent_pair=incumbent.pair if incumbent else None,
-                    capacity_constraint=f"{gs_id}.terminals",
+                    capacity_constraint=f"{candidate.lead}.{candidate.lead_pool}",
                 )
             else:
                 raise ValueError(
@@ -1331,8 +1368,8 @@ def allocate_links(
         unscheduled.append(
             UnscheduledPair(
                 pair=pair,
-                tenant_id=gs_tenant_ids[gs_id],
-                reference_body=gs_reference_bodies[gs_id],
+                tenant_id=tenant_ids[candidate.lead],
+                reference_body=reference_bodies[candidate.lead],
                 unscheduled_reason=rejection.reason,
                 incumbent_pair=rejection.incumbent_pair,
                 capacity_constraint=rejection.capacity_constraint,
@@ -1341,13 +1378,11 @@ def allocate_links(
 
     # Windows still open for the next tick: those carried from earlier ticks that have not
     # ended, and those this tick's releases opened, on terminals no new link took.
-    held = {
-        (node_id, index)
-        for pair, (gs_idx, sat_idx) in new_associations.items()
-        for node_id, index in zip(
-            _ground_and_satellite_ids(pair, ground_station_ids), (gs_idx, sat_idx), strict=True
-        )
-    }
+    held = set()
+    for pair, (lead_idx, peer_idx) in new_associations.items():
+        candidate = candidate_for(pair)
+        held.add((candidate.lead, lead_idx))
+        held.add((candidate.peer, peer_idx))
     open_windows: ReceiveWindows = {
         key: window
         for key, window in receive_windows.items()

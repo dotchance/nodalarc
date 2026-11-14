@@ -122,7 +122,11 @@ class LinkDown(BaseModel):
     node_b: str
     interface_a: str
     interface_b: str
-    reason: str  # vis_lost, tracking_exceeded, terminal_exhausted, gs_below_horizon, scenario_inject_down, scenario_reconciliation, satellite_loss, seek
+    # Why the link went down: OME's own reason for no longer linking the pair (a physics reason
+    # such as tracking_exceeded, or an allocation reason such as outranked), the reason of the
+    # scenario or operator command that took it down, seek, or not_in_ome_snapshot when OME's
+    # snapshot stopped listing the link before its reason reached the Scheduler.
+    reason: str
     link_type: Literal["isl", "ground"]
     # The contact that closed, on a fixed long-delay link (``link_state.contact_id``).
     contact_id: str | None = None

@@ -121,8 +121,8 @@ export const REASON_REGISTRY: Record<ReasonCode, ReasonRecord> = {
     gate: "line_of_sight",
     family: "expected_no_link",
     severity: "info",
-    label: "Below horizon",
-    sentence: "The satellite is below the local horizon — no line of sight.",
+    label: "Line of sight blocked",
+    sentence: "A body blocks the line of sight between the two nodes.",
     producer: "ome_visibility",
   }),
   elevation_below_min: rec({
@@ -163,22 +163,13 @@ export const REASON_REGISTRY: Record<ReasonCode, ReasonRecord> = {
   }),
 
   // --- Unscheduled (OME allocator) — visible-but-not-scheduled, i.e. eligible_unselected ---
-  gs_capacity: rec({
-    code: "gs_capacity",
+  outranked: rec({
+    code: "outranked",
     gate: "capacity",
     family: "eligible_unselected",
     severity: "info",
-    label: "Ground capacity full",
-    sentence: "All ground-station terminals are in use ({margin}).",
-    producer: "ome_allocator",
-  }),
-  sat_capacity: rec({
-    code: "sat_capacity",
-    gate: "capacity",
-    family: "eligible_unselected",
-    severity: "info",
-    label: "Satellite capacity full",
-    sentence: "The satellite's ground terminals are all in use ({margin}).",
+    label: "Outranked",
+    sentence: "The node that chooses this link gave its terminals to candidates it ranked higher ({margin}).",
     producer: "ome_allocator",
   }),
   hysteresis_hold: rec({

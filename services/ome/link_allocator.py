@@ -1159,9 +1159,9 @@ def allocate_links(
         not choose compares places in the tick's rank order. A node of a pair NodalArc
         chooses compares the nearest-first scores, which is comparing the two ranges.
 
-        A capacity refusal is published as ``gs_capacity`` at a node that chooses and as
-        ``sat_capacity`` at a node that does not. Both names are part of the published reason
-        vocabulary, so they stay until that vocabulary loses its ground and satellite roles.
+        A stated pair refused for room carries ``outranked`` at the node that chooses it (the
+        node's terminals went to pairs it ranked higher) and ``cap_full`` at the node that
+        does not (that node holds its limit of links).
         """
         occupants, steady, cap_reached, terminal_free = end_load(candidate, node_id, pool_name)
         if not cap_reached and terminal_free:
@@ -1202,9 +1202,12 @@ def allocate_links(
             ):
                 blocker = worst_of(relevant)
                 return None, _Rejected(
-                    reason="sat_capacity",
+                    reason="cap_full",
                     incumbent_pair=blocker.pair if blocker is not None else None,
                     capacity_constraint=capacity_text,
+                    node_id=node_id,
+                    cap=binding_limit,
+                    held_pairs=tuple(sorted(relevant)),
                 )
             return incumbent, None
 
@@ -1255,7 +1258,11 @@ def allocate_links(
         else:
             if incumbent is None:
                 return None, _Rejected(
-                    reason="gs_capacity", incumbent_pair=None, capacity_constraint=capacity_text
+                    reason="outranked",
+                    incumbent_pair=None,
+                    capacity_constraint=capacity_text,
+                    node_id=node_id,
+                    held_pairs=tuple(sorted(relevant)),
                 )
             if (
                 candidate.visibility is None
@@ -1647,7 +1654,13 @@ def allocate_links(
         # choice that took its room.
         for node_id, pool_name, mode, incumbent in displaced:
             if mode is None:
-                released(incumbent.pair, "sat_capacity")
+                # What the node holds once the candidate has the displaced link's place.
+                occupants, steady, cap_reached, _free = end_load(candidate, node_id, pool_name)
+                holding = steady if cap_reached else occupants
+                held_after = tuple(
+                    sorted({pair for pair in holding if pair != incumbent.pair} | {candidate.pair})
+                )
+                released(incumbent.pair, "cap_full")
                 remove_association(incumbent.pair)
                 if incumbent.kind == "default":
                     rejected[incumbent.pair] = _Rejected(
@@ -1657,12 +1670,13 @@ def allocate_links(
                         node_id=node_id,
                     )
                 else:
-                    _record_rejection(
-                        rejected,
-                        incumbent.pair,
-                        reason="sat_capacity",
+                    rejected[incumbent.pair] = _Rejected(
+                        reason="cap_full",
                         incumbent_pair=candidate.pair,
                         capacity_constraint=f"{node_id}.{pool_name}",
+                        node_id=node_id,
+                        cap=len(held_after),
+                        held_pairs=held_after,
                     )
 
         if not allocate_new(candidate):
@@ -1758,16 +1772,21 @@ def allocate_links(
             if not peer_terminal_free:
                 blocker = worst_of(peer_occupants)
                 rejection = _Rejected(
-                    reason="sat_capacity",
+                    reason="cap_full",
                     incumbent_pair=blocker.pair if blocker is not None else None,
                     capacity_constraint=f"{candidate.peer}.{candidate.peer_pool}",
+                    node_id=candidate.peer,
+                    cap=len(pool_of(candidate.peer, candidate.peer_pool)),
+                    held_pairs=tuple(sorted(peer_occupants)),
                 )
             elif lead_cap_reached or not lead_terminal_free:
                 incumbent = worst_of([p for p in lead_steady if p not in new_pending_teardowns])
                 rejection = _Rejected(
-                    reason="gs_capacity",
+                    reason="outranked",
                     incumbent_pair=incumbent.pair if incumbent else None,
                     capacity_constraint=f"{candidate.lead}.{candidate.lead_pool}",
+                    node_id=candidate.lead,
+                    held_pairs=tuple(sorted(lead_steady)),
                 )
         if rejection is None:
             raise ValueError(

@@ -28,7 +28,7 @@ function link(a: string, b: string): LinkState {
 const decisions: GroundLinkDecisionSnapshot = {
   // intentionally generic shape; only the fields the classifier reads matter
   decisions: [{ pair: ["gs-1", "sat-rej"], reject_reason: "elevation_below_min" }],
-  unscheduled_pairs: [{ pair: ["sat-elig", "gs-1"], unscheduled_reason: "gs_capacity" }],
+  unscheduled_pairs: [{ pair: ["sat-elig", "gs-1"], unscheduled_reason: "outranked" }],
 } as unknown as GroundLinkDecisionSnapshot;
 
 describe("gsCandidateRelations (single source: globe agrees with the card)", () => {

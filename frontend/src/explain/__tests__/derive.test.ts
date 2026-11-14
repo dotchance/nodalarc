@@ -96,7 +96,7 @@ describe("deriveFamily", () => {
 
   it("eligible_unselected: visible but withheld by capacity", () => {
     expect(
-      deriveFamily(facts({ binding_gate: "capacity", binding_reason_code: "gs_capacity" })),
+      deriveFamily(facts({ binding_gate: "capacity", binding_reason_code: "outranked" })),
     ).toBe("eligible_unselected");
   });
 
@@ -164,8 +164,8 @@ describe("candidateStatus", () => {
   });
   it("withheld (visible) takes the unscheduled reason's registry family", () => {
     expect(
-      candidateStatus({ visible: true, unscheduledReason: "gs_capacity" }),
-    ).toEqual({ family: "eligible_unselected", label: "Ground capacity full" });
+      candidateStatus({ visible: true, unscheduledReason: "outranked" }),
+    ).toEqual({ family: "eligible_unselected", label: "Outranked" });
   });
   it("scheduled (visible, not withheld) reads neutral — actuation is not in the raw decision", () => {
     expect(
@@ -210,7 +210,7 @@ describe("formatMargin", () => {
       actual: null,
       threshold: null,
       rejecting_endpoint: null,
-      reason_code: "gs_capacity",
+      reason_code: "outranked",
       producer: "ome_allocator",
       is_binding: true,
     };

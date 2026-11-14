@@ -491,7 +491,7 @@ def test_unscheduled_pairs_empty_when_all_visible_pairs_allocated():
 
 def test_unscheduled_pair_sat_capacity_exhausted():
     """Two GSes compete for the same sat which has ground_terminal_count=1.
-    The losing GS gets unscheduled_reason='sat_capacity' with the
+    The losing GS gets unscheduled_reason='cap_full' with the
     incumbent pair named."""
     visible = [
         GroundVisibility(
@@ -522,7 +522,7 @@ def test_unscheduled_pair_sat_capacity_exhausted():
     assert len(result.associations) == 1
     assert len(result.unscheduled_pairs) == 1
     rejected = result.unscheduled_pairs[0]
-    assert rejected.unscheduled_reason == "sat_capacity"
+    assert rejected.unscheduled_reason == "cap_full"
     assert rejected.tenant_id == "default"
     assert rejected.reference_body == "earth"
     assert rejected.incumbent_pair is not None  # the winning pair
@@ -1160,7 +1160,7 @@ def test_sat_capacity_rechecked_after_same_tick_release_from_other_partition():
     by a different tenant's incumbent. gs-A then BBM-displaces that incumbent
     to sat-new. The allocator must re-evaluate gs-B against the updated
     capacity view and schedule it; a one-pass allocator leaves it incorrectly
-    unscheduled with stale sat_capacity.
+    unscheduled with stale cap_full.
     """
     old_pair = ("gs-A", "sat-shared")
     new_pair = ("gs-A", "sat-new")
@@ -1247,7 +1247,7 @@ def test_sat_capacity_arbitration_can_displace_lower_rank_same_partition_incumbe
 
     assert result.associations == {challenger: (0, 0)}
     rejected = {u.pair: u for u in result.unscheduled_pairs}
-    assert rejected[incumbent].unscheduled_reason == "sat_capacity"
+    assert rejected[incumbent].unscheduled_reason == "cap_full"
     assert rejected[incumbent].incumbent_pair == challenger
     assert rejected[incumbent].capacity_constraint == "sat-shared.ground_terminals[earth]"
 

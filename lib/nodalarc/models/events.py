@@ -155,7 +155,7 @@ class VisibilityEvent(BaseModel):
       ``"tracking_exceeded"``) when not visible.
     - ``unscheduled_reason``: scheduling attribution. ``None`` when the
       pair is allocated (``scheduled=True``) or invisible. A value of
-      ``GroundUnscheduledReason`` (for example ``"sat_capacity"`` or
+      ``GroundUnscheduledReason`` (for example ``"cap_full"`` or
       ``"hysteresis_hold"``) when the pair is visible but the allocator
       did not schedule it.
 

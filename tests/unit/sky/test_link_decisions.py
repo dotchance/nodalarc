@@ -94,7 +94,7 @@ def _unscheduled_kwargs() -> dict:
         "pair": ("gs-a", "sat-2"),
         "tenant_id": "default",
         "reference_body": "earth",
-        "unscheduled_reason": "gs_capacity",
+        "unscheduled_reason": "hysteresis_hold",
     }
 
 
@@ -239,9 +239,9 @@ class TestUnscheduledPair:
                 **kwargs,
                 incumbent_pair=None,
                 capacity_constraint=None,
-                node_id=None,
+                node_id="gs-a",
                 cap=None,
-                held_pairs=None,
+                held_pairs=(("gs-a", "sat-other"),),
                 range_km=None,
                 incumbent_range_km=None,
             )
@@ -269,8 +269,11 @@ class TestUnscheduledPair:
         build("not_mutual", None, node_id="sat-a")
         with pytest.raises(ValidationError, match="must carry exactly"):
             build("cap_full", None, node_id="sat-a")
+        build("outranked", None, node_id="gs-a", held_pairs=(("gs-a", "sat-b"),))
         with pytest.raises(ValidationError, match="must carry exactly"):
-            build("gs_capacity", None, node_id="sat-a")
+            build("outranked", None, node_id="gs-a")
+        with pytest.raises(ValidationError, match="must carry exactly"):
+            build("hysteresis_hold", None, node_id="sat-a")
         with pytest.raises(ValidationError, match="must name the held link"):
             build("not_strictly_nearer", None, range_km=6.0, incumbent_range_km=5.0)
 
@@ -350,12 +353,12 @@ class TestLinkDecisionSnapshot:
             pair=("gs-a", "sat-1"),
             tenant_id="default",
             reference_body="earth",
-            unscheduled_reason="gs_capacity",
+            unscheduled_reason="outranked",
             incumbent_pair=None,
             capacity_constraint=None,
-            node_id=None,
+            node_id="gs-a",
             cap=None,
-            held_pairs=None,
+            held_pairs=(("gs-a", "sat-other"),),
             range_km=None,
             incumbent_range_km=None,
         )

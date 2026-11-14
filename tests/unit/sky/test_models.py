@@ -301,13 +301,13 @@ class TestVisibilityEvent:
             )
 
     def test_isl_event_rejects_ground_only_unscheduled_reason(self):
-        """Ground allocator reasons (gs_capacity, sat_capacity, etc.)
+        """Ground allocator reasons (outranked, cap_full, etc.)
         cannot describe an ISL rejection."""
         from pydantic import ValidationError
 
         for ground_only in (
-            "gs_capacity",
-            "sat_capacity",
+            "outranked",
+            "cap_full",
             "hysteresis_hold",
             "incumbent_held",
             "bbm_no_spare",
@@ -373,7 +373,7 @@ class TestLinkDown:
                 node_b="sat-P00S01",
                 interface_a="isl0",
                 interface_b="isl1",
-                reason="vis_lost",
+                reason="los_blocked",
             )
 
 

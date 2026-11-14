@@ -72,8 +72,7 @@ _REJECT_GATE: dict[GroundVisibilityRejectReason, FunnelGate] = {
 }
 
 _UNSCHEDULED_GATE: dict[GroundUnscheduledReason, FunnelGate] = {
-    "gs_capacity": "capacity",
-    "sat_capacity": "capacity",
+    "outranked": "capacity",
     "bbm_no_spare": "capacity",
     "hysteresis_hold": "handover_policy",
     "incumbent_held": "handover_policy",

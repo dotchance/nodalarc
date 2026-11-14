@@ -101,7 +101,7 @@ def session_db(tmp_path: Path) -> str:
             link_type="isl",
             interface_a="isl0",
             interface_b="isl0",
-            reason="vis_lost",
+            reason="los_blocked",
         ),
         session_id="run-test",
     )

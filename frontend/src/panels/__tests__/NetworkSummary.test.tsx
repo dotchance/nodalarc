@@ -101,7 +101,7 @@ describe("NetworkSummary", () => {
           node_a: "earth-relay",
           node_b: "mars-relay",
           contact_id: "0@2027-02-19T00:00:00.000000Z",
-          reason: "vis_lost",
+          reason: "los_blocked",
           sim_time: "2027-02-19T06:00:00Z",
           wall_time: "2027-02-19T00:20:00Z",
           ends: [
@@ -123,7 +123,7 @@ describe("NetworkSummary", () => {
           node_a: "sat-1",
           node_b: "sat-2",
           contact_id: null,
-          reason: "vis_lost",
+          reason: "los_blocked",
           sim_time: "2027-02-19T06:01:00Z",
           wall_time: "2027-02-19T00:21:00Z",
           ends: [

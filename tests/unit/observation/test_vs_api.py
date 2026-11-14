@@ -359,7 +359,7 @@ def _make_link_down_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides)
         "node_b": node_b,
         "interface_a": "isl0",
         "interface_b": "isl1",
-        "reason": "vis_lost",
+        "reason": "los_blocked",
         "sim_time": datetime.now(UTC).isoformat(),
         "wall_time": datetime.now(UTC).isoformat(),
         "link_type": "isl",
@@ -1959,12 +1959,12 @@ class TestDecisionTimelineEndpoint:
                 "pair": ["gs-den", "sat-a"],
                 "tenant_id": "default",
                 "reference_body": "earth",
-                "unscheduled_reason": "gs_capacity",
+                "unscheduled_reason": "outranked",
                 "incumbent_pair": None,
                 "capacity_constraint": "gs-den:terminals",
-                "node_id": None,
+                "node_id": "gs-den",
                 "cap": None,
-                "held_pairs": None,
+                "held_pairs": [["gs-den", "sat-other"]],
                 "range_km": None,
                 "incumbent_range_km": None,
             }
@@ -1988,7 +1988,7 @@ class TestDecisionTimelineEndpoint:
             "scheduled",
             "eligible_unselected",
         ]
-        assert body["samples"][1]["reason_code"] == "gs_capacity"
+        assert body["samples"][1]["reason_code"] == "outranked"
         assert {c["state"]: c["count"] for c in body["reason_counts"]} == {
             "scheduled": 1,
             "eligible_unselected": 1,
@@ -2008,7 +2008,7 @@ class TestDecisionTimelineEndpoint:
         assert body["sample_count"] == 1
         assert body["samples"][0]["snapshot_seq"] == 43
         assert body["reason_counts"] == [
-            {"state": "eligible_unselected", "reason_code": "gs_capacity", "count": 1}
+            {"state": "eligible_unselected", "reason_code": "outranked", "count": 1}
         ]
 
     def test_timeline_resets_on_epoch_change(self, monkeypatch):

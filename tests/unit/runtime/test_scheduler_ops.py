@@ -547,3 +547,52 @@ def test_a_station_left_holding_half_of_a_link_starts_unproven() -> None:
         STATION: "kernel_dirty",
         OTHER_STATION: "kernel_dirty",
     }
+
+
+# ----- A link goes down for OME's own reason -------------------------------------------------------
+
+
+def _ome_states(visible: bool, scheduled: bool, reject: str, unscheduled: str | None):
+    from nodalarc.models.events import VisibilityEvent
+
+    return VisibilityEvent(
+        sim_time=EMITTED,
+        node_a=ISL[0],
+        node_b=ISL[1],
+        visible=visible,
+        scheduled=scheduled,
+        range_km=578.0,
+        latency_a_to_b_ms=1.9,
+        latency_b_to_a_ms=1.9,
+        elevation_deg=None,
+        terminal_type="optical",
+        link_type="isl",
+        visibility_reject_reason=reject,
+        unscheduled_reason=unscheduled,
+    )
+
+
+def test_a_link_ome_stops_scheduling_goes_down_for_the_reason_ome_stated() -> None:
+    """The Scheduler holds a link. The reason its LinkDown will carry is the one OME stated for
+    the pair, never a word of the Scheduler's own. With no statement from OME (a restart, or a
+    snapshot that outran its event) it says so."""
+    scheduler = _successor(_RetainedLinkStream({}), SANDBOXES)
+    scheduler._actual_links[ISL] = _proven("isl0", "isl1", (1.0, 1.0))
+
+    assert scheduler._link_down_reason(ISL) == "not_in_ome_snapshot"
+
+    # The terminals cannot track the pair: range and line of sight still allow the link.
+    asyncio.run(
+        scheduler._handle_visibility_event(_ome_states(False, False, "tracking_exceeded", None))
+    )
+    assert scheduler._link_down_reason(ISL) == "tracking_exceeded"
+
+    # In view again with no terminal free: the allocation reason replaces the physics one.
+    asyncio.run(
+        scheduler._handle_visibility_event(_ome_states(True, False, "ok", "isl_terminal_capacity"))
+    )
+    assert scheduler._link_down_reason(ISL) == "isl_terminal_capacity"
+
+    # OME links the pair again: nothing is kept for a later loss.
+    asyncio.run(scheduler._handle_visibility_event(_ome_states(True, True, "ok", None)))
+    assert scheduler._link_down_reason(ISL) == "not_in_ome_snapshot"

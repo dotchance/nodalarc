@@ -6,7 +6,11 @@ import { linkEventLabel } from "../linkEvents";
 
 describe("link-event registry (single source for link-lifecycle reasons)", () => {
   it("linkEventLabel resolves via the registry and falls back to the raw code, never invents text", () => {
-    expect(linkEventLabel("vis_lost")).toBe("Out of range");
+    expect(linkEventLabel("not_in_ome_snapshot")).toBe("No longer scheduled");
+    // A link OME stopped scheduling carries OME's reason, labelled by the one reason table.
+    expect(linkEventLabel("tracking_exceeded")).toBe("Too fast to track");
+    expect(linkEventLabel("range_exceeded")).toBe("Out of range");
+    expect(linkEventLabel("outranked")).toBe("Outranked");
     expect(linkEventLabel("some_future_code")).toBe("some_future_code");
     expect(linkEventLabel(null)).toBe("");
   });

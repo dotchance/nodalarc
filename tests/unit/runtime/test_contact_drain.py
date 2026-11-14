@@ -45,7 +45,7 @@ def _trunk(*, epoch: int = 0, opened: datetime = OPENED, a_to_b_ms: float = A_TO
 def _draining(*, stopped_mono: float = 100.0):
     info = _trunk()
     info.drain = start_drain(
-        TRUNK, info, stopped_mono=stopped_mono, stopped_wall=OPENED, reason="vis_lost"
+        TRUNK, info, stopped_mono=stopped_mono, stopped_wall=OPENED, reason="los_blocked"
     )
     return info
 
@@ -241,7 +241,7 @@ def test_a_ground_pass_on_other_terminals_opens_beside_the_draining_one():
     later = OPENED + timedelta(minutes=30)
     draining = _pass("term0", "gnd0", opened=OPENED)
     draining.drain = start_drain(
-        GROUND, draining, stopped_mono=100.0, stopped_wall=OPENED, reason="vis_lost"
+        GROUND, draining, stopped_mono=100.0, stopped_wall=OPENED, reason="los_blocked"
     )
     elsewhere = plan_long_delay_contacts(
         {GROUND: draining},

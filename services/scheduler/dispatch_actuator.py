@@ -963,6 +963,7 @@ async def send_batch_down(
     sim_iso: str,
     sim_time: datetime,
     down_reasons: Mapping[LinkPair, str],
+    link_down_reason: Callable[[LinkPair], str],
     ground_station_ids: Collection[str],
     session_id: str,
     wiring_generation: str,
@@ -1034,7 +1035,7 @@ async def send_batch_down(
             pair=pair,
             info=info,
             sim_time=sim_time,
-            reason=down_reasons.get(pair, "vis_lost"),
+            reason=down_reasons.get(pair) or link_down_reason(pair),
             losses=end_loss_records(
                 result,
                 pair=pair,

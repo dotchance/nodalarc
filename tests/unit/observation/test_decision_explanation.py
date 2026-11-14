@@ -189,12 +189,12 @@ def test_viable_but_withheld_dominates_and_is_flagged():
                 pair=(GS, "sat-P00S04"),
                 tenant_id="default",
                 reference_body="earth",
-                unscheduled_reason="gs_capacity",
+                unscheduled_reason="outranked",
                 incumbent_pair=None,
                 capacity_constraint="gs-denver.terminals",
-                node_id=None,
+                node_id=GS,
                 cap=None,
-                held_pairs=None,
+                held_pairs=((GS, "sat-other"),),
                 range_km=None,
                 incumbent_range_km=None,
             )
@@ -206,7 +206,7 @@ def test_viable_but_withheld_dominates_and_is_flagged():
     assert facts is not None
     assert facts.best_candidate.viable_withheld is True
     assert facts.binding_gate == "capacity"
-    assert facts.binding_reason_code == "gs_capacity"
+    assert facts.binding_reason_code == "outranked"
     # Physics gates pass; the binding stop is capacity, in the allocator layer.
     assert _gate(facts, "elevation_mask").state == "pass"
     assert _gate(facts, "capacity").state == "fail"
@@ -404,12 +404,12 @@ def test_pair_inspector_composes_the_requested_pair_not_the_auto_focal():
                 pair=(GS, "sat-vis"),
                 tenant_id="default",
                 reference_body="earth",
-                unscheduled_reason="gs_capacity",
+                unscheduled_reason="outranked",
                 incumbent_pair=None,
                 capacity_constraint="gs-denver.terminals",
-                node_id=None,
+                node_id=GS,
                 cap=None,
-                held_pairs=None,
+                held_pairs=((GS, "sat-other"),),
                 range_km=None,
                 incumbent_range_km=None,
             )

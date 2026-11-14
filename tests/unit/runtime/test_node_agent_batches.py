@@ -500,7 +500,7 @@ def test_a_long_delay_ground_pass_stages_each_end_with_its_own_contact():
         info,
         stopped_mono=0.0,
         stopped_wall=datetime(2027, 2, 19, tzinfo=UTC),
-        reason="vis_lost",
+        reason="los_blocked",
     )
     info.drain = replace(
         drain,

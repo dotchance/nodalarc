@@ -80,8 +80,7 @@ profiles impose the same limiting value.
 
 
 type GroundUnscheduledReason = Literal[
-    "gs_capacity",
-    "sat_capacity",
+    "outranked",
     "hysteresis_hold",
     "incumbent_held",
     "bbm_no_spare",
@@ -212,12 +211,12 @@ type GroundTerminalReleaseCause = Literal[
     "teardown_completed",
     "successor_aborted",
     "failed_successor",
-    "sat_capacity",
+    "cap_full",
     "not_mutual",
 ]
-"""Why the allocator released a ground association: the BBM handover, the incumbent's lost
-visibility, an MBB teardown or abort, displacement by a candidate that needed the satellite's
-terminal, or a link its two stating nodes no longer both take."""
+"""Why the allocator released an association: the BBM handover, the incumbent's lost
+visibility, an MBB teardown or abort, a node at its limit of links giving the link's place to a
+pair ranked before it, or a link its two stating nodes no longer both take."""
 
 
 class GroundAllocationEvent(BaseModel):
@@ -492,10 +491,11 @@ class GroundVisibilityDecisionWire(BaseModel):
         return self
 
 
-# The fields each reason of a pair with no single stated chooser carries beyond `incumbent_pair`
-# and `capacity_constraint`. A reason that is not listed carries none of them.
+# The fields each reason carries beyond `incumbent_pair` and `capacity_constraint`. A reason
+# that is not listed carries none of them.
 _UNSCHEDULED_REASON_NAMES: dict[str, frozenset[str]] = {
     "cap_full": frozenset({"node_id", "cap", "held_pairs"}),
+    "outranked": frozenset({"node_id", "held_pairs"}),
     "taken_by_stated_choice": frozenset({"node_id"}),
     "not_strictly_nearer": frozenset({"range_km", "incumbent_range_km"}),
     "not_mutual": frozenset({"node_id"}),
@@ -516,12 +516,12 @@ class UnscheduledPair(BaseModel):
     `incumbent_pair` is populated when this pair was rejected because
     a specific incumbent held the slot (`hysteresis_hold` or
     `incumbent_held`). `capacity_constraint` is populated when the
-    reason names a specific resource that ran out (e.g., the sat
-    ground-terminal id).
+    reason names a specific resource that ran out (a node's terminal pool).
 
-    The last five fields state what the reasons of a pair with no single stated
-    chooser name. `cap_full` names the node, the limit it holds (its cap on the
-    rule, or the size of its pool) and the links it holds.
+    The last five fields state what a reason names. `cap_full` names the node
+    that holds its limit of links, the limit (its cap on the rule, or the size
+    of its pool) and the links it holds. `outranked` names the node that chooses
+    the pair and the links it holds: the candidates it ranked higher.
     `taken_by_stated_choice` names the node, with the stated-chosen link in
     `incumbent_pair`. `not_strictly_nearer` names both ranges, with the held
     link in `incumbent_pair`. `not_mutual` names the node that did not take

@@ -9,10 +9,12 @@
  * GS<->sat pair was scheduled. But it shares the SAME 6-family vocabulary (the only family law),
  * so the panels render link reasons through this registry — never the old ad-hoc translate.ts map.
  *
- * The Scheduler's link reasons stay an open string on the wire, so this registry is keyed by
- * string and a code it does not list shows as the raw code.
+ * A link OME stopped scheduling goes down with OME's own reason for the pair, so a code this
+ * registry does not list takes its label from REASON_REGISTRY. The Scheduler's link reasons stay
+ * an open string on the wire; a code neither registry lists shows as the raw code.
  */
 import type { Family } from "./families";
+import { REASON_REGISTRY } from "./reasons";
 
 export interface LinkEventReasonRecord {
   code: string;
@@ -54,12 +56,32 @@ export const LINK_EVENT_REGISTRY: Record<string, LinkEventReasonRecord> = {
     label: "Reconciled",
     sentence: "A scenario ended — link state reconciled.",
   }),
-  // --- Link down (calm / geometric) ---
-  vis_lost: rec({
-    code: "vis_lost",
+  // --- Link down ---
+  // A link OME stopped scheduling carries OME's own reason (REASON_REGISTRY). These are the
+  // reasons the Scheduler states itself.
+  not_in_ome_snapshot: rec({
+    code: "not_in_ome_snapshot",
     family: "expected_no_link",
-    label: "Out of range",
-    sentence: "Went out of range — link down.",
+    label: "No longer scheduled",
+    sentence: "OME's snapshot no longer listed the link, and OME's reason had not reached the Scheduler.",
+  }),
+  polar_seam: rec({
+    code: "polar_seam",
+    family: "expected_no_link",
+    label: "Polar seam",
+    sentence: "The link crosses the polar seam, where the session keeps it down.",
+  }),
+  isl_terminal_capacity: rec({
+    code: "isl_terminal_capacity",
+    family: "eligible_unselected",
+    label: "No free terminal",
+    sentence: "Both nodes were in view of each other and a node had no terminal free for the link.",
+  }),
+  seek: rec({
+    code: "seek",
+    family: "expected_no_link",
+    label: "Left at a seek",
+    sentence: "The session moved to another time, where this link is not scheduled.",
   }),
   gs_below_horizon: rec({
     code: "gs_below_horizon",
@@ -111,5 +133,6 @@ export const LINK_EVENT_REGISTRY: Record<string, LinkEventReasonRecord> = {
  *  falls back to the raw code (honest) rather than a fabricated phrase. */
 export function linkEventLabel(code: string | null | undefined): string {
   if (!code) return "";
-  return LINK_EVENT_REGISTRY[code]?.label ?? code;
+  const omeReasons: Record<string, { label: string } | undefined> = REASON_REGISTRY;
+  return LINK_EVENT_REGISTRY[code]?.label ?? omeReasons[code]?.label ?? code;
 }

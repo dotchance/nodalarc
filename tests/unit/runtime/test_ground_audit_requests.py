@@ -139,7 +139,7 @@ def test_a_draining_long_delay_pass_is_proven_at_the_ends_still_draining_with_ad
         info,
         stopped_mono=100.0,
         stopped_wall=datetime(2026, 11, 6, 2, 0, tzinfo=UTC),
-        reason="vis_lost",
+        reason="los_blocked",
     )
     # The relay's end has closed; only the station still drains.
     info.drain = replace(

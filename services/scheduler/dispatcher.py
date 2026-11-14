@@ -197,7 +197,8 @@ class DispatchIntent:
     Fields:
         desired: effective desired topology (raw desired minus overrides)
         down_reasons: reason per override-caused removal, captured at
-            enqueue time. Actuator uses down_reasons.get(pair, "vis_lost").
+            enqueue time. A removal OME caused carries OME's own reason, which the
+            Dispatcher keeps per pair (``_link_down_reason``).
         forced_bbm_pairs: pairs that must use BBM regardless of spare
             capacity. For ground links, forces the entire GS segment to
             BBM if any pair in the segment is forced. For ISLs, per-pair.
@@ -445,6 +446,11 @@ class Dispatcher:
         #     (visible: bool, scheduled: bool, sched_state: SchedulingState).
         self._ome_view: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] = {}
 
+        # Why OME does not link each pair this Scheduler still holds a link for: OME's own
+        # stated reason, kept from the message that carried it until the link's LinkDown is
+        # published. Bounded by the links held.
+        self._leaving_reasons: dict[tuple[str, str], str] = {}
+
         # Actuator state: what IS active (confirmed by Node Agent).
         # Written ONLY by the dispatch worker after Node Agent ACK.
         self._actual_links: dict[tuple[str, str], ActiveLinkInfo] = {}
@@ -622,6 +628,31 @@ class Dispatcher:
         interfaces the resolver fixed does not: it takes no terminal another link could use."""
         return pair not in self._interface_map
 
+    def _note_ome_statement(
+        self, pair: tuple[str, str], *, linked: bool, reason: str | None, keep_existing: bool
+    ) -> None:
+        """Keep OME's stated reason for not linking a pair while this Scheduler holds a link
+        for it. A VisibilityEvent states the pair's change and replaces what is kept. A
+        decision snapshot states every pair at once and fills in only what no event stated."""
+        if linked or reason is None:
+            self._leaving_reasons.pop(pair, None)
+        elif pair in self._actual_links or pair in self._desired_links:
+            if keep_existing:
+                self._leaving_reasons.setdefault(pair, reason)
+            else:
+                self._leaving_reasons[pair] = reason
+
+    def _link_down_reason(self, pair: tuple[str, str]) -> str:
+        """Why a link OME no longer wants goes down: OME's stated reason for the pair, or
+        ``seek`` for a link the session left behind at a seek.
+
+        ``not_in_ome_snapshot`` says OME's snapshot stopped listing the link before OME's
+        reason for it reached this Scheduler. That happens after a Scheduler restart and
+        when a snapshot outruns the event of its own tick. Rejected alternative: a fixed
+        word such as "vis_lost", which stated a cause OME never gave.
+        """
+        return self._leaving_reasons.get(pair, "not_in_ome_snapshot")
+
     def _choosing_nodes(self, pair: tuple[str, str]) -> tuple[str, ...]:
         return choosing_nodes(
             pair, fixed_pairs=self._interface_map, stating_nodes=self._handover_modes
@@ -658,6 +689,7 @@ class Dispatcher:
         self._ome_view.clear()
         self._teardown_pairs.clear()
         self._latest_decision_snapshot = None
+        self._leaving_reasons.clear()
         self._pending_visibility_events.clear()
         self._last_visibility_sim_time = None
         self._last_snapshot_sim_time = None
@@ -708,6 +740,12 @@ class Dispatcher:
             log.debug("Seek suspended — dropping VisibilityEvent for %s/%s", vis.node_a, vis.node_b)
             return
 
+        self._note_ome_statement(
+            (vis.node_a, vis.node_b),
+            linked=vis.visible and vis.scheduled,
+            reason=vis.unscheduled_reason if vis.visible else vis.visibility_reject_reason,
+            keep_existing=False,
+        )
         snap_sim = vis.sim_time
 
         # Flush BEFORE appending the new event. When an event from a
@@ -1072,6 +1110,24 @@ class Dispatcher:
                 return
 
             self._latest_decision_snapshot = decision_snapshot
+            # A snapshot older than the newest event states nothing the events have not.
+            newest_event = self._last_visibility_sim_time
+            if newest_event is None or decision_snapshot.sim_time >= newest_event:
+                for decision in decision_snapshot.decisions:
+                    if not decision.visible:
+                        self._note_ome_statement(
+                            decision.pair,
+                            linked=False,
+                            reason=decision.reject_reason,
+                            keep_existing=True,
+                        )
+                for unscheduled in decision_snapshot.unscheduled_pairs:
+                    self._note_ome_statement(
+                        unscheduled.pair,
+                        linked=False,
+                        reason=unscheduled.unscheduled_reason,
+                        keep_existing=True,
+                    )
             log.debug(
                 "GroundLinkDecisionSnapshot seq=%d epoch_id=%d: %d decisions, %d unscheduled",
                 decision_snapshot.snapshot_seq,
@@ -2810,6 +2866,11 @@ class Dispatcher:
         # stated truth at snapshot time.
         self._desired_links = desired
         self._ome_view = new_ome_view
+        self._leaving_reasons = {
+            pair: reason
+            for pair, reason in self._leaving_reasons.items()
+            if pair in self._actual_links
+        }
 
         isl = sum(1 for info in desired.values() if info.link_type == "isl")
         gs = sum(1 for info in desired.values() if info.link_type == "ground")
@@ -3918,6 +3979,7 @@ class Dispatcher:
             sim_iso=sim_iso,
             sim_time=sim_time,
             down_reasons=down_reasons,
+            link_down_reason=self._link_down_reason,
             ground_station_ids=self._ground_station_ids,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
@@ -3950,6 +4012,7 @@ class Dispatcher:
             sim_iso=sim_iso,
             sim_time=sim_time,
             down_reasons={},
+            link_down_reason=self._link_down_reason,
             ground_station_ids=self._ground_station_ids,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
@@ -4048,7 +4111,7 @@ class Dispatcher:
                     info,
                     stopped_mono=stopped_mono,
                     stopped_wall=stopped_wall,
-                    reason="vis_lost",
+                    reason=self._link_down_reason(pair),
                 )
                 log.info(
                     "Long-delay contact %s of %s<->%s stopped admitting; ends close at %s",
@@ -4136,7 +4199,9 @@ class Dispatcher:
                     pair=pair,
                     info=old,
                     sim_time=sim_time,
-                    reason=old.drain.reason if old.drain is not None else "vis_lost",
+                    reason=(
+                        old.drain.reason if old.drain is not None else self._link_down_reason(pair)
+                    ),
                     losses=closed_before + reopened,
                 )
             # The barrier: OPEN goes only to contacts whose two ends both proved PREPARE.
@@ -4235,7 +4300,7 @@ class Dispatcher:
                     reason = info.drain.reason
                 else:
                     losses = records_now
-                    reason = "vis_lost"
+                    reason = self._link_down_reason(pair)
                 if cause == "seek":
                     reason = "seek"
                 elif cause == "scenario":
@@ -4721,6 +4786,10 @@ class Dispatcher:
         if buffered_snapshot:
             desired = self._build_desired_from_snapshot(buffered_snapshot)
             if desired is not None:
+                # A link the new epoch does not want was left behind by the seek.
+                for pair in self._actual_links:
+                    if pair not in desired:
+                        self._leaving_reasons[pair] = "seek"
                 await self._assert_authority_subset_fail_loud("seek-resume-snapshot")
                 intent = self._build_dispatch_intent(
                     sim_time=self._current_sim_time,

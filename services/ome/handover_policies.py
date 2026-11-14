@@ -95,19 +95,50 @@ def _none(
     )
 
 
+def _hysteresis_hold_score(
+    incumbent_score: float,
+    incumbent_visibility: GroundVisibility,
+    min_elevation_deg: float,
+    params: Mapping[str, Any],
+) -> float:
+    hysteresis = HysteresisParameters(**dict(params))
+    discount = compute_effective_hysteresis_discount(
+        elevation_deg=incumbent_visibility.elevation_deg,
+        min_elevation_deg=min_elevation_deg,
+        params=hysteresis,
+    )
+    return incumbent_score * discount
+
+
+def incumbent_hold_score(
+    *,
+    policy: HandoverPolicySpec,
+    incumbent_score: float,
+    incumbent_visibility: GroundVisibility,
+    min_elevation_deg: float,
+) -> float:
+    """The score a held link is compared at under a stated handover policy: its own score
+    under ``none``, and its score raised by the hysteresis discount under ``hysteresis``."""
+    if policy.name == "none":
+        if policy.params:
+            raise ValueError("handover_policy.name='none' requires empty params")
+        return incumbent_score
+    if policy.name == "hysteresis":
+        return _hysteresis_hold_score(
+            incumbent_score, incumbent_visibility, min_elevation_deg, policy.params
+        )
+    raise ValueError(f"Unknown handover policy: {policy.name!r}")
+
+
 def _hysteresis(
     incumbent_score: float,
     challenger_score: float,
     context: HandoverContext,
     params: Mapping[str, Any],
 ) -> HandoverDecision:
-    hysteresis = HysteresisParameters(**dict(params))
-    discount = compute_effective_hysteresis_discount(
-        elevation_deg=context.incumbent_visibility.elevation_deg,
-        min_elevation_deg=context.min_elevation_deg,
-        params=hysteresis,
+    hold_score = _hysteresis_hold_score(
+        incumbent_score, context.incumbent_visibility, context.min_elevation_deg, params
     )
-    hold_score = incumbent_score * discount
     if strictly_higher(challenger_score, hold_score):
         return HandoverDecision(
             action="displace",

@@ -93,6 +93,7 @@ type GroundUnscheduledReason = Literal[
     "cap_full",
     "taken_by_stated_choice",
     "not_strictly_nearer",
+    "not_mutual",
 ]
 """Allocation reason a visible GROUND pair is not currently scheduled.
 
@@ -100,6 +101,8 @@ The last three belong to a pair whose nodes state no scheduling, which NodalArc 
 nearest first. `cap_full`: a node holds its cap and has no link the pair may take.
 `taken_by_stated_choice`: a link chosen by a stated policy holds the room.
 `not_strictly_nearer`: the node's farthest link of that kind is at least as near.
+`not_mutual` belongs to a pair whose nodes both state scheduling: one of them did not take
+the pair among its highest-ranked candidates.
 
 The ISL allocator's `isl_terminal_capacity` is intentionally absent
 from this enum. `UnscheduledPair` lives in the ground-decision
@@ -210,10 +213,11 @@ type GroundTerminalReleaseCause = Literal[
     "successor_aborted",
     "failed_successor",
     "sat_capacity",
+    "not_mutual",
 ]
 """Why the allocator released a ground association: the BBM handover, the incumbent's lost
-visibility, an MBB teardown or abort, or displacement by a candidate that needed the satellite's
-terminal."""
+visibility, an MBB teardown or abort, displacement by a candidate that needed the satellite's
+terminal, or a link its two stating nodes no longer both take."""
 
 
 class GroundAllocationEvent(BaseModel):
@@ -494,6 +498,7 @@ _UNSCHEDULED_REASON_NAMES: dict[str, frozenset[str]] = {
     "cap_full": frozenset({"node_id", "cap", "held_pairs"}),
     "taken_by_stated_choice": frozenset({"node_id"}),
     "not_strictly_nearer": frozenset({"range_km", "incumbent_range_km"}),
+    "not_mutual": frozenset({"node_id"}),
 }
 
 
@@ -518,7 +523,8 @@ class UnscheduledPair(BaseModel):
     chooser name. `cap_full` names the node, its cap and the links it holds.
     `taken_by_stated_choice` names the node, with the stated-chosen link in
     `incumbent_pair`. `not_strictly_nearer` names both ranges, with the held
-    link in `incumbent_pair`. Every other reason leaves all five empty.
+    link in `incumbent_pair`. `not_mutual` names the node that did not take
+    the pair. Every other reason leaves all five empty.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

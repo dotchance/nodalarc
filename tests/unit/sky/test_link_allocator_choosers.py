@@ -18,7 +18,11 @@ import itertools
 import random
 
 import pytest
-from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
+from nodalarc.models.ground_policy import (
+    HandoverPolicySpec,
+    HysteresisParameters,
+    SelectionPolicySpec,
+)
 from ome.link_allocator import LinkAllocationResult, UsablePair, allocate_links
 from ome.types import MbbTeardown
 from ome.visibility import GroundVisibility
@@ -159,6 +163,7 @@ def _allocate(
     tenants: dict[str, str] | None = None,
     priorities: dict[str, int] | None = None,
     successor_abort_policy: str = "hard_release",
+    handover_policies: dict[str, HandoverPolicySpec] | None = None,
 ) -> LinkAllocationResult:
     modes = handover_modes or dict.fromkeys(stating, "bbm")
     return allocate_links(
@@ -173,7 +178,8 @@ def _allocate(
             node: SelectionPolicySpec(name="highest-elevation", params={}) for node in stating
         },
         min_elevations=dict.fromkeys(stating, 25.0),
-        handover_policies={node: HandoverPolicySpec(name="none", params={}) for node in stating},
+        handover_policies=handover_policies
+        or {node: HandoverPolicySpec(name="none", params={}) for node in stating},
         handover_modes=modes,
         mbb_overlap_ticks=mbb_overlap_ticks or dict.fromkeys(stating, 0),
         mbb_reserve=mbb_reserve or dict.fromkeys(stating, 0),
@@ -586,3 +592,157 @@ def test_n_plus_a_stated_reserve_above_the_pool_is_refused():
             mbb_reserve={"s": 1},
             mbb_overlap_ticks={"s": 3},
         )
+
+
+# ----- Pairs both of whose nodes state scheduling ---------------------------------------------
+
+
+def mutual_choice(
+    usable: dict[Pair, float], cap: dict[str, int], score: dict[str, dict[Pair, float]]
+) -> set[Pair]:
+    """Both nodes state scheduling: each node takes its top-cap usable candidates by its own
+    score, independently, with ties broken by node pair; a pair links only when both took it."""
+    picks: dict[str, set[Pair]] = {}
+    for node in {node for pair in usable for node in pair}:
+        mine = sorted((p for p in usable if node in p), key=lambda p: (-score[node][p], p))
+        picks[node] = set(mine[: cap[node]])
+    return {p for p in usable if p in picks[p[0]] and p in picks[p[1]]}
+
+
+def _usable_by_both(
+    usable: dict[Pair, float], score: dict[str, dict[Pair, float]]
+) -> list[UsablePair]:
+    """Usable pairs whose two nodes both state scheduling: each node has its own view."""
+    return [
+        UsablePair(
+            pair=pair,
+            rule_id=RULE,
+            pool_a=POOL,
+            pool_b=POOL,
+            range_km=range_km,
+            view_a=_view(pair[1], score[pair[0]][pair]),
+            view_b=_view(pair[0], score[pair[1]][pair]),
+        )
+        for pair, range_km in usable.items()
+    ]
+
+
+def test_a_pair_two_nodes_choose_links_only_when_both_take_it():
+    """Every node states scheduling. With no terminal to spare and no hysteresis, the links
+    equal the reference at every tick of moving scores, ties included."""
+    rnd = random.Random(20261116)
+    ticks = 0
+    for _ in range(400):
+        nodes, cap, usable = _random_case(rnd)
+        cap = {node: max(1, count) for node, count in cap.items()}
+        stating = frozenset(nodes)
+        pools = _pools_for_caps(cap)
+        previous: LinkAllocationResult | None = None
+        for step in range(6):
+            score = {
+                node: {pair: round(rnd.uniform(26.0, 88.0), 0) for pair in usable if node in pair}
+                for node in nodes
+            }
+            result = _allocate(
+                _usable_by_both(usable, score),
+                pools=pools,
+                stating=stating,
+                previous=previous,
+                step=step,
+            )
+            assert set(result.associations) == mutual_choice(usable, cap, score), (
+                usable,
+                cap,
+                score,
+            )
+            for item in result.unscheduled_pairs:
+                assert item.unscheduled_reason in {"not_mutual", "replaced_by_successor"}, item
+                if item.unscheduled_reason == "not_mutual":
+                    assert item.node_id in item.pair
+            ticks += 1
+            previous = result
+            usable = {pair: rng for pair, rng in usable.items() if rnd.random() < 0.95}
+    assert ticks == 2400
+
+
+def _hysteresis() -> HandoverPolicySpec:
+    return HandoverPolicySpec(
+        name="hysteresis",
+        params=HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0).model_dump(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("policy_of_a", "expected_links", "declined_pair"),
+    [
+        ("hysteresis", {("a", "b")}, ("a", "c")),
+        ("none", {("a", "c")}, None),
+    ],
+)
+def test_a_held_link_ranks_by_its_nodes_handover_policy(policy_of_a, expected_links, declined_pair):
+    """Node a holds its link to b, which it scores 40. A new pair to c scores 44 at a. Under
+    hysteresis a compares the held link at 40 x 1.15 = 46 and keeps it; under none it compares
+    it at 40 and takes c."""
+    stating = frozenset({"a", "b", "c"})
+    pools = _pools_for_caps({"a": 1, "b": 1, "c": 1})
+    policies = {node: HandoverPolicySpec(name="none", params={}) for node in stating}
+    if policy_of_a == "hysteresis":
+        policies["a"] = _hysteresis()
+    score = {
+        "a": {("a", "b"): 40.0, ("a", "c"): 44.0},
+        "b": {("a", "b"): 40.0},
+        "c": {("a", "c"): 50.0},
+    }
+    first = _allocate(
+        _usable_by_both({("a", "b"): 5.0}, score),
+        pools=pools,
+        stating=stating,
+        handover_policies=policies,
+    )
+    assert set(first.associations) == {("a", "b")}
+
+    second = _allocate(
+        _usable_by_both({("a", "b"): 5.0, ("a", "c"): 5.0}, score),
+        pools=pools,
+        stating=stating,
+        handover_policies=policies,
+        previous=first,
+        step=1,
+    )
+
+    assert set(second.associations) == expected_links
+    if declined_pair is not None:
+        declined = _unscheduled(second)[declined_pair]
+        assert declined.unscheduled_reason == "not_mutual"
+        assert declined.node_id == "a"
+
+
+def test_one_cap_shared_by_pairs_chosen_alone_and_pairs_chosen_together_is_refused():
+    """Node s chooses its pair to x alone, because x states nothing, and its pair to t together
+    with t. Both draw on one pool under one rule, and nothing states how they would share s's
+    cap."""
+    stating = frozenset({"s", "t"})
+    pools = _pools_for_caps({"s": 2, "t": 1, "x": 1})
+    usable = [
+        UsablePair(
+            pair=("s", "t"),
+            rule_id=RULE,
+            pool_a=POOL,
+            pool_b=POOL,
+            range_km=5.0,
+            view_a=_view("t", 40.0),
+            view_b=_view("s", 40.0),
+        ),
+        UsablePair(
+            pair=("s", "x"),
+            rule_id=RULE,
+            pool_a=POOL,
+            pool_b=POOL,
+            range_km=5.0,
+            view_a=_view("x", 40.0),
+            view_b=None,
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="both alone and together"):
+        _allocate(usable, pools=pools, stating=stating)

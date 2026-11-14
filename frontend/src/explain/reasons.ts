@@ -280,6 +280,15 @@ export const REASON_REGISTRY: Record<ReasonCode, ReasonRecord> = {
     sentence: "The node keeps a held link that is at least as near as this candidate.",
     producer: "ome_allocator",
   }),
+  not_mutual: rec({
+    code: "not_mutual",
+    gate: "selection_policy",
+    family: "eligible_unselected",
+    severity: "info",
+    label: "Not chosen by both nodes",
+    sentence: "One of the pair's two nodes did not take it among its highest-ranked candidates.",
+    producer: "ome_allocator",
+  }),
 
   // --- Allocation events (OME allocator) — transitions / lifecycle ---
   mbb_overlap_started: rec({

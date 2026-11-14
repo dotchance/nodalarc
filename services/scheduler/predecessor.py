@@ -169,7 +169,16 @@ def predecessor_node_records(
         except ValidationError as exc:
             raise _incompatible("actuation record", identity, exc) from exc
         code = SchedulerOpsCode(event.code)
-        if code not in NODE_STATE_CODES or details.node_id is None:
+        if details.node_id is None:
+            # The details model ignores fields it does not know, so a record another build
+            # wrote under another field name reads as a record of no node.
+            raise RuntimeError(
+                f"the retained actuation record {code} of Scheduler "
+                f"{identity.scheduler_instance_id} for session {identity.session_id} generation "
+                f"{identity.wiring_generation} names no node: another build wrote it, and this "
+                "Scheduler cannot know what the kernel carries. Deploy the session again."
+            )
+        if code not in NODE_STATE_CODES:
             raise RuntimeError(
                 f"retained actuation record {code} of {details.node_id} is not a node state"
             )

@@ -110,6 +110,38 @@ def test_only_the_long_delay_ends_count_each_from_its_peers_configured_rate(reso
     assert server.bytes == sum(end.charged_bytes for end in server.interfaces)
 
 
+def test_a_long_delay_link_on_assigned_terminals_counts_only_the_mounts_its_rule_draws_on():
+    """The trunk rule stated as visible_candidates: OME assigns its terminals per pass. The
+    long-delay ends are then every interface of the trunk mount at each node, each receiving
+    from the peer's trunk interfaces. The nodes' other assigned interfaces carry no
+    long-delay link and are not counted."""
+    raw = load_configuration_yaml(SESSION.read_bytes())
+    trunk = next(rule for rule in raw["link_rules"] if rule["id"] == "earth_mars_trunk")
+    trunk["topology"] = {"mode": "visible_candidates"}
+    session = resolve_session(raw, catalog=shipped_read_view())
+    nodes = {node.node_id: node for node in session.nodes}
+    trunk_interfaces = {
+        (node_id, wan.name)
+        for node_id in TRUNK
+        for wan in nodes[node_id].wan_interfaces
+        if wan.terminal_id == "trunk"
+    }
+    assert trunk_interfaces
+    # Each trunk node also has assigned interfaces on other mounts.
+    assert all(
+        set(session.assigned_interfaces_by_node()[node_id])
+        - {name for node, name in trunk_interfaces if node == node_id}
+        for node_id in TRUNK
+    )
+
+    (server,) = _demand(session, _on(session, "node01")).values()
+
+    assert {(end.node_id, end.interface) for end in server.interfaces} == trunk_interfaces
+    for end in server.interfaces:
+        assert (end.peer_node_id, end.peer_interface) in trunk_interfaces
+        assert end.peer_node_id != end.node_id
+
+
 def _trunk_session(root: Path, *, transmit_mbps: float, receive_mbps: float):
     """earth-mars-hdtn-relay with both trunk ends on a user: fork of the trunk terminal whose
     rates the test chooses, as a user changes a terminal file."""

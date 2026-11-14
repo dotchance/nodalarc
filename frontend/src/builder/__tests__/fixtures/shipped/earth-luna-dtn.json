@@ -11615,14 +11615,6 @@
                 {
                   "area_id": null,
                   "name": "gnd1"
-                },
-                {
-                  "area_id": null,
-                  "name": "isl2"
-                },
-                {
-                  "area_id": null,
-                  "name": "isl3"
                 }
               ],
               "protocol": "isis"

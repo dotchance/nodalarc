@@ -967,11 +967,11 @@ def _link_params(conf: str, interface: str) -> list[str]:
 @pytest.mark.parametrize(
     ("node_id", "interface", "transmit_mbps"),
     [
-        # Each end advertises what its own terminal can send.
-        ("geo-tdrs-041w", "gnd1", 14.0),
-        ("geo-tdrs-041w", "gnd0", 3.0),
+        # Each end advertises what its own terminal can send: the satellite's Ka access
+        # terminal and its optical ISL terminal, and the station's terminal for that access.
+        ("geo-tdrs-041w", "gnd5", 50.0),
+        ("geo-tdrs-041w", "isl0", 2500.0),
         ("earth-it-fucino-gw1", "term2", 600.0),
-        ("earth-it-fucino-gw1", "term0", 750.0),
     ],
 )
 def test_traffic_engineering_advertises_each_terminals_transmit_rate(
@@ -998,6 +998,10 @@ def test_link_parameters_only_on_traffic_engineering_igp_links() -> None:
     # A site LAN carries no terminal and no link parameters.
     assert _link_params(te_conf, "terr0") == []
     assert _link_params(te_conf, "lo") == []
+    # No link rule draws on the station's other access mount or on the satellite's S-band
+    # mounts. No link can come up on their interfaces, so they are no IGP links.
+    assert _link_params(te_conf, "term0") == []
+    assert _link_params(_frr_conf(te, "geo-tdrs-041w"), "gnd0") == []
 
 
 def _simple_session() -> ResolvedSession:
@@ -1271,6 +1275,30 @@ def test_no_ipv6_static_route_renders_where_no_ipv6_loopback_is_declared() -> No
         for domain_vars in vars_for_node["domains"]:
             assert "ipv6" not in domain_vars["redistribute_static"]
         assert all(entry["peer_loopback_ipv6"] is None for entry in vars_for_node["static_links"])
+
+
+def test_no_instance_is_configured_on_an_interface_that_carries_only_boundary_links() -> None:
+    """The shipped cislunar session's lunar relays reach the GEO relays over the rule its
+    static_ip boundary crosses, on a mount no other rule draws on. Their routers configure
+    IS-IS on their other interfaces and none on that mount's."""
+    resolved = resolve_session(
+        _reachability_raw(fixed_boundary_link=False),
+        source_context=SourceContext(origin="test.frr.boundary.assigned"),
+    )
+    border = _luna_border(resolved)
+    over = resolved.routing.boundaries[0].over
+    node = resolved.node_by_id(border)
+    assert node is not None
+    mounts = resolved.assigned_rule_mounts()[(over, border)]
+    boundary_only = [wan.name for wan in node.wan_interfaces if wan.terminal_id in mounts]
+    assert boundary_only
+
+    conf = _frr_conf(resolved, border)
+    assert " ip router isis luna_domain" in conf
+    for name in boundary_only:
+        lines = _stanza_lines(conf, f"interface {name}")
+        assert lines, f"{name} has no interface stanza"
+        assert not [line for line in lines if "router isis" in line or "isis " in line]
 
 
 def test_ldp_never_runs_on_a_static_boundary_link() -> None:

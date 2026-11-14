@@ -115,26 +115,23 @@ def _senders(resolved: ResolvedSession) -> dict[tuple[str, str], list[_Sender]]:
         return _Sender(peer, interface, block.source_ref, block.transmit_mbps, longest_delay_s)
 
     senders: dict[tuple[str, str], list[_Sender]] = {}
-    assigned_interfaces = resolved.assigned_interfaces_by_node()
+    # Each end of a long-delay candidate is every interface that can carry it there: the one
+    # a fixed candidate is bound to, or every interface of the mounts its rule draws on.
+    carried = resolved.candidate_interfaces()
     for candidate in resolved.link_candidates:
         if candidate.delay_class != "long_delay":
             continue
         a, b = candidate.pair
-        if candidate.assigned_terminals:
-            for node_id, peer in ((a, b), (b, a)):
-                for interface in assigned_interfaces[node_id]:
-                    senders.setdefault((node_id, interface), []).extend(
-                        sender(peer, peer_interface, candidate.longest_delay_s)
-                        for peer_interface in assigned_interfaces[peer]
-                    )
-            continue
-        interface_a, interface_b = candidate.fixed_interfaces
-        senders.setdefault((a, interface_a), []).append(
-            sender(b, interface_b, candidate.longest_delay_s)
-        )
-        senders.setdefault((b, interface_b), []).append(
-            sender(a, interface_a, candidate.longest_delay_s)
-        )
+        names_a, names_b = carried[candidate.pair]
+        for node_id, own_names, peer, peer_names in (
+            (a, names_a, b, names_b),
+            (b, names_b, a, names_a),
+        ):
+            for interface in own_names:
+                senders.setdefault((node_id, interface), []).extend(
+                    sender(peer, peer_interface, candidate.longest_delay_s)
+                    for peer_interface in peer_names
+                )
     return senders
 
 

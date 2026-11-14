@@ -1112,9 +1112,11 @@ class ResolvedSession(BaseModel):
         A fixed link, a link on terminals assigned per pass or a shared Ethernet
         segment joins two participants of an instance when each end has an
         interface in the instance toward the other (``domain_interfaces_by_node``).
+        A link a ``static_ip`` boundary crosses belongs to no instance.
         """
         interfaces_by_node = self.domain_interfaces_by_node()
-        assigned_interfaces = self.assigned_interfaces_by_node()
+        carried = self.candidate_interfaces()
+        static_rules = self.static_boundary_rule_ids()
         links: dict[str, list[InstanceLink]] = {
             domain.domain_id: [] for domain in self.routing_domains
         }
@@ -1124,21 +1126,14 @@ class ResolvedSession(BaseModel):
             return tuple(name for name in names if name in own)
 
         for candidate in self.link_candidates:
+            if candidate.rule_id in static_rules:
+                continue
+            names_a, names_b = carried[candidate.pair]
             for domain_id in links:
-                if candidate.assigned_terminals:
-                    ends = (
-                        in_instance(
-                            candidate.node_a, domain_id, assigned_interfaces[candidate.node_a]
-                        ),
-                        in_instance(
-                            candidate.node_b, domain_id, assigned_interfaces[candidate.node_b]
-                        ),
-                    )
-                else:
-                    ends = (
-                        in_instance(candidate.node_a, domain_id, (candidate.fixed_interfaces[0],)),
-                        in_instance(candidate.node_b, domain_id, (candidate.fixed_interfaces[1],)),
-                    )
+                ends = (
+                    in_instance(candidate.node_a, domain_id, names_a),
+                    in_instance(candidate.node_b, domain_id, names_b),
+                )
                 if ends[0] and ends[1]:
                     links[domain_id].append(
                         InstanceLink(candidate.node_a, ends[0], candidate.node_b, ends[1])
@@ -1283,50 +1278,39 @@ class ResolvedSession(BaseModel):
 
         A router takes part in a domain through its interfaces, and its
         loopback belongs to every domain it participates in. A fixed link
-        belongs to the domains the node shares with the peer on it; a link a
-        ``static_ip`` boundary crosses belongs to none. An interface assigned
-        per pass belongs to the domains the node shares with the nodes it can
-        reach over such links. An Ethernet segment interface belongs to the
-        domains the node shares with the segment's other participants, or,
-        when it shares none, to every domain the node participates in. Inner
-        keys follow declared domain order; the loopback is not listed.
+        belongs to the domains the node shares with the peer on it. An
+        interface assigned per pass belongs to the domains the node shares
+        with the nodes it can reach over the links it can carry
+        (``candidate_interfaces``). A link a ``static_ip`` boundary crosses
+        belongs to none, so it gives no interface a domain: an interface that
+        can carry only such links runs no instance. An Ethernet segment
+        interface belongs to the domains the node shares with the segment's
+        other participants, or, when it shares none, to every domain the node
+        participates in. Inner keys follow declared domain order; the loopback
+        is not listed.
         """
         participation: dict[str, set[str]] = {}
         for domain in self.routing_domains:
             for member in domain.node_ids:
                 participation.setdefault(member, set()).add(domain.domain_id)
-        static_rules = {
-            boundary.over
-            for boundary in (self.routing.boundaries or () if self.routing is not None else ())
-            if boundary.adapter == "static_ip"
-        }
+        static_rules = self.static_boundary_rule_ids()
         assigned: dict[str, dict[str, set[str]]] = {node_id: {} for node_id in participation}
-        access_reach: dict[str, set[str]] = {node_id: set() for node_id in participation}
-        assigned_interfaces = self.assigned_interfaces_by_node()
+        carried = self.candidate_interfaces()
         for candidate in self.link_candidates:
+            if candidate.rule_id in static_rules:
+                continue
+            names_a, names_b = carried[candidate.pair]
             ends = (
-                (candidate.node_a, candidate.node_b, 0),
-                (candidate.node_b, candidate.node_a, 1),
+                (candidate.node_a, candidate.node_b, names_a),
+                (candidate.node_b, candidate.node_a, names_b),
             )
-            for node_id, peer_id, side in ends:
+            for node_id, peer_id, names in ends:
                 own = participation.get(node_id)
                 if own is None:
                     continue
-                peer_domains = participation.get(peer_id, set())
-                if candidate.assigned_terminals:
-                    access_reach[node_id] |= peer_domains
-                elif candidate.rule_id not in static_rules:
-                    assigned[node_id].setdefault(candidate.fixed_interfaces[side], set()).update(
-                        own & peer_domains
-                    )
-        for node in self.nodes:
-            own = participation.get(node.node_id)
-            if own is None:
-                continue
-            for name in assigned_interfaces.get(node.node_id, ()):
-                assigned[node.node_id].setdefault(name, set()).update(
-                    own & access_reach[node.node_id]
-                )
+                shared = own & participation.get(peer_id, set())
+                for name in names:
+                    assigned[node_id].setdefault(name, set()).update(shared)
         for segment in self.ethernet_segments:
             for member in segment.members:
                 own = participation.get(member.node_id)
@@ -1421,6 +1405,80 @@ class ResolvedSession(BaseModel):
             for node_id, by_rule in self.ground_min_elevation_by_gs_and_rule().items()
         }
 
+    def static_boundary_rule_ids(self) -> frozenset[str]:
+        """The link rules a ``static_ip`` routing boundary crosses."""
+        if self.routing is None or not self.routing.boundaries:
+            return frozenset()
+        return frozenset(
+            boundary.over for boundary in self.routing.boundaries if boundary.adapter == "static_ip"
+        )
+
+    def assigned_rule_mounts(self) -> dict[tuple[str, str], frozenset[str]]:
+        """The mounts each enabled rule that assigns terminals draws on at each of its nodes,
+        keyed by (rule_id, node_id): every mount of the node that an endpoint of the rule
+        holding the node matches."""
+        node_by_id = {node.node_id: node for node in self.nodes}
+        mounts: dict[tuple[str, str], set[str]] = {}
+        for rule in self.link_rules:
+            if not rule.enabled or not rule.assigns_terminals:
+                continue
+            for endpoint in rule.endpoints:
+                for node_id in endpoint.node_ids:
+                    matches = {
+                        block.terminal_id
+                        for block in node_by_id[node_id].terminal_inventory
+                        if endpoint.matches_terminal(block)
+                    }
+                    if not matches:
+                        raise ValueError(
+                            f"link rule {rule.rule_id!r} endpoint for {node_id!r} "
+                            f"matches no resolved {endpoint.terminal_role} terminal mount"
+                        )
+                    mounts.setdefault((rule.rule_id, node_id), set()).update(matches)
+        return {key: frozenset(value) for key, value in mounts.items()}
+
+    def candidate_interfaces(
+        self,
+    ) -> dict[tuple[str, str], tuple[tuple[str, ...], tuple[str, ...]]]:
+        """The interfaces that can carry each candidate at each of its two nodes, by canonical
+        pair, in WAN order.
+
+        A fixed candidate is bound to one interface at each node. A candidate whose terminals
+        OME assigns per pass can be carried by every interface of the mounts its rule draws
+        on at the node, since OME picks one of them at each pass. Every reading of what an
+        interface can reach or carry comes from here: its peers, its routing domains and the
+        senders into its queue. Rejected alternative: reading a node's assigned interfaces as
+        one pool, which gave an interface the peers of rules that draw on another mount, and
+        ran a routing instance on an interface that can carry only a ``static_ip`` boundary's
+        links.
+        """
+        rule_mounts = self.assigned_rule_mounts()
+        node_by_id = {node.node_id: node for node in self.nodes}
+        names: dict[tuple[str, str], tuple[str, ...]] = {}
+
+        def assigned_names(rule_id: str, node_id: str) -> tuple[str, ...]:
+            key = (rule_id, node_id)
+            if key not in names:
+                mounts = rule_mounts[key]
+                names[key] = tuple(
+                    wan.name
+                    for wan in node_by_id[node_id].wan_interfaces
+                    if wan.terminal_id in mounts
+                )
+            return names[key]
+
+        carried: dict[tuple[str, str], tuple[tuple[str, ...], tuple[str, ...]]] = {}
+        for candidate in self.link_candidates:
+            if candidate.assigned_terminals:
+                carried[candidate.pair] = (
+                    assigned_names(candidate.rule_id, candidate.node_a),
+                    assigned_names(candidate.rule_id, candidate.node_b),
+                )
+            else:
+                interface_a, interface_b = candidate.fixed_interfaces
+                carried[candidate.pair] = ((interface_a,), (interface_b,))
+        return carried
+
     def assigned_terminal_selections_by_node(
         self,
     ) -> dict[str, tuple[ResolvedTerminalSelection, ...]]:
@@ -1432,27 +1490,9 @@ class ResolvedSession(BaseModel):
         Rejected alternative: the number cut from a ``term`` or ``gnd`` interface name, which
         gave ``gnd2`` and an assigned ``isl2`` of one node the same index.
         """
-        node_by_id = {node.node_id: node for node in self.nodes}
         selected_ids: dict[str, set[str]] = {}
-        for rule in self.link_rules:
-            if not rule.enabled or not rule.assigns_terminals:
-                continue
-            for endpoint in rule.endpoints:
-                for node_id in endpoint.node_ids:
-                    node = node_by_id[node_id]
-                    matches = tuple(
-                        block
-                        for block in node.terminal_inventory
-                        if endpoint.matches_terminal(block)
-                    )
-                    if not matches:
-                        raise ValueError(
-                            f"link rule {rule.rule_id!r} endpoint for {node_id!r} "
-                            f"matches no resolved {endpoint.terminal_role} terminal mount"
-                        )
-                    selected_ids.setdefault(node_id, set()).update(
-                        block.terminal_id for block in matches
-                    )
+        for (_rule_id, node_id), mounts in self.assigned_rule_mounts().items():
+            selected_ids.setdefault(node_id, set()).update(mounts)
 
         result: dict[str, tuple[ResolvedTerminalSelection, ...]] = {}
         for node in self.nodes:
@@ -1617,22 +1657,21 @@ class ResolvedSession(BaseModel):
         """The nodes each WAN interface can reach, keyed by (node_id, interface).
 
         A fixed link's interface reaches its one peer. An interface assigned per pass
-        can carry any of its node's candidates of that form, since OME assigns the
-        interface when it schedules an association.
+        reaches the peer of every candidate it can carry (``candidate_interfaces``). An
+        assigned interface that can carry none has an empty entry.
         """
-        peers: dict[tuple[str, str], set[str]] = {}
-        access_peers: dict[str, set[str]] = {}
+        peers: dict[tuple[str, str], set[str]] = {
+            (node_id, interface): set()
+            for node_id, interfaces in self.assigned_interfaces_by_node().items()
+            for interface in interfaces
+        }
+        carried = self.candidate_interfaces()
         for candidate in self.link_candidates:
-            if candidate.assigned_terminals:
-                access_peers.setdefault(candidate.node_a, set()).add(candidate.node_b)
-                access_peers.setdefault(candidate.node_b, set()).add(candidate.node_a)
-                continue
-            interface_a, interface_b = candidate.fixed_interfaces
-            peers.setdefault((candidate.node_a, interface_a), set()).add(candidate.node_b)
-            peers.setdefault((candidate.node_b, interface_b), set()).add(candidate.node_a)
-        for node_id, interfaces in self.assigned_interfaces_by_node().items():
-            for interface in interfaces:
-                peers[(node_id, interface)] = access_peers.get(node_id, set())
+            names_a, names_b = carried[candidate.pair]
+            for name in names_a:
+                peers.setdefault((candidate.node_a, name), set()).add(candidate.node_b)
+            for name in names_b:
+                peers.setdefault((candidate.node_b, name), set()).add(candidate.node_a)
         return {key: frozenset(value) for key, value in peers.items()}
 
     def ground_candidate_satellites_by_gs(self) -> dict[str, tuple[str, ...]]:

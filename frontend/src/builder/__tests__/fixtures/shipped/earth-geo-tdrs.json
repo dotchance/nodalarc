@@ -268,26 +268,6 @@
               "interfaces": [
                 {
                   "area_id": null,
-                  "name": "gnd0"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd1"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd2"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd3"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd4"
-                },
-                {
-                  "area_id": null,
                   "name": "gnd5"
                 },
                 {
@@ -460,26 +440,6 @@
               "as_boundary": false,
               "domain_id": "default_domain",
               "interfaces": [
-                {
-                  "area_id": null,
-                  "name": "gnd0"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd1"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd2"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd3"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd4"
-                },
                 {
                   "area_id": null,
                   "name": "gnd5"
@@ -656,26 +616,6 @@
               "interfaces": [
                 {
                   "area_id": null,
-                  "name": "gnd0"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd1"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd2"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd3"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd4"
-                },
-                {
-                  "area_id": null,
                   "name": "gnd5"
                 },
                 {
@@ -848,26 +788,6 @@
               "as_boundary": false,
               "domain_id": "default_domain",
               "interfaces": [
-                {
-                  "area_id": null,
-                  "name": "gnd0"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd1"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd2"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd3"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd4"
-                },
                 {
                   "area_id": null,
                   "name": "gnd5"
@@ -1044,26 +964,6 @@
               "interfaces": [
                 {
                   "area_id": null,
-                  "name": "gnd0"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd1"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd2"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd3"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd4"
-                },
-                {
-                  "area_id": null,
                   "name": "gnd5"
                 },
                 {
@@ -1236,26 +1136,6 @@
               "as_boundary": false,
               "domain_id": "default_domain",
               "interfaces": [
-                {
-                  "area_id": null,
-                  "name": "gnd0"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd1"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd2"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd3"
-                },
-                {
-                  "area_id": null,
-                  "name": "gnd4"
-                },
                 {
                   "area_id": null,
                   "name": "gnd5"
@@ -1437,14 +1317,6 @@
               "interfaces": [
                 {
                   "area_id": null,
-                  "name": "term0"
-                },
-                {
-                  "area_id": null,
-                  "name": "term1"
-                },
-                {
-                  "area_id": null,
                   "name": "term2"
                 },
                 {
@@ -1571,14 +1443,6 @@
               "interfaces": [
                 {
                   "area_id": null,
-                  "name": "term0"
-                },
-                {
-                  "area_id": null,
-                  "name": "term1"
-                },
-                {
-                  "area_id": null,
                   "name": "term2"
                 },
                 {
@@ -1703,14 +1567,6 @@
               "as_boundary": false,
               "domain_id": "default_domain",
               "interfaces": [
-                {
-                  "area_id": null,
-                  "name": "term0"
-                },
-                {
-                  "area_id": null,
-                  "name": "term1"
-                },
                 {
                   "area_id": null,
                   "name": "term2"

@@ -305,7 +305,7 @@ def _wan_links(context: SessionContext, node: ResolvedNode) -> dict[str, dict[st
     interface some possible peer of which carries IPv6.
     """
     resolved = context.resolved
-    static_rules = _static_boundary_rule_ids(resolved)
+    static_rules = resolved.static_boundary_rule_ids()
     carries_ipv6 = {
         other.node_id for other in context.nodes_by_id.values() if "ipv6" in other.address_families
     }
@@ -421,14 +421,6 @@ def _isis_system_id(resolved: ResolvedSession, node: ResolvedNode) -> str:
     """
     value = resolved.node_index_by_node_id()[node.node_id] + 1
     return f"0000.{(value >> 16) & 0xFFFF:04x}.{value & 0xFFFF:04x}"
-
-
-def _static_boundary_rule_ids(resolved: ResolvedSession) -> set[str]:
-    if resolved.routing is None or not resolved.routing.boundaries:
-        return set()
-    return {
-        boundary.over for boundary in resolved.routing.boundaries if boundary.adapter == "static_ip"
-    }
 
 
 def _lo0_address(node: ResolvedNode, family: str) -> str | None:

@@ -591,6 +591,85 @@ def test_one_isis_area_has_no_area_border_routers() -> None:
     assert resolved.area_border_instances_by_node() == {}
 
 
+def _interfaces_of_mount(resolved, node_id: str, mount: str) -> set[str]:
+    node = resolved.node_by_id(node_id)
+    assert node is not None
+    return {wan.name for wan in node.wan_interfaces if wan.terminal_id == mount}
+
+
+def test_a_link_a_static_boundary_crosses_gives_no_interface_a_routing_instance() -> None:
+    """earth-luna-dtn joins its two IS-IS domains by a static_ip boundary over geo_to_luna.
+
+    The lunar relay's relay_optical mount is drawn on by that rule alone, so its interfaces
+    can carry only links the boundary crosses, and they run no instance. A GEO relay's
+    relay_optical mount also carries leo_to_geo links inside earth_domain, so its
+    interfaces run earth_domain. No instance has a link between a GEO relay and the lunar
+    relay.
+    """
+    resolved = resolve_session(_load("earth-luna-dtn.yaml"), catalog=shipped_read_view())
+    relay, geo = "luna-relay-sat-p00s00", "geo-relay-sat-p00s00"
+
+    boundary_only = _interfaces_of_mount(resolved, relay, "relay_optical")
+    assert boundary_only
+    relay_domains = resolved.domain_interfaces(relay)
+    assert set(relay_domains) == {"luna_domain"}
+    assert not boundary_only & set(relay_domains["luna_domain"])
+    assert _interfaces_of_mount(resolved, relay, "access_s") <= set(relay_domains["luna_domain"])
+
+    shared = _interfaces_of_mount(resolved, geo, "relay_optical")
+    assert shared and shared <= set(resolved.domain_interfaces(geo)["earth_domain"])
+
+    lunar_relays = {node.node_id for node in resolved.nodes if node.segment_id == "luna_relay"}
+    geo_relays = {node.node_id for node in resolved.nodes if node.segment_id == "geo_relay"}
+    for links in resolved.instance_links().values():
+        assert not [
+            link
+            for link in links
+            if {link.node_a, link.node_b} & lunar_relays and {link.node_a, link.node_b} & geo_relays
+        ]
+
+
+def test_an_assigned_interface_reaches_the_peers_of_the_rules_that_draw_on_its_mount() -> None:
+    """A GEO relay of earth-luna-dtn carries an access mount and a crosslink mount, each
+    drawn on by its own rules. An interface of one mount does not reach the peers of the
+    other."""
+    resolved = resolve_session(_load("earth-luna-dtn.yaml"), catalog=shipped_read_view())
+    geo = "geo-relay-sat-p00s00"
+    peers = resolved.wan_interface_peers()
+    frames = {node.node_id: node.placement_frame for node in resolved.nodes}
+
+    for name in _interfaces_of_mount(resolved, geo, "access_ka"):
+        assert peers[(geo, name)]
+        assert {frames[peer] for peer in peers[(geo, name)]} == {"surface"}
+    for name in _interfaces_of_mount(resolved, geo, "relay_optical"):
+        assert "luna-relay-sat-p00s00" in peers[(geo, name)]
+        assert {frames[peer] for peer in peers[(geo, name)]} == {"orbit"}
+
+
+def test_an_access_interface_no_rule_draws_on_reaches_no_node_and_runs_no_instance() -> None:
+    """earth-geo-tdrs installs an access mount on its satellites that no link rule selects.
+    No link can come up on its interfaces: they reach no node and belong to no instance."""
+    resolved = resolve_session(_load("earth-geo-tdrs.yaml"), catalog=shipped_read_view())
+    drawn_on = {
+        (node_id, mount)
+        for (_rule_id, node_id), mounts in resolved.assigned_rule_mounts().items()
+        for mount in mounts
+    }
+    unused = [
+        (node.node_id, wan.name)
+        for node in resolved.nodes
+        if node.placement_frame == "orbit"
+        for wan in node.wan_interfaces
+        if node.wan_terminal(wan.name).endpoint_role == "access"
+        and (node.node_id, wan.terminal_id) not in drawn_on
+    ]
+    assert unused
+    peers = resolved.wan_interface_peers()
+    for node_id, name in unused:
+        assert peers[(node_id, name)] == frozenset()
+        assert all(name not in names for names in resolved.domain_interfaces(node_id).values())
+
+
 def test_routers_receiving_boundary_exports_are_as_boundary_routers() -> None:
     resolved = resolve_session(
         _load("earth-leo-heo-geo-luna-reachability.yaml"), catalog=shipped_read_view()

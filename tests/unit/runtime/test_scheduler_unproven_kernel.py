@@ -93,9 +93,8 @@ def _scheduler(agent: _NodeAgent, published: _Published) -> Dispatcher:
         wired_sandboxes={node_id: f"sandbox-{node_id}" for node_id in (*PAIR, "gs-a")},
         max_latency_age_s=1.0,
         # The session also declares one ground station; it plays no part here.
-        gs_terminal_capacities={"gs-a": 1},
-        gs_handover_modes={"gs-a": "bbm"},
-        sat_ground_terminal_capacities={PAIR[0]: 1},
+        terminal_capacities={"gs-a": 1, PAIR[0]: 1},
+        handover_modes={"gs-a": "bbm"},
         long_delay_bounds_s={},
     )
     scheduler._js = published

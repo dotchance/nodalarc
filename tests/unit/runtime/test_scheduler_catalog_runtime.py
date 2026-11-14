@@ -14,7 +14,7 @@ from nodalarc.session_identity import require_resolved_session_run_id
 from scheduler.__main__ import (
     _dispatch_timing,
     _routing_protocol_label,
-    _scheduler_capacity_maps,
+    _scheduler_terminal_maps,
 )
 
 from tests.catalog_session_fixtures import shipped_read_view
@@ -49,18 +49,20 @@ def test_resolved_runtime_identity_fails_loud_without_operator_run_id() -> None:
         require_resolved_session_run_id(resolved)
 
 
-def test_scheduler_reads_access_capacity_from_catalog_mount_roles() -> None:
+def test_scheduler_reads_terminal_capacity_and_stated_modes_from_the_resolved_session() -> None:
     resolved = _resolved()
 
-    gs_capacities, gs_modes, sat_capacities = _scheduler_capacity_maps(resolved)
+    capacities, modes = _scheduler_terminal_maps(resolved)
     ground_candidates = resolved.ground_candidate_satellites_by_gs()
-    candidate_satellites = {sat for sats in ground_candidates.values() for sat in sats}
+    candidate_nodes = set(ground_candidates) | {
+        sat for sats in ground_candidates.values() for sat in sats
+    }
 
-    assert set(gs_capacities) == set(ground_candidates)
-    assert set(gs_modes) == set(ground_candidates)
-    assert candidate_satellites.issubset(sat_capacities)
-    assert all(capacity > 0 for capacity in gs_capacities.values())
-    assert all(capacity > 0 for capacity in sat_capacities.values())
+    # Every node of an access candidate has terminals OME may assign, and the nodes that
+    # state scheduling in this session are its stations.
+    assert candidate_nodes.issubset(capacities)
+    assert set(modes) == set(ground_candidates)
+    assert all(capacity > 0 for capacity in capacities.values())
 
 
 def test_scheduler_dispatch_timing_and_protocol_label_are_catalog_resolved() -> None:

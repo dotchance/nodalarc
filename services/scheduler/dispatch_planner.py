@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Container, Mapping
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -25,16 +25,62 @@ class ReconcileDiff:
         return bool(self.to_remove or self.to_add or self.to_update_latency)
 
 
-@dataclass(frozen=True)
-class MbbClassification:
-    """Ground/ISL classification and segment mode for one reconcile pass."""
+def choosing_nodes(
+    pair: tuple[str, str],
+    *,
+    fixed_pairs: Container[tuple[str, str]],
+    stating_nodes: Container[str],
+) -> tuple[str, ...]:
+    """The nodes that choose a link.
 
-    isl_downs: set[tuple[str, str]]
-    isl_ups: set[tuple[str, str]]
-    gs_downs: dict[str, set[tuple[str, str]]]
-    gs_ups: dict[str, set[tuple[str, str]]]
-    mbb_segments: set[str]
-    bbm_segments: set[str]
+    A link whose interfaces the resolver fixed has none: its topology mode fixed the pair,
+    and nothing is chosen for it. Otherwise they are the pair's nodes that state scheduling.
+    When neither states it, NodalArc chooses the link for both nodes, and both are its
+    choosing nodes.
+    """
+    if pair in fixed_pairs:
+        return ()
+    stating = tuple(node_id for node_id in pair if node_id in stating_nodes)
+    return stating or pair
+
+
+@dataclass(frozen=True)
+class StagedChanges:
+    """One reconcile pass's downs and ups, with the order each choosing node needs.
+
+    ``making`` holds the choosing nodes that bring their new links up before their old links
+    go down. ``breaking`` holds the choosing nodes whose old links must go down first. A
+    choosing node with no new link in the pass is in neither: it has no say in the order.
+    """
+
+    # Every changed pair's choosing nodes; none for a link nothing is chosen for.
+    choosers: Mapping[tuple[str, str], tuple[str, ...]]
+    # Each choosing node's new links in this pass.
+    ups_of: Mapping[str, frozenset[tuple[str, str]]]
+    making: frozenset[str]
+    breaking: frozenset[str]
+
+    def down_goes_first(self, pair: tuple[str, str]) -> bool:
+        """Whether a down is sent before the pass's ups: a choosing node of it must break
+        first, or none of them is making."""
+        nodes = self.choosers[pair]
+        return any(node in self.breaking for node in nodes) or not any(
+            node in self.making for node in nodes
+        )
+
+    def up_follows_downs(self, pair: tuple[str, str]) -> bool:
+        """Whether an up belongs to a choosing node that breaks first, so it needs the
+        terminals that node's downs free."""
+        return any(node in self.breaking for node in self.choosers[pair])
+
+    def down_may_follow(self, pair: tuple[str, str], added: Container[tuple[str, str]]) -> bool:
+        """Whether a down that waited for the ups may go: each of its choosing nodes that is
+        making has a new link up. Otherwise the old link stays for a later pass."""
+        return all(
+            any(up in added for up in self.ups_of[node])
+            for node in self.choosers[pair]
+            if node in self.making
+        )
 
 
 def diff_link_state(
@@ -146,79 +192,57 @@ def interface_colliding_downs(
     return colliding
 
 
-def classify_mbb_changes(
+def stage_changes(
     *,
     to_remove: set[tuple[str, str]],
     to_add: set[tuple[str, str]],
-    gs_capacities: Mapping[str, int],
-    gs_active_count: Mapping[str, int],
-    sat_capacities: Mapping[str, int],
-    sat_active_count: Mapping[str, int],
-    forced_bbm_pairs: frozenset[tuple[str, str]] = frozenset(),
-) -> MbbClassification:
-    """Classify one reconcile diff into ISL operations and GS MBB/BBM segments."""
-    isl_downs: set[tuple[str, str]] = set()
-    isl_ups: set[tuple[str, str]] = set()
-    gs_downs: dict[str, set[tuple[str, str]]] = {}
-    gs_ups: dict[str, set[tuple[str, str]]] = {}
+    choosers: Callable[[tuple[str, str]], tuple[str, ...]],
+    terminal_capacities: Mapping[str, int],
+    active_count: Mapping[str, int],
+    forced_break_pairs: frozenset[tuple[str, str]] = frozenset(),
+) -> StagedChanges:
+    """Decide, per choosing node, whether one reconcile pass makes before it breaks.
 
+    A choosing node breaks first when one of its changed pairs is forced to (its stated
+    mode, a terminal an up of the pass needs, an operator or scenario command), or when it
+    has no spare terminal for each of its new links, or a new link's other node has none.
+    It makes first when it has new links and none of that holds. ``terminal_capacities`` and
+    ``active_count`` are per node: the terminals OME may assign there, and the links that
+    hold one now.
+    """
+    pair_choosers = {pair: choosers(pair) for pair in to_remove | to_add}
+    downs_of: dict[str, set[tuple[str, str]]] = {}
+    ups_of: dict[str, set[tuple[str, str]]] = {}
     for pair in to_remove:
-        gs_id = gs_id_for_pair(pair, gs_capacities)
-        if gs_id:
-            gs_downs.setdefault(gs_id, set()).add(pair)
-        else:
-            isl_downs.add(pair)
-
+        for node_id in pair_choosers[pair]:
+            downs_of.setdefault(node_id, set()).add(pair)
     for pair in to_add:
-        gs_id = gs_id_for_pair(pair, gs_capacities)
-        if gs_id:
-            gs_ups.setdefault(gs_id, set()).add(pair)
-        else:
-            isl_ups.add(pair)
+        for node_id in pair_choosers[pair]:
+            ups_of.setdefault(node_id, set()).add(pair)
 
-    dirty_gs = set(gs_downs) | set(gs_ups)
-    mbb_segments: set[str] = set()
-    bbm_segments: set[str] = set()
+    def spare(node_id: str) -> int:
+        return terminal_capacities[node_id] - active_count.get(node_id, 0)
 
-    for gs_id in dirty_gs:
-        segment_pairs = gs_downs.get(gs_id, set()) | gs_ups.get(gs_id, set())
-        if segment_pairs & forced_bbm_pairs:
-            bbm_segments.add(gs_id)
+    making: set[str] = set()
+    breaking: set[str] = set()
+    for node_id in set(downs_of) | set(ups_of):
+        ups = ups_of.get(node_id, set())
+        if (downs_of.get(node_id, set()) | ups) & forced_break_pairs:
+            breaking.add(node_id)
             continue
-
-        ups = gs_ups.get(gs_id, set())
         if not ups:
-            bbm_segments.add(gs_id)
             continue
-
-        downs = gs_downs.get(gs_id, set())
-        gs_spare = gs_capacities[gs_id] - gs_active_count.get(gs_id, 0)
-        all_sats_ok = True
-        for pair in ups:
-            sat_id = sat_id_for_gs_pair(pair, gs_capacities)
-            if sat_id is None:
-                raise ValueError(f"Ground segment {gs_id!r} includes non-ground pair {pair}")
-            if sat_capacities[sat_id] - sat_active_count.get(sat_id, 0) <= 0:
-                all_sats_ok = False
-                break
-
-        if not downs:
-            if gs_spare >= len(ups) and all_sats_ok:
-                mbb_segments.add(gs_id)
-            else:
-                bbm_segments.add(gs_id)
-            continue
-
-        if gs_spare >= len(ups) and all_sats_ok:
-            mbb_segments.add(gs_id)
+        others_have_room = all(
+            spare(pair[1] if pair[0] == node_id else pair[0]) > 0 for pair in ups
+        )
+        if spare(node_id) >= len(ups) and others_have_room:
+            making.add(node_id)
         else:
-            bbm_segments.add(gs_id)
+            breaking.add(node_id)
 
-    return MbbClassification(
-        isl_downs=isl_downs,
-        isl_ups=isl_ups,
-        gs_downs=gs_downs,
-        gs_ups=gs_ups,
-        mbb_segments=mbb_segments,
-        bbm_segments=bbm_segments,
+    return StagedChanges(
+        choosers=pair_choosers,
+        ups_of={node_id: frozenset(pairs) for node_id, pairs in ups_of.items()},
+        making=frozenset(making),
+        breaking=frozenset(breaking),
     )

@@ -94,55 +94,40 @@ def _dispatch_timing(resolved: ResolvedSession) -> tuple[float, float]:
     )
 
 
-def _scheduler_capacity_maps(
+def _scheduler_terminal_maps(
     resolved: ResolvedSession,
-) -> tuple[dict[str, int], dict[str, str], dict[str, int]]:
-    """Build Scheduler capacity/policy maps from catalog terminal mounts."""
-    ground_candidates = resolved.ground_candidate_satellites_by_gs()
-    required_ground_ids = set(ground_candidates)
-    required_satellite_ids = {sat_id for sats in ground_candidates.values() for sat_id in sats}
-    gs_terminal_capacities: dict[str, int] = {}
-    gs_handover_modes: dict[str, str] = {}
-    sat_ground_terminal_capacities: dict[str, int] = {}
-    selected_access = resolved.selected_access_terminals_by_node()
-
+) -> tuple[dict[str, int], dict[str, str]]:
+    """The Scheduler's two per-node maps for links whose terminals OME assigns: how many
+    such terminals each node has, and the handover mode of each node that states scheduling."""
+    terminal_capacities = {
+        node_id: capacity
+        for node_id, selections in resolved.selected_access_terminals_by_node().items()
+        if (capacity := sum(len(selection.interface_indices) for selection in selections)) > 0
+    }
+    without_terminals = sorted(
+        {
+            node_id
+            for candidate in resolved.link_candidates
+            if candidate.kind == "access"
+            for node_id in candidate.pair
+            if node_id not in terminal_capacities
+        }
+    )
+    if without_terminals:
+        raise RuntimeError(
+            "Resolved access candidates name nodes with no selected access terminals: "
+            f"{without_terminals}"
+        )
+    handover_modes: dict[str, str] = {}
     for node in resolved.nodes:
-        access_capacity = sum(
-            len(selection.interface_indices) for selection in selected_access.get(node.node_id, ())
-        )
-        if node.kind == "ground_station":
-            if node.node_id not in required_ground_ids:
-                continue
-            if access_capacity <= 0:
-                raise RuntimeError(
-                    f"Resolved ground station {node.node_id} has access candidates but no access capacity"
-                )
-            if node.ground_scheduling is None or node.ground_scheduling.handover_mode is None:
-                raise RuntimeError(
-                    f"Resolved ground station {node.node_id} is missing handover scheduling"
-                )
-            gs_terminal_capacities[node.node_id] = access_capacity
-            gs_handover_modes[node.node_id] = node.ground_scheduling.handover_mode
-        elif node.kind == "satellite":
-            sat_capacity = access_capacity
-            if node.node_id in required_satellite_ids and sat_capacity <= 0:
-                raise RuntimeError(
-                    f"Resolved satellite {node.node_id} has access candidates but no access terminal capacity"
-                )
-            if sat_capacity > 0:
-                sat_ground_terminal_capacities[node.node_id] = sat_capacity
-
-    missing_gs = sorted(required_ground_ids - set(gs_terminal_capacities))
-    if missing_gs:
-        raise RuntimeError(
-            f"Ground candidate map references unresolved ground station(s): {missing_gs}"
-        )
-    missing_sats = sorted(required_satellite_ids - set(sat_ground_terminal_capacities))
-    if missing_sats:
-        raise RuntimeError(
-            f"Ground candidate map references unresolved satellite(s): {missing_sats}"
-        )
-    return gs_terminal_capacities, gs_handover_modes, sat_ground_terminal_capacities
+        if node.ground_scheduling is None or node.node_id not in terminal_capacities:
+            continue
+        if node.ground_scheduling.handover_mode is None:
+            raise RuntimeError(
+                f"Resolved node {node.node_id} states scheduling without a handover mode"
+            )
+        handover_modes[node.node_id] = node.ground_scheduling.handover_mode
+    return terminal_capacities, handover_modes
 
 
 def _session_wiring_proofs(k8s_v1: Any, namespace: str, manifest: WiringManifest) -> dict:
@@ -589,14 +574,11 @@ def _run_scheduler() -> None:
     # Agent pool
     pool = AgentPool()
 
-    gs_terminal_capacities, gs_handover_modes, sat_ground_terminal_capacities = (
-        _scheduler_capacity_maps(resolved)
-    )
+    terminal_capacities, handover_modes = _scheduler_terminal_maps(resolved)
     max_latency_age_s, compression_factor = _dispatch_timing(resolved)
-    mbb_dispatch = any(mode == "mbb" for mode in gs_handover_modes.values())
     log.info(
-        "Ground handover by station: %s (protocol=%s)",
-        ", ".join(f"{gs}={mode}" for gs, mode in sorted(gs_handover_modes.items())),
+        "Stated handover mode by node: %s (protocol=%s)",
+        ", ".join(f"{node_id}={mode}" for node_id, mode in sorted(handover_modes.items())),
         _routing_protocol_label(resolved),
     )
 
@@ -604,12 +586,11 @@ def _run_scheduler() -> None:
 
     set_session(session_id)
     log.info(
-        "Scheduler starting [build=%s, session_id=%s, link_pairs=%d, nodes=%d, mbb=%s]",
+        "Scheduler starting [build=%s, session_id=%s, link_pairs=%d, nodes=%d]",
         os.environ.get("NODAL_BUILD", "dev"),
         session_id,
         len(interface_map),
         len(loc.node_ids),
-        mbb_dispatch,
     )
 
     writer_lease = WriterLease(
@@ -628,10 +609,8 @@ def _run_scheduler() -> None:
             agent_pool=pool,
             max_latency_age_s=max_latency_age_s,
             compression_factor=compression_factor,
-            gs_terminal_capacities=gs_terminal_capacities,
-            gs_handover_modes=gs_handover_modes,
-            sat_ground_terminal_capacities=sat_ground_terminal_capacities,
-            mbb_dispatch=mbb_dispatch,
+            terminal_capacities=terminal_capacities,
+            handover_modes=handover_modes,
             # Substrate compensation policy: half the measured RTT is the one-way
             # bound. The dispatcher rejects any other policy; this is the single
             # declared value, not a fallback.

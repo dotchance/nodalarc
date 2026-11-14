@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 from scheduler.desired_state import ActiveLinkInfo
-from scheduler.dispatch_planner import classify_mbb_changes, diff_link_state
+from scheduler.dispatch_planner import choosing_nodes, diff_link_state, stage_changes
 
 
 def _info(
@@ -85,71 +85,122 @@ def test_jitter_within_tolerance_in_one_direction_alone_is_no_change(direction, 
     assert not diff.has_changes
 
 
-def test_mbb_classification_marks_spare_ground_segment_mbb():
-    old_pair = ("gs-a", "sat-old")
-    new_pair = ("gs-a", "sat-new")
-
-    plan = classify_mbb_changes(
-        to_remove={old_pair},
-        to_add={new_pair},
-        gs_capacities={"gs-a": 2},
-        gs_active_count={"gs-a": 1},
-        sat_capacities={"sat-old": 1, "sat-new": 1},
-        sat_active_count={"sat-old": 1, "sat-new": 0},
+def _stage(to_remove, to_add, *, capacities, active, stating=("gs-a",), fixed=(), forced=()):
+    """Stage one pass. ``stating`` are the nodes that state scheduling and ``fixed`` the links
+    whose interfaces the resolver fixed."""
+    return stage_changes(
+        to_remove=set(to_remove),
+        to_add=set(to_add),
+        choosers=lambda pair: choosing_nodes(
+            pair, fixed_pairs=frozenset(fixed), stating_nodes=frozenset(stating)
+        ),
+        terminal_capacities=capacities,
+        active_count=active,
+        forced_break_pairs=frozenset(forced),
     )
 
-    assert plan.gs_downs == {"gs-a": {old_pair}}
-    assert plan.gs_ups == {"gs-a": {new_pair}}
-    assert plan.mbb_segments == {"gs-a"}
-    assert plan.bbm_segments == set()
+
+OLD = ("gs-a", "sat-old")
+NEW = ("gs-a", "sat-new")
 
 
-def test_mbb_classification_forces_bbm_without_spare_ground_capacity():
-    old_pair = ("gs-a", "sat-old")
-    new_pair = ("gs-a", "sat-new")
-
-    plan = classify_mbb_changes(
-        to_remove={old_pair},
-        to_add={new_pair},
-        gs_capacities={"gs-a": 1},
-        gs_active_count={"gs-a": 1},
-        sat_capacities={"sat-old": 1, "sat-new": 1},
-        sat_active_count={"sat-old": 1, "sat-new": 0},
+def test_a_choosing_node_with_a_spare_terminal_makes_before_it_breaks():
+    plan = _stage(
+        {OLD},
+        {NEW},
+        capacities={"gs-a": 2, "sat-old": 1, "sat-new": 1},
+        active={"gs-a": 1, "sat-old": 1},
     )
 
-    assert plan.mbb_segments == set()
-    assert plan.bbm_segments == {"gs-a"}
+    assert plan.making == {"gs-a"}
+    assert plan.breaking == set()
+    assert not plan.down_goes_first(OLD)
+    assert not plan.up_follows_downs(NEW)
+    # The old link goes once the new one is up, and stays while it is not.
+    assert plan.down_may_follow(OLD, {NEW})
+    assert not plan.down_may_follow(OLD, set())
 
 
-def test_mbb_classification_escalates_forced_pair_to_segment_bbm():
-    old_pair = ("gs-a", "sat-old")
-    new_pair = ("gs-a", "sat-new")
-
-    plan = classify_mbb_changes(
-        to_remove={old_pair},
-        to_add={new_pair},
-        gs_capacities={"gs-a": 4},
-        gs_active_count={"gs-a": 1},
-        sat_capacities={"sat-old": 1, "sat-new": 1},
-        sat_active_count={"sat-old": 1, "sat-new": 0},
-        forced_bbm_pairs=frozenset({new_pair}),
+def test_a_choosing_node_without_a_spare_terminal_breaks_first():
+    plan = _stage(
+        {OLD},
+        {NEW},
+        capacities={"gs-a": 1, "sat-old": 1, "sat-new": 1},
+        active={"gs-a": 1, "sat-old": 1},
     )
 
-    assert plan.mbb_segments == set()
-    assert plan.bbm_segments == {"gs-a"}
+    assert plan.making == set()
+    assert plan.breaking == {"gs-a"}
+    assert plan.down_goes_first(OLD)
+    assert plan.up_follows_downs(NEW)
 
 
-def test_mbb_classification_separates_isl_from_ground_changes():
-    plan = classify_mbb_changes(
-        to_remove={("sat-a", "sat-b")},
-        to_add={("sat-c", "sat-d")},
-        gs_capacities={"gs-a": 1},
-        gs_active_count={},
-        sat_capacities={},
-        sat_active_count={},
+def test_a_new_link_whose_other_node_has_no_spare_terminal_breaks_first():
+    plan = _stage(
+        {OLD},
+        {NEW},
+        capacities={"gs-a": 4, "sat-old": 1, "sat-new": 1},
+        active={"gs-a": 1, "sat-old": 1, "sat-new": 1},
     )
 
-    assert plan.isl_downs == {("sat-a", "sat-b")}
-    assert plan.isl_ups == {("sat-c", "sat-d")}
-    assert plan.gs_downs == {}
-    assert plan.gs_ups == {}
+    assert plan.breaking == {"gs-a"}
+    assert plan.down_goes_first(OLD)
+
+
+def test_one_forced_pair_makes_its_choosing_node_break_first():
+    plan = _stage(
+        {OLD},
+        {NEW},
+        capacities={"gs-a": 4, "sat-old": 1, "sat-new": 1},
+        active={"gs-a": 1, "sat-old": 1},
+        forced={NEW},
+    )
+
+    assert plan.making == set()
+    assert plan.breaking == {"gs-a"}
+    assert plan.down_goes_first(OLD)
+    assert plan.up_follows_downs(NEW)
+
+
+def test_a_link_nothing_is_chosen_for_goes_down_first_and_up_with_the_ups():
+    down = ("sat-a", "sat-b")
+    up = ("sat-c", "sat-d")
+    plan = _stage({down}, {up}, capacities={"gs-a": 1}, active={}, fixed={down, up})
+
+    assert plan.choosers == {down: (), up: ()}
+    assert plan.making == set() and plan.breaking == set()
+    assert plan.down_goes_first(down)
+    assert not plan.up_follows_downs(up)
+
+
+def test_a_node_nodalarc_chooses_for_makes_before_it_breaks_when_it_has_a_spare_terminal():
+    """No node states scheduling, so both nodes of each pair are its choosing nodes. The relay
+    moves from one peer to the next. With a spare terminal it makes first: the old link waits
+    for the new one, although the old peer has nothing new of its own. With no spare terminal
+    it breaks first."""
+    old = ("geo-a", "relay")
+    new = ("geo-b", "relay")
+    spare = _stage(
+        {old},
+        {new},
+        stating=(),
+        capacities={"relay": 2, "geo-a": 1, "geo-b": 1},
+        active={"relay": 1, "geo-a": 1},
+    )
+    assert spare.choosers == {old: old, new: new}
+    assert spare.making == {"relay", "geo-b"}
+    assert spare.breaking == set()
+    assert not spare.down_goes_first(old)
+    assert not spare.up_follows_downs(new)
+    assert spare.down_may_follow(old, {new})
+
+    full = _stage(
+        {old},
+        {new},
+        stating=(),
+        capacities={"relay": 1, "geo-a": 1, "geo-b": 1},
+        active={"relay": 1, "geo-a": 1},
+    )
+    assert "relay" in full.breaking
+    assert full.down_goes_first(old)
+    assert full.up_follows_downs(new)

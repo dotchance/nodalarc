@@ -149,11 +149,11 @@ from scheduler.dispatch_actuator import (
     verify_long_delay_ends,
 )
 from scheduler.dispatch_planner import (
-    classify_mbb_changes,
+    choosing_nodes,
     diff_link_state,
     gs_id_for_pair,
     interface_colliding_downs,
-    sat_id_for_gs_pair,
+    stage_changes,
 )
 from scheduler.epoch_sync import EpochSyncState
 from scheduler.latency_compensator import LatencyCompensation, compensate_latency
@@ -271,10 +271,8 @@ class Dispatcher:
         substrate_measurements: dict[str, SubstrateMeasurement] | None = None,
         compression_factor: int = 1,
         epsilon_ms: float = 100.0,
-        gs_terminal_capacities: dict[str, int] | None = None,
-        gs_handover_modes: dict[str, Literal["bbm", "mbb"]] | None = None,
-        sat_ground_terminal_capacities: dict[str, int] | None = None,
-        mbb_dispatch: bool = False,
+        terminal_capacities: Mapping[str, int] | None = None,
+        handover_modes: Mapping[str, Literal["bbm", "mbb"]] | None = None,
         rtt_to_one_way_policy: Literal["half-rtt"] = "half-rtt",
         clean_kernel_audit_interval_s: float | None = 60.0,
         now: Callable[[], datetime] | None = None,
@@ -291,14 +289,23 @@ class Dispatcher:
             raise ValueError(
                 "long_delay_bounds_s is required: the resolved session's long-delay links"
             )
-        ground_ids = frozenset(gs_terminal_capacities or {})
+        if terminal_capacities is None:
+            log.error("FATAL: Dispatcher created with no terminal_capacities")
+            raise ValueError("terminal_capacities is required")
+        if handover_modes is None:
+            log.error("FATAL: Dispatcher created with no handover_modes")
+            raise ValueError("handover_modes is required")
         unmapped = sorted(
             pair
             for pair in long_delay_bounds_s
-            if pair not in interface_map and not ground_ids.intersection(pair)
+            if pair not in interface_map
+            and not all(node_id in terminal_capacities for node_id in pair)
         )
         if unmapped:
-            raise ValueError(f"long-delay links with no fixed interfaces: {unmapped}")
+            raise ValueError(
+                f"long-delay links with neither fixed interfaces nor terminals at both nodes: "
+                f"{unmapped}"
+            )
         # The fixed links the resolver classes long-delay, with the longest one-way delay it
         # bounded for each: their contacts drain at their end, and a restarted Scheduler drains
         # a contact it recovers for that long.
@@ -336,31 +343,27 @@ class Dispatcher:
         self._last_clean_kernel_audit_at = self._now()
         self._recoverable_state_heartbeat_interval_s = 60.0
         self._last_recoverable_state_heartbeat_at = self._now()
-        if gs_terminal_capacities is None:
-            log.error("FATAL: Dispatcher created with no gs_terminal_capacities")
-            raise ValueError("gs_terminal_capacities is required")
-        if gs_handover_modes is None:
-            log.error("FATAL: Dispatcher created with no gs_handover_modes")
-            raise ValueError("gs_handover_modes is required")
-        if sat_ground_terminal_capacities is None:
-            log.error("FATAL: Dispatcher created with no sat_ground_terminal_capacities")
-            raise ValueError("sat_ground_terminal_capacities is required")
-        if set(gs_handover_modes) != set(gs_terminal_capacities):
-            missing = sorted(set(gs_terminal_capacities) - set(gs_handover_modes))
-            extra = sorted(set(gs_handover_modes) - set(gs_terminal_capacities))
+        without_terminals = sorted(set(handover_modes) - set(terminal_capacities))
+        if without_terminals:
             raise ValueError(
-                "gs_handover_modes must match gs_terminal_capacities; "
-                f"missing={missing}, extra={extra}"
+                "nodes that state a handover mode but have no terminals OME may assign: "
+                f"{without_terminals}"
             )
         invalid_modes = {
-            gs: mode for gs, mode in gs_handover_modes.items() if mode not in ("bbm", "mbb")
+            node_id: mode for node_id, mode in handover_modes.items() if mode not in ("bbm", "mbb")
         }
         if invalid_modes:
-            raise ValueError(f"Invalid GS handover modes: {invalid_modes}")
-        self._gs_capacities = gs_terminal_capacities
-        self._gs_handover_modes = dict(gs_handover_modes)
-        self._sat_capacities = sat_ground_terminal_capacities
-        self._mbb_dispatch = mbb_dispatch
+            raise ValueError(f"Invalid handover modes: {invalid_modes}")
+        # How many terminals OME may assign at each node that has any, and the handover mode
+        # of each node that states scheduling. A node that states none hands over as its
+        # spare terminals allow.
+        self._terminal_capacities = dict(terminal_capacities)
+        self._handover_modes = dict(handover_modes)
+        # The stations: until actuation state is kept per choosing node, its code reads the
+        # nodes that state scheduling.
+        self._gs_capacities = {
+            node_id: self._terminal_capacities[node_id] for node_id in self._handover_modes
+        }
         self._session_id = session_id
         if not wiring_generation:
             raise ValueError("wiring_generation is required")
@@ -452,10 +455,9 @@ class Dispatcher:
         # set, where it ages past fault_after_ms and falsely renders faulted-red.
         self._actual_links_publish_dirty: bool = False
 
-        # Incremental active-link counters for O(1) MBB capacity checks.
-        # Re-baselined from _actual_links on every LinkStateSnapshot.
-        self._gs_active_count: dict[str, int] = {}
-        self._sat_active_count: dict[str, int] = {}
+        # How many links hold an assigned terminal at each node now, for O(1) spare-terminal
+        # checks. Re-baselined from _actual_links on every LinkStateSnapshot.
+        self._active_count: dict[str, int] = {}
 
         self._last_latencies: dict[tuple[str, str], tuple[float, float]] = {}
         self._current_sim_time: datetime | None = None
@@ -595,44 +597,43 @@ class Dispatcher:
         O(actual_links) — runs at snapshot frequency (every 5 sim-seconds),
         not at tick frequency.
         """
-        self._gs_active_count.clear()
-        self._sat_active_count.clear()
-        held = [
-            *self._actual_links.items(),
-            *((key[0], info) for key, info in self._overlapping.items()),
-        ]
-        for (node_a, node_b), info in held:
-            if info.link_type == "ground":
-                for nid in (node_a, node_b):
-                    if nid in self._gs_capacities:
-                        self._gs_active_count[nid] = self._gs_active_count.get(nid, 0) + 1
-                    elif nid in self._sat_capacities:
-                        self._sat_active_count[nid] = self._sat_active_count.get(nid, 0) + 1
+        self._active_count.clear()
+        held = [*self._actual_links, *(key[0] for key in self._overlapping)]
+        for pair in held:
+            if self._holds_assigned_terminals(pair):
+                for node_id in pair:
+                    self._active_count[node_id] = self._active_count.get(node_id, 0) + 1
+
+    def _holds_assigned_terminals(self, pair: tuple[str, str]) -> bool:
+        """Whether a link occupies terminals OME assigns per association. A link whose
+        interfaces the resolver fixed does not: it takes no terminal another link could use."""
+        return pair not in self._interface_map
+
+    def _choosing_nodes(self, pair: tuple[str, str]) -> tuple[str, ...]:
+        return choosing_nodes(
+            pair, fixed_pairs=self._interface_map, stating_nodes=self._handover_modes
+        )
+
+    def _spare_terminals(self, node_id: str) -> int:
+        return self._terminal_capacities[node_id] - self._active_count.get(node_id, 0)
 
     def _increment_active_counts(self, pair: tuple[str, str]) -> None:
-        """O(1) increment after a successful ground LinkUp ACK."""
-        info = self._actual_links.get(pair)
-        if not info or info.link_type != "ground":
+        """O(1) increment after a successful LinkUp ACK."""
+        if pair not in self._actual_links or not self._holds_assigned_terminals(pair):
             return
-        for nid in pair:
-            if nid in self._gs_capacities:
-                self._gs_active_count[nid] = self._gs_active_count.get(nid, 0) + 1
-            elif nid in self._sat_capacities:
-                self._sat_active_count[nid] = self._sat_active_count.get(nid, 0) + 1
+        for node_id in pair:
+            self._active_count[node_id] = self._active_count.get(node_id, 0) + 1
 
     def _decrement_active_counts(
         self, pair: tuple[str, str], info: ActiveLinkInfo | None = None
     ) -> None:
-        """O(1) decrement after a successful ground LinkDown ACK."""
+        """O(1) decrement after a successful LinkDown ACK."""
         if info is None:
             info = self._actual_links.get(pair)
-        if not info or info.link_type != "ground":
+        if not info or not self._holds_assigned_terminals(pair):
             return
-        for nid in pair:
-            if nid in self._gs_capacities:
-                self._gs_active_count[nid] = max(0, self._gs_active_count.get(nid, 0) - 1)
-            elif nid in self._sat_capacities:
-                self._sat_active_count[nid] = max(0, self._sat_active_count.get(nid, 0) - 1)
+        for node_id in pair:
+            self._active_count[node_id] = max(0, self._active_count.get(node_id, 0) - 1)
 
     @_active_links.setter
     def _active_links(self, value: dict[tuple[str, str], ActiveLinkInfo]) -> None:
@@ -2937,7 +2938,7 @@ class Dispatcher:
         graph. Unknown IDs must fail explicitly; accepting stale fixture names
         would create overrides that silently match nothing.
         """
-        nodes: set[str] = set(self._gs_capacities) | set(self._sat_capacities)
+        nodes: set[str] = set(self._terminal_capacities)
         for maps in (
             self._interface_map,
             self._desired_links,
@@ -3566,13 +3567,9 @@ class Dispatcher:
 
         THE SINGLE PATH TO THE NODE AGENT FOR LINK STATE.
 
-        When mbb_dispatch is enabled, uses staged capacity-aware
-        dispatch for ground links:
-          - Pre-release downs: BBM downs + ISL downs (frees capacity)
-          - Acquires: all ups (MBB + BBM, using freed + existing spare)
-          - Final releases: MBB downs where the replacement up succeeded
-        When mbb_dispatch is disabled, uses original two-phase BBM
-        (all downs then all ups).
+        Local links change in three batches (``_reconcile_staged``): the downs that must
+        go before any up, every up, then the downs of the nodes that made before they
+        broke. When no node makes first, that is every down and then every up.
         """
         if down_reasons is None:
             down_reasons = {}
@@ -3674,40 +3671,16 @@ class Dispatcher:
                     long_delay, due, desired, sim_iso, sim_time, nc, down_reasons
                 )
 
-            if not self._mbb_dispatch:
-                # Two-phase BBM dispatch — sorted for deterministic replay
-                if to_remove:
-                    down_result = await self._send_batch_down(
-                        to_remove, sim_iso, sim_time, nc, down_reasons
-                    )
-                    await self._handle_actuation_result(
-                        down_result, sim_time=sim_time, operation_context="bbm_down"
-                    )
-                    for pair in sorted(down_result.succeeded_pairs):
-                        info = self._actual_links.pop(pair, None)
-                        self._last_latencies.pop(pair, None)
-                        self._decrement_active_counts(pair, info)
-
-                if to_add:
-                    up_result = await self._send_batch_up(to_add, desired, sim_iso, sim_time, nc)
-                    await self._handle_actuation_result(
-                        up_result, sim_time=sim_time, operation_context="ground_up"
-                    )
-                    for pair in sorted(up_result.succeeded_pairs):
-                        self._actual_links[pair] = desired[pair]
-                        self._last_latencies[pair] = desired[pair].latencies_ms
-                        self._increment_active_counts(pair)
-            else:
-                await self._reconcile_mbb(
-                    to_remove,
-                    to_add,
-                    desired,
-                    sim_iso,
-                    sim_time,
-                    nc,
-                    down_reasons,
-                    forced_bbm_pairs,
-                )
+            await self._reconcile_staged(
+                to_remove,
+                to_add,
+                desired,
+                sim_iso,
+                sim_time,
+                nc,
+                down_reasons,
+                forced_bbm_pairs,
+            )
 
             if to_update_latency:
                 latency_result = await self._send_authoritative_latency_updates(
@@ -3784,7 +3757,7 @@ class Dispatcher:
             self._last_latencies[pair] = info.latencies_ms
         return result
 
-    async def _reconcile_mbb(
+    async def _reconcile_staged(
         self,
         to_remove: set[tuple[str, str]],
         to_add: set[tuple[str, str]],
@@ -3795,30 +3768,28 @@ class Dispatcher:
         down_reasons: dict[tuple[str, str], str] | None = None,
         forced_bbm_pairs: frozenset[tuple[str, str]] | None = None,
     ) -> None:
-        """Staged capacity-aware MBB dispatch for ground links.
+        """Dispatch one pass's local downs and ups in the order each choosing node needs.
 
-        Pre-release downs: BBM downs + ISL downs (free capacity)
-        Acquires: all ups (greedy-reserved, no over-subscription)
-        Final releases: MBB downs where the replacement up succeeded
+        First downs: the links nothing is chosen for, and the links of a choosing node that
+        must break before it makes (they free terminals).
+        Ups: every up, on the terminals free by then.
+        Last downs: the old links of each choosing node that made first, once its new
+        link is up.
 
-        forced_bbm_pairs escalates to GS-segment level: if ANY pair
-        under a GS is forced, the entire segment goes BBM.
+        A choosing node breaks first when any of its changed pairs is forced to.
         """
         if down_reasons is None:
             down_reasons = {}
         if forced_bbm_pairs is None:
             forced_bbm_pairs = frozenset()
 
-        policy_forced_bbm = set(forced_bbm_pairs)
+        # A node that states break-before-make never holds an old link beside a new one.
+        forced_break = set(forced_bbm_pairs)
         for pair in to_remove | to_add:
-            gs_id = gs_id_for_pair(pair, self._gs_capacities)
-            if gs_id is None:
-                continue
-            mode = self._gs_handover_modes.get(gs_id)
-            if mode is None:
-                raise ValueError(f"Missing handover mode for ground station {gs_id}")
-            if mode == "bbm":
-                policy_forced_bbm.add(pair)
+            if any(
+                self._handover_modes.get(node_id) == "bbm" for node_id in self._choosing_nodes(pair)
+            ):
+                forced_break.add(pair)
 
         # A release whose kernel interface is reused by a same-pass acquire
         # is physically break-before-make: the acquire-then-release order
@@ -3831,94 +3802,73 @@ class Dispatcher:
             actual=self._actual_links,
             desired=desired,
         )
-        newly_forced = collision_downs - policy_forced_bbm
+        newly_forced = collision_downs - forced_break
         if newly_forced:
             log.info(
-                "Forced break-before-make for ground release(s) whose terminal "
-                "is reused by a same-pass acquire: %s",
+                "Forced break-before-make for release(s) whose terminal is reused by a "
+                "same-pass acquire: %s",
                 sorted(newly_forced),
             )
-        policy_forced_bbm.update(collision_downs)
-        forced_bbm_pairs = frozenset(policy_forced_bbm)
+        forced_break.update(collision_downs)
 
-        # --- Classify changes ---
-        classification = classify_mbb_changes(
+        staged = stage_changes(
             to_remove=to_remove,
             to_add=to_add,
-            gs_capacities=self._gs_capacities,
-            gs_active_count=self._gs_active_count,
-            sat_capacities=self._sat_capacities,
-            sat_active_count=self._sat_active_count,
-            forced_bbm_pairs=forced_bbm_pairs,
+            choosers=self._choosing_nodes,
+            terminal_capacities=self._terminal_capacities,
+            active_count=self._active_count,
+            forced_break_pairs=frozenset(forced_break),
         )
-        isl_downs = classification.isl_downs
-        isl_ups = classification.isl_ups
-        gs_downs = classification.gs_downs
-        gs_ups = classification.gs_ups
-        mbb_segments = classification.mbb_segments
-        bbm_segments = classification.bbm_segments
 
-        # --- Pre-release downs: free capacity (BBM downs + ISL downs) ---
+        # --- First downs: free terminals ---
         # Sorted for deterministic dispatch ordering — two runs with different
         # PYTHONHASHSEED must produce identical link-event sequences.
-        pre_release_downs: set[tuple[str, str]] = set(isl_downs)
-        for gs_id in sorted(bbm_segments):
-            pre_release_downs.update(gs_downs.get(gs_id, set()))
-
-        if pre_release_downs:
+        first_downs = {pair for pair in to_remove if staged.down_goes_first(pair)}
+        # Choosing nodes one of whose first downs failed: their terminals were not freed.
+        failed_nodes: set[str] = set()
+        if first_downs:
             down_result = await self._send_batch_down(
-                pre_release_downs, sim_iso, sim_time, nc, down_reasons
+                first_downs, sim_iso, sim_time, nc, down_reasons
             )
             await self._handle_actuation_result(
                 down_result, sim_time=sim_time, operation_context="pre_release_down"
             )
-            failed_bbm_gs: set[str] = set()
-            for pair in sorted(pre_release_downs):
-                gs_id = gs_id_for_pair(pair, self._gs_capacities)
+            for pair in sorted(first_downs):
                 if pair in down_result.succeeded_pairs:
                     info = self._actual_links.pop(pair, None)
                     self._last_latencies.pop(pair, None)
                     self._decrement_active_counts(pair, info)
-                elif gs_id:
-                    failed_bbm_gs.add(gs_id)
-        else:
-            down_result = None
-            failed_bbm_gs = set()
-
-        # --- Between down and up stages: greedy reservation for acquires ---
-        # Work with post-pre-release capacity (real, not projected).
-        # Sorted iteration ensures greedy reservation winner is
-        # deterministic when multiple pairs compete for one terminal.
-        acquire_ups: set[tuple[str, str]] = set(isl_ups)
-
-        for gs_id in sorted(mbb_segments):
-            acquire_ups.update(gs_ups.get(gs_id, set()))
-
-        for gs_id in sorted(bbm_segments):
-            if gs_id in failed_bbm_gs:
-                continue
-            for pair in sorted(gs_ups.get(gs_id, set())):
-                sat_id = sat_id_for_gs_pair(pair, self._gs_capacities)
-                if sat_id is None:
-                    raise ValueError(f"Ground segment {gs_id!r} includes non-ground pair {pair}")
-                gs_spare = self._gs_capacities[gs_id] - self._gs_active_count.get(gs_id, 0)
-                sat_spare = self._sat_capacities[sat_id] - self._sat_active_count.get(sat_id, 0)
-                if gs_spare > 0 and sat_spare > 0:
-                    acquire_ups.add(pair)
                 else:
-                    log.debug(
-                        "Greedy skip: %s→%s (gs_spare=%d, sat_spare=%d)",
-                        gs_id,
-                        sat_id,
-                        gs_spare,
-                        sat_spare,
-                    )
+                    failed_nodes.update(staged.choosers[pair])
 
-        # --- Acquires: all ups ---
+        # --- Ups ---
+        # A node that makes first has its spare terminals already. An up of a node that
+        # breaks first takes a terminal only if both its nodes have one free now, after the
+        # first downs. Sorted iteration makes the winner deterministic when several ups
+        # compete for one terminal.
+        acquire_ups: set[tuple[str, str]] = set()
+        for pair in sorted(to_add):
+            if not staged.up_follows_downs(pair):
+                acquire_ups.add(pair)
+                continue
+            if any(node_id in failed_nodes for node_id in staged.choosers[pair]):
+                continue
+            if all(self._spare_terminals(node_id) > 0 for node_id in pair):
+                acquire_ups.add(pair)
+            else:
+                log.debug(
+                    "Up skipped for now, no spare terminal: %s (spare %s)",
+                    pair,
+                    {node_id: self._spare_terminals(node_id) for node_id in pair},
+                )
+
         if acquire_ups:
             up_result = await self._send_batch_up(acquire_ups, desired, sim_iso, sim_time, nc)
             await self._handle_actuation_result(
-                up_result, sim_time=sim_time, operation_context="replacement_up"
+                up_result,
+                sim_time=sim_time,
+                # An up of a pass that also takes links down replaces one of them.
+                operation_context="replacement_up" if to_remove else "link_up",
             )
             added = set(up_result.succeeded_pairs)
             for pair in sorted(added):
@@ -3928,16 +3878,13 @@ class Dispatcher:
         else:
             added = set()
 
-        # --- Final releases: MBB downs where the replacement up succeeded ---
-        final_release_downs: set[tuple[str, str]] = set()
-        for gs_id in sorted(mbb_segments):
-            ups_for_gs = gs_ups.get(gs_id, set())
-            if ups_for_gs & added:
-                final_release_downs.update(gs_downs.get(gs_id, set()))
-
-        if final_release_downs:
+        # --- Last downs: the old links of nodes whose new link is up ---
+        last_downs = {
+            pair for pair in to_remove - first_downs if staged.down_may_follow(pair, added)
+        }
+        if last_downs:
             down3_result = await self._send_batch_down(
-                final_release_downs, sim_iso, sim_time, nc, down_reasons
+                last_downs, sim_iso, sim_time, nc, down_reasons
             )
             await self._handle_actuation_result(
                 down3_result, sim_time=sim_time, operation_context="final_release_down"

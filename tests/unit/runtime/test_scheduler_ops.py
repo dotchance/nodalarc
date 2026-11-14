@@ -329,9 +329,8 @@ def test_a_station_its_predecessor_left_no_record_for_starts_unproven() -> None:
         writer_epoch=5,
         wired_sandboxes=SANDBOXES,
         max_latency_age_s=1.0,
-        gs_terminal_capacities={STATION: 1, other: 1},
-        gs_handover_modes={STATION: "bbm", other: "bbm"},
-        sat_ground_terminal_capacities={OLD_PASS[1]: 1},
+        terminal_capacities={STATION: 1, other: 1, OLD_PASS[1]: 1},
+        handover_modes={STATION: "bbm", other: "bbm"},
         long_delay_bounds_s={},
     )
     scheduler._js = stream
@@ -372,9 +371,8 @@ def test_a_successor_takes_over_the_delays_its_predecessor_last_commanded() -> N
         writer_epoch=4,
         wired_sandboxes=SANDBOXES,
         max_latency_age_s=1.0,
-        gs_terminal_capacities=STATIONS,
-        gs_handover_modes={STATION: "bbm"},
-        sat_ground_terminal_capacities={OLD_PASS[1]: 1},
+        terminal_capacities={**STATIONS, OLD_PASS[1]: 1},
+        handover_modes={STATION: "bbm"},
         long_delay_bounds_s={},
     )
     predecessor._js = stream
@@ -454,9 +452,8 @@ def _successor(stream: _RetainedLinkStream, wired_sandboxes: dict[str, str]) -> 
         writer_epoch=6,
         wired_sandboxes=wired_sandboxes,
         max_latency_age_s=1.0,
-        gs_terminal_capacities={STATION: 1, OTHER_STATION: 1},
-        gs_handover_modes={STATION: "bbm", OTHER_STATION: "bbm"},
-        sat_ground_terminal_capacities={OLD_PASS[1]: 1, NEW_PASS[1]: 1},
+        terminal_capacities={STATION: 1, OTHER_STATION: 1, OLD_PASS[1]: 1, NEW_PASS[1]: 1},
+        handover_modes={STATION: "bbm", OTHER_STATION: "bbm"},
         long_delay_bounds_s={},
     )
     scheduler._js = stream

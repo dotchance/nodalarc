@@ -68,8 +68,8 @@ def _shipped(name: str):
 
 def test_a_router_forwards_exactly_the_families_the_session_gives_it() -> None:
     resolved = _shipped("earth-leo-simple.yaml")
-    satellite = next(node for node in resolved.nodes if node.kind == "satellite")
-    site_router = next(node for node in resolved.nodes if node.kind == "ground_station")
+    satellite = next(node for node in resolved.nodes if node.placement_frame == "orbit")
+    site_router = next(node for node in resolved.nodes if node.placement_frame == "surface")
     assert satellite.address_families == {"ipv4"}
     assert site_router.address_families == {"ipv4", "ipv6"}
 

@@ -129,11 +129,11 @@ def _stanzas(conf: str) -> list[tuple[str, list[str]]]:
 
 
 def _first_satellite(resolved: ResolvedSession) -> str:
-    return next(node.node_id for node in resolved.nodes if node.kind == "satellite")
+    return next(node.node_id for node in resolved.nodes if node.placement_frame == "orbit")
 
 
 def _first_ground(resolved: ResolvedSession) -> str:
-    return next(node.node_id for node in resolved.nodes if node.kind == "ground_station")
+    return next(node.node_id for node in resolved.nodes if node.placement_frame == "surface")
 
 
 def test_isis_satellite_uses_resolved_loopback_unnumbered_wan_and_sid() -> None:
@@ -1291,7 +1291,7 @@ def test_an_active_site_lan_runs_the_domain_timers_and_every_lan_carries_its_cos
     passive = next(
         node.node_id
         for node in resolved.nodes
-        if node.kind == "ground_station" and not node.node_id.startswith("earth-us-co-denver")
+        if node.placement_frame == "surface" and not node.node_id.startswith("earth-us-co-denver")
     )
     timers = _domain_vars(resolved, active)
 

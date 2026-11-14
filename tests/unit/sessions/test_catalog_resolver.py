@@ -202,11 +202,13 @@ def test_every_shipped_catalog_session_resolves_to_runtime_truth() -> None:
             for node in resolved.nodes
             if node.forwarding == "routed"
         )
-        assert all(node.orbit is not None for node in resolved.nodes if node.kind == "satellite")
+        assert all(
+            node.orbit is not None for node in resolved.nodes if node.placement_frame == "orbit"
+        )
         assert all(
             node.surface_position is not None
             for node in resolved.nodes
-            if node.kind == "ground_station"
+            if node.placement_frame == "surface"
         )
 
 
@@ -295,7 +297,7 @@ def test_catalog_resolver_preserves_eccentric_orbit_facts() -> None:
 def test_generated_space_nodes_get_deterministic_runtime_loopbacks() -> None:
     resolved = resolve_session(_load(), catalog=shipped_read_view())
 
-    satellites = [node for node in resolved.nodes if node.kind == "satellite"]
+    satellites = [node for node in resolved.nodes if node.placement_frame == "orbit"]
     assert satellites
     assert all(node.interfaces is not None for node in satellites)
     # Ground environments allocate from the shared pool first (sorted by
@@ -368,8 +370,8 @@ def test_a_router_participates_in_every_domain_that_selects_it() -> None:
 
     resolved = resolve_session(raw, catalog=shipped_read_view())
 
-    router = next(node for node in resolved.nodes if node.kind == "ground_station")
-    satellite = next(node for node in resolved.nodes if node.kind == "satellite")
+    router = next(node for node in resolved.nodes if node.placement_frame == "surface")
+    satellite = next(node for node in resolved.nodes if node.placement_frame == "orbit")
     assert [d.domain_id for d in resolved.routing_domains_for(router.node_id)] == [
         "orbital",
         "terrestrial",
@@ -460,7 +462,7 @@ def test_placed_ground_nodes_get_deterministic_allocated_loopbacks(tmp_path: Pat
     ground = [
         node
         for node in resolution.nodes
-        if node.kind == "ground_station" and node.namespace == "earth-us-hawthorne"
+        if node.placement_frame == "surface" and node.namespace == "earth-us-hawthorne"
     ]
     assert ground
     for node in ground:
@@ -485,7 +487,7 @@ def test_terminal_install_count_drives_derived_unnumbered_wan_interfaces() -> No
     resolved = resolve_session(
         _load("earth-leo-heo-geo-luna-reachability.yaml"), catalog=shipped_read_view()
     )
-    ground = next(node for node in resolved.nodes if node.kind == "ground_station")
+    ground = next(node for node in resolved.nodes if node.placement_frame == "surface")
     access = next(block for block in ground.terminal_inventory if block.terminal_id == "access_ka")
 
     assert access.count == len(ground.wan_interfaces)
@@ -525,13 +527,9 @@ def test_each_wan_interface_carries_its_own_terminal_rates() -> None:
     }
     assert set(rates) == wan_interfaces
 
-    kinds = {node.node_id: node.kind for node in resolved.nodes}
-    satellite_rates = {
-        value for (node_id, _), value in rates.items() if kinds[node_id] == "satellite"
-    }
-    ground_rates = {
-        value for (node_id, _), value in rates.items() if kinds[node_id] == "ground_station"
-    }
+    frames = {node.node_id: node.placement_frame for node in resolved.nodes}
+    satellite_rates = {value for (node_id, _), value in rates.items() if frames[node_id] == "orbit"}
+    ground_rates = {value for (node_id, _), value in rates.items() if frames[node_id] == "surface"}
     assert InterfaceRates(transmit_mbps=50.0, receive_mbps=600.0) in satellite_rates
     assert InterfaceRates(transmit_mbps=600.0, receive_mbps=50.0) in ground_rates
 

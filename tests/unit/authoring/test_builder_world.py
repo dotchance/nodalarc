@@ -13,6 +13,7 @@ import yaml
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian, EphemerisNodeTLE
+from nodalarc.models.resolved_session import node_kind_of
 from nodalarc.resolve_session import resolve_session, resolve_session_with_assets
 from vs_api.builder_world import (
     _builder_rule_allocations,
@@ -57,7 +58,7 @@ def test_world_node_set_and_kinds_match_resolver(walker_world: BuilderWorld) -> 
 
     assert {node.node_id for node in walker_world.nodes} == set(resolved_by_id)
     for node in walker_world.nodes:
-        assert node.kind == resolved_by_id[node.node_id].kind
+        assert node.kind == node_kind_of(resolved_by_id[node.node_id].placement_frame)
         ephemeris = walker_world.ephemeris.nodes.get(node.node_id)
         if node.kind == "satellite":
             assert isinstance(ephemeris, EphemerisNodeKeplerian)

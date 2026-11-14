@@ -112,13 +112,13 @@ class ResolvedAddressingView:
 
     def __init__(self, resolved: ResolvedSession) -> None:
         self._node_types = {
-            node.node_id: ("satellite" if node.kind == "satellite" else "ground_station")
+            node.node_id: ("satellite" if node.placement_frame == "orbit" else "ground_station")
             for node in resolved.nodes
         }
         self._sat_by_plane_slot: dict[tuple[int, int], str] = {}
         self._ambiguous_plane_slots: set[tuple[int, int]] = set()
         for node in resolved.nodes:
-            if node.kind == "satellite" and node.plane is not None and node.slot is not None:
+            if node.placement_frame == "orbit" and node.plane is not None and node.slot is not None:
                 key = (node.plane, node.slot)
                 if key in self._ambiguous_plane_slots:
                     continue
@@ -165,14 +165,14 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
     satellites = [
         _satellite_from_resolved(node, selected_access.get(node.node_id, ()))
         for node in resolved.nodes
-        if node.kind == "satellite"
+        if node.placement_frame == "orbit"
     ]
     if not satellites:
         raise ValueError("OME requires at least one satellite node")
 
     ground_candidate_satellites_by_gs = resolved.ground_candidate_satellites_by_gs()
     access_ground_ids = frozenset(ground_candidate_satellites_by_gs)
-    all_ground_nodes = [node for node in resolved.nodes if node.kind == "ground_station"]
+    all_ground_nodes = [node for node in resolved.nodes if node.placement_frame == "surface"]
     ground_nodes = [node for node in all_ground_nodes if node.node_id in access_ground_ids]
     gs_file = _ground_file_from_resolved(
         ground_nodes,
@@ -426,7 +426,7 @@ def _single_ome_propagator(resolved: ResolvedSession) -> SessionPropagatorId:
     propagators = {
         node.orbit.propagator
         for node in resolved.nodes
-        if node.kind == "satellite" and node.orbit is not None
+        if node.placement_frame == "orbit" and node.orbit is not None
     }
     if len(propagators) > 1:
         return "mixed"
@@ -524,7 +524,7 @@ def _ground_pair_pools(
             (nodes_by_id[candidate.node_a], nodes_by_id[candidate.node_b]),
             key=lambda node: node.node_id,
         )
-        station = first if first.kind == "ground_station" else second
+        station = first if first.placement_frame == "surface" else second
         station_body = _node_reference_body(station)
         pair_pools[(first.node_id, second.node_id)] = AssignedPairPools(
             rule_id=candidate.rule_id,
@@ -592,7 +592,7 @@ def _assigned_space_pairs(resolved: ResolvedSession) -> tuple[AssignedSpacePair,
 
 
 def _isl_link_type(left: ResolvedNode, right: ResolvedNode) -> IslPlaneRelation:
-    if left.kind == "satellite" and right.kind == "satellite":
+    if left.placement_frame == "orbit" and right.placement_frame == "orbit":
         if (
             left.segment_id == right.segment_id
             and left.plane is not None
@@ -778,7 +778,7 @@ def coverage_requirement(resolved: ResolvedSession) -> CoverageRequirement:
     reach_km: dict[str, float] = {}
     horizon_ticks = 0
     for node in resolved.nodes:
-        if node.kind == "satellite":
+        if node.placement_frame == "orbit":
             sat = _satellite_from_resolved(node, ())
             apoapsis = sat.elements.semi_major_axis_km * (1.0 + sat.elements.eccentricity)
             reach_km[sat.central_body] = max(reach_km.get(sat.central_body, 0.0), apoapsis)

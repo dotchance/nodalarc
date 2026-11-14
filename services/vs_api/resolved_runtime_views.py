@@ -46,7 +46,9 @@ def routing_label(resolved: ResolvedSession) -> str:
 
 def constellation_label(resolved: ResolvedSession) -> str:
     """Return the compact satellite-segment label used by session listings."""
-    segments = sorted({node.segment_id for node in resolved.nodes if node.kind == "satellite"})
+    segments = sorted(
+        {node.segment_id for node in resolved.nodes if node.placement_frame == "orbit"}
+    )
     return " + ".join(segments) if segments else "none"
 
 

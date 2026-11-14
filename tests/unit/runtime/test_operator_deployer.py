@@ -488,8 +488,10 @@ class TestPodInventory:
 
         assert set(inventory) == {node.node_id for node in resolved.nodes}
         for node in resolved.nodes:
-            expected = {"node_type": "satellite" if node.kind == "satellite" else "ground_station"}
-            if node.kind == "ground_station":
+            expected = {
+                "node_type": "satellite" if node.placement_frame == "orbit" else "ground_station"
+            }
+            if node.placement_frame == "surface":
                 expected["gs_name"] = node.local_node_id
             if node.plane is not None and node.slot is not None:
                 expected.update({"plane": node.plane, "slot": node.slot})

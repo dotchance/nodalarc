@@ -108,12 +108,12 @@ def test_segment_profile_overrides_the_node_definition(tmp_path: Path) -> None:
     session, roots = _session_with_user_ground(tmp_path, segment_mutation=override_segment)
     resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
-    ground = [node for node in resolution.nodes if node.kind == "ground_station"]
+    ground = [node for node in resolution.nodes if node.placement_frame == "surface"]
     assert ground
     for node in ground:
         assert node.profile == USER_PROFILE
         assert node.profile_level == "segment"
-    satellites = [node for node in resolution.nodes if node.kind == "satellite"]
+    satellites = [node for node in resolution.nodes if node.placement_frame == "orbit"]
     assert all(node.profile_level == "node_definition" for node in satellites)
 
 

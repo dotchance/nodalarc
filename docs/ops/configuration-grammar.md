@@ -1781,7 +1781,6 @@ runtime execution:
 - scheduling stated at both nodes of one candidate pair;
 - one terminal mount drawn on by a rule that fixes its pairs and by a
   `visible_candidates` rule;
-- a routing boundary over a `visible_candidates` rule;
 - bodies other than Earth, Luna and Mars;
 - a link candidate whose one-way delay can fall on both sides of the
   platform's long-delay bound (chart value `network.longDelayBoundSeconds`,

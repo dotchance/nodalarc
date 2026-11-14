@@ -75,6 +75,7 @@ from nodalarc.models.resolved_session import (
     NodeRole,
     ResolvedNode,
     ResolvedSession,
+    node_kind_of,
 )
 from nodalarc.models.scheduler_ops import (
     ActualLinkSnapshot,
@@ -201,7 +202,9 @@ class SessionContext:
         # The routing instances every participant runs; other nodes have none.
         self._routing_instances_by_node_id = routing_instances_by_node_id(resolved)
         self._role_by_node_id = resolved.node_roles()
-        self._kind_by_node_id = {node.node_id: node.kind for node in resolved.nodes}
+        self._kind_by_node_id = {
+            node.node_id: node_kind_of(node.placement_frame) for node in resolved.nodes
+        }
         self._tenant_by_node_id = {node.node_id: node.tenant_id for node in resolved.nodes}
         self._resolved_static_nodes_by_id = self._build_resolved_static_node_states(
             resolved,
@@ -2069,7 +2072,7 @@ class SessionContext:
                 role=role_by_node_id[node.node_id],
             )
             for node in resolved.nodes
-            if node.kind == "ground_station"
+            if node.placement_frame == "surface"
         }
 
     @staticmethod
@@ -2086,7 +2089,7 @@ class SessionContext:
             raise ValueError(f"resolved ground node {node.node_id!r} is missing fixed position")
         return NodeState(
             node_id=node.node_id,
-            node_type=node.kind,
+            node_type=node_kind_of(node.placement_frame),
             lat_deg=node.surface_position.lat_deg,
             lon_deg=node.surface_position.lon_deg,
             alt_km=node.surface_position.alt_m / 1000.0,

@@ -298,7 +298,7 @@ def test_shipped_session_renders_every_node_through_its_adapter(shipped_session)
 
     inventory = _pod_inventory(resolved)
     for node in resolved.nodes:
-        if node.kind == "satellite" and (node.plane is None or node.slot is None):
+        if node.placement_frame == "orbit" and (node.plane is None or node.slot is None):
             assert "plane" not in inventory[node.node_id], (
                 f"{path.name}: non-grid satellite {node.node_id} must not "
                 "carry fabricated grid coordinates"
@@ -311,7 +311,7 @@ def test_shipped_session_domains_are_single_components(shipped_session) -> None:
 
     lan_members: dict[str, list[str]] = defaultdict(list)
     for node in resolved.nodes:
-        if node.kind != "satellite":
+        if node.placement_frame != "orbit":
             lan_members[node.namespace].append(node.node_id)
 
     for domain in resolved.routing_domains:

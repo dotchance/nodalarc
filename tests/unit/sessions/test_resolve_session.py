@@ -334,7 +334,7 @@ def test_isis_derived_area_derivation_rejects_more_than_four_digits() -> None:
             "area_assignment": {"strategy": "per_plane"},
         }
     )
-    nodes = (SimpleNamespace(kind="satellite", plane=9999, node_id="space-sat-p9999s00"),)
+    nodes = (SimpleNamespace(placement_frame="orbit", plane=9999, node_id="space-sat-p9999s00"),)
 
     with pytest.raises(SessionResolutionError, match="area index 10000.*limit 9999"):
         resolver_module._validate_area_assignment(domain, nodes)
@@ -670,7 +670,7 @@ def test_explicit_loopback_assignment_owns_the_pooled_family() -> None:
     grounds = [
         node
         for node in resolved.nodes
-        if node.kind == "ground_station" and node.forwarding == "routed"
+        if node.placement_frame == "surface" and node.forwarding == "routed"
     ]
     assert grounds
     for ground in grounds:
@@ -695,7 +695,7 @@ def test_omitted_site_terminal_mount_is_not_installed_or_rule_eligible() -> None
 
     access_rule = raw["link_rules"].pop(0)
     resolved = resolve_session(raw)
-    ground = next(node for node in resolved.nodes if node.kind == "ground_station")
+    ground = next(node for node in resolved.nodes if node.placement_frame == "surface")
     assert ground.terminal_inventory == ()
 
     raw["link_rules"].insert(0, access_rule)
@@ -791,7 +791,7 @@ def test_site_terminal_narrowing_and_boresight_placement_resolve(tmp_path: Path)
     }
 
     resolved = _resolve_site_document(tmp_path, site)
-    ground = next(node for node in resolved.nodes if node.kind == "ground_station")
+    ground = next(node for node in resolved.nodes if node.placement_frame == "surface")
     terminal = ground.terminal_inventory[0]
 
     assert (terminal.transmit_mbps, terminal.receive_mbps) == (4000, 3500)
@@ -818,7 +818,7 @@ def _space_access_mount(raw: Any) -> tuple[object, dict[str, Any]]:
 
 def test_space_access_boresight_target_body_is_derived_from_placement() -> None:
     resolved = resolve_session(_raw_session())
-    satellite = next(node for node in resolved.nodes if node.kind == "satellite")
+    satellite = next(node for node in resolved.nodes if node.placement_frame == "orbit")
     access = next(
         block for block in satellite.terminal_inventory if block.endpoint_role == "access"
     )
@@ -1299,7 +1299,7 @@ def test_canonical_sgp4_space_node_set_materializes_exact_runtime_facts(
     monkeypatch.setattr(propagator_module, "propagate_sgp4_tle_gcrs", counted_propagation)
 
     resolved = resolve_session(raw)
-    satellites = [node for node in resolved.nodes if node.kind == "satellite"]
+    satellites = [node for node in resolved.nodes if node.placement_frame == "orbit"]
 
     assert calls == len(satellites) == 2
     assert [node.slot for node in satellites] == [0, 1]

@@ -104,7 +104,7 @@ def test_an_ipv4_only_lan_gives_its_members_and_hosts_no_ipv6() -> None:
         if node.host_attachment is not None:
             assert node.host_attachment.ipv6 is None
             assert node.host_attachment.gateway_ipv6 is None
-    router = next(node for node in resolved.nodes if node.kind == "ground_station")
+    router = next(node for node in resolved.nodes if node.placement_frame == "surface")
     conf = _frr_conf(resolved, router.node_id)
     assert "ipv6" not in conf
     assert "topology ipv6-unicast" not in conf
@@ -132,7 +132,7 @@ def test_an_ipv6_only_loopback_assignment_keeps_the_resolver_ipv4_loopback() -> 
 
     resolved = resolve_session(fixture)
 
-    satellites = [node for node in resolved.nodes if node.kind == "satellite"]
+    satellites = [node for node in resolved.nodes if node.placement_frame == "orbit"]
     assert satellites
     for satellite in satellites:
         assert satellite.interfaces is not None
@@ -152,7 +152,7 @@ def test_a_space_node_originating_an_ipv6_default_routes_ipv6_without_segments()
 
     resolved = resolve_session(fixture)
 
-    satellite = next(node for node in resolved.nodes if node.kind == "satellite")
+    satellite = next(node for node in resolved.nodes if node.placement_frame == "orbit")
     assert satellite.originated_prefixes is not None
     assert satellite.originated_prefixes.ipv6 == ("::/0",)
     assert satellite.address_families == {"ipv4", "ipv6"}

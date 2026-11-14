@@ -73,10 +73,14 @@ def test_space_carrier_expands_buses_members_and_origination() -> None:
     resolved = resolve_catalog_session(raw)
 
     carriers = [
-        node for node in resolved.nodes if node.kind == "satellite" and node.forwarding == "routed"
+        node
+        for node in resolved.nodes
+        if node.placement_frame == "orbit" and node.forwarding == "routed"
     ]
     members = [
-        node for node in resolved.nodes if node.kind == "satellite" and node.forwarding == "host"
+        node
+        for node in resolved.nodes
+        if node.placement_frame == "orbit" and node.forwarding == "host"
     ]
     assert len(carriers) == 2
     assert len(members) == 2

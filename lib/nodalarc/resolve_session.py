@@ -1333,7 +1333,7 @@ def _expand_site_placement(
                     segment_id=groups[0],
                     namespace=_normalize_token(site_id),
                     placement_groups=groups,
-                    kind="ground_station",
+                    placement_frame="surface",
                     frame_id=body["id"],
                     reference_body=body["id"],
                     tags=tuple(sorted(node_tags)),
@@ -1478,7 +1478,7 @@ def _expand_ground_payload_members(
                         segment_id=groups[0],
                         namespace=_normalize_token(site_id),
                         placement_groups=groups,
-                        kind="ground_station",
+                        placement_frame="surface",
                         frame_id=body["id"],
                         reference_body=body["id"],
                         tags=tuple(sorted(member_tags)),
@@ -1537,7 +1537,7 @@ def _resolved_space_node(
         local_node_id=local_id,
         segment_id=segment_id,
         namespace=segment_id,
-        kind="satellite",
+        placement_frame="orbit",
         frame_id=body["id"],
         central_body=body["id"],
         tags=tags,
@@ -1838,7 +1838,7 @@ def _expand_space_payload_members(
                         local_node_id=member_local,
                         segment_id=node.segment_id,
                         namespace=node.node_id,
-                        kind=node.kind,
+                        placement_frame=node.placement_frame,
                         frame_id=node.frame_id,
                         central_body=node.central_body,
                         tags=tuple(sorted(member_tags)),
@@ -2290,7 +2290,7 @@ def _apply_default_generated_space_loopbacks(nodes: list[_RuntimeNode]) -> list[
         interfaces = node.interfaces
         if (
             node.forwarding != "routed"
-            or node.kind != "satellite"
+            or node.placement_frame != "orbit"
             or (interfaces is not None and interfaces.lo0.ipv4 is not None)
         ):
             next_nodes.append(item)
@@ -2505,7 +2505,7 @@ def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) 
                 f"link rule {rule.id!r} endpoint {endpoint_index} declares min_elevation_deg, "
                 "but the field is valid only on the ground endpoint of an access rule"
             )
-        non_ground = sorted(node.node_id for node in nodes if node.kind != "ground_station")
+        non_ground = sorted(node.node_id for node in nodes if node.placement_frame != "surface")
         if non_ground:
             raise SessionResolutionError(
                 f"link rule {rule.id!r} endpoint {endpoint_index} declares min_elevation_deg "
@@ -2706,7 +2706,7 @@ def _validate_area_assignment(
     if assignment is None or assignment.strategy == "flat":
         return
 
-    satellites = tuple(node for node in selected_nodes if node.kind == "satellite")
+    satellites = tuple(node for node in selected_nodes if node.placement_frame == "orbit")
     if assignment.strategy in {"per_plane", "stripe"} and not satellites:
         raise SessionResolutionError(
             f"{assignment.strategy} area assignment in domain {domain.id!r} requires "
@@ -2746,7 +2746,7 @@ def _validate_area_assignment(
         )
 
     ground_by_local_id = {
-        node.local_node_id: node for node in selected_nodes if node.kind == "ground_station"
+        node.local_node_id: node for node in selected_nodes if node.placement_frame == "surface"
     }
     plane_owner: dict[int, str] = {}
     ground_owner: dict[str, str] = {}
@@ -2861,7 +2861,7 @@ def _derive_host_attachments(
             None,
         )
         if attach_entry is None:
-            if node.kind == "ground_station":
+            if node.placement_frame == "surface":
                 raise SessionResolutionError(
                     f"host node {node.node_id!r} requires segment addressing from placement"
                 )
@@ -3204,13 +3204,13 @@ def _refuse_uncollapsible_access_physics(resolved: ResolvedSession) -> None:
         if not entries:
             continue
         try:
-            if node.kind == "ground_station":
+            if node.placement_frame == "surface":
                 terminal_physics_profile(
                     tuple(_ground_terminal(entry) for entry in entries),
                     profile_id=f"{node.node_id}.terminals",
                     endpoint="ground",
                 )
-            elif node.kind == "satellite":
+            elif node.placement_frame == "orbit":
                 terminal_physics_profiles(
                     tuple(_satellite_ground_terminal(entry) for entry in entries),
                     profile_id=f"{node.node_id}.ground_terminals",
@@ -3247,7 +3247,7 @@ def _refuse_unstated_ground_floors(resolved: ResolvedSession) -> None:
             if endpoint.min_elevation_deg is not None:
                 continue
             for node_id in endpoint.node_ids:
-                if node_by_id[node_id].kind != "ground_station":
+                if node_by_id[node_id].placement_frame != "surface":
                     continue
                 if any(
                     endpoint.matches_terminal(item.block)
@@ -3368,11 +3368,11 @@ def _aim_satellite_access_terminals(
             station_bodies = {
                 node_by_id[node_id].reference_body
                 for node_id in other.node_ids
-                if node_by_id[node_id].kind == "ground_station"
+                if node_by_id[node_id].placement_frame == "surface"
             }
             for node_id in endpoint.node_ids:
                 node = node_by_id[node_id]
-                if node.kind != "satellite":
+                if node.placement_frame != "orbit":
                     continue
                 for block in node.terminal_inventory:
                     if block.endpoint_role == "access" and _terminal_matches(block, selector):
@@ -3809,8 +3809,8 @@ def _validate_access_candidate_endpoints(
     """An access candidate joins one ground station and one satellite, on the same body or on
     two bodies (a station and an orbiter of another body). Two stations on two bodies are a direct
     surface-to-surface link, which the runtime does not support."""
-    left_ground = left.kind == "ground_station"
-    right_ground = right.kind == "ground_station"
+    left_ground = left.placement_frame == "surface"
+    right_ground = right.placement_frame == "surface"
     if left_ground and right_ground and left.reference_body != right.reference_body:
         raise UnsupportedFeatureError(
             [
@@ -4186,10 +4186,10 @@ def _validate_routing_boundaries(
             raise SessionResolutionError(
                 f"routing boundary over {boundary.over!r} names a disabled link rule"
             )
-        if rule.assigns_terminals:
+        if rule.kind == "access":
             raise SessionResolutionError(
-                f"routing boundary over {boundary.over!r} names a rule whose terminals are "
-                "assigned per pass; boundaries run over fixed inter-domain links"
+                f"routing boundary over {boundary.over!r} names an access rule; "
+                "boundaries run over fixed inter-domain links"
             )
         for export in boundary.export:
             if export.from_ == export.to:

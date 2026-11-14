@@ -125,7 +125,7 @@ def test_a_station_may_state_no_scheduling_and_nodalarc_chooses_its_links() -> N
 
     resolved = resolve_session(document, catalog=shipped_read_view())
 
-    stations = [node for node in resolved.nodes if node.kind == "ground_station"]
+    stations = [node for node in resolved.nodes if node.placement_frame == "surface"]
     assert stations and all(node.ground_scheduling is None for node in stations)
     assert resolved.ground_candidate_satellites_by_gs()
 
@@ -141,7 +141,7 @@ def test_n_plus_a_stated_reserve_above_the_installed_terminals_is_refused() -> N
     installed = min(
         sum(block.count for block in node.terminal_inventory if block.endpoint_role == "access")
         for node in resolved.nodes
-        if node.kind == "ground_station"
+        if node.placement_frame == "surface"
     )
     access["topology"] = {"mode": "visible_candidates", "n": installed}
 
@@ -168,7 +168,8 @@ def test_ground_without_access_candidates_does_not_require_scheduling() -> None:
 
     assert resolved.ground_candidate_satellites_by_gs() == {}
     assert any(
-        node.kind == "ground_station" and node.ground_scheduling is None for node in resolved.nodes
+        node.placement_frame == "surface" and node.ground_scheduling is None
+        for node in resolved.nodes
     )
 
 

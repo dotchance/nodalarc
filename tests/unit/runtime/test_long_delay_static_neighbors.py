@@ -128,7 +128,9 @@ def test_a_long_delay_access_link_pins_each_peer_at_the_access_interface_it_is_l
     }
     assert _long_delay_access_peers_by_node(resolved) == {}
 
-    satellite = next(n for n in (access.node_a, access.node_b) if nodes[n].kind == "satellite")
+    satellite = next(
+        n for n in (access.node_a, access.node_b) if nodes[n].placement_frame == "orbit"
+    )
     station = access.node_b if satellite == access.node_a else access.node_a
     node = NodeSpec.model_validate(
         {

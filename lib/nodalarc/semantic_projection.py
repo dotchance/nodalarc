@@ -102,7 +102,7 @@ def _node_projection(node: ResolvedNode) -> dict[str, Any]:
             "segment_id": node.segment_id,
             "namespace": node.namespace,
             "placement_groups": sorted(node.placement_groups),
-            "kind": node.kind,
+            "placement_frame": node.placement_frame,
             "frame_id": node.frame_id,
             "central_body": node.central_body,
             "reference_body": node.reference_body,

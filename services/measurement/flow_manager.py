@@ -53,7 +53,7 @@ def resolve_dst_ip(dst_node_id: str, resolved: ResolvedSession) -> str:
     node = resolved.node_by_id(dst_node_id)
     if node is None:
         raise ValueError(f"Cannot resolve probe destination {dst_node_id!r}: unknown node")
-    if node.kind != "ground_station":
+    if node.placement_frame != "surface":
         raise ValueError(
             f"Cannot resolve probe destination {dst_node_id!r}: destination is not a ground node"
         )

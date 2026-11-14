@@ -1193,7 +1193,7 @@ def compile_builder_draft(
                     draft_path=result.field_path,
                 )
             )
-        if not any(node.kind == "satellite" for node in resolution.resolved.nodes):
+        if not any(node.placement_frame == "orbit" for node in resolution.resolved.nodes):
             issues.append(
                 BuilderIssue(
                     code="builder.readiness.no_satellites",

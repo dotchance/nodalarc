@@ -162,7 +162,7 @@ def remove_flow(
     from measurement.flow_manager import resolve_src_pod_ip
 
     for node in resolved.nodes:
-        if node.kind != "ground_station":
+        if node.placement_frame != "surface":
             continue
         pod_ip = resolve_src_pod_ip(node.node_id)
         if pod_ip is None:

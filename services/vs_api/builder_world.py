@@ -35,6 +35,7 @@ from nodalarc.models.resolved_session import (
     ResolvedNode,
     ResolvedSession,
     TerminalMediumLiteral,
+    node_kind_of,
 )
 from nodalarc.models.session import session_epoch_unix
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved, resolved_body_frames_at_epoch
@@ -202,7 +203,7 @@ def _preview_scope(rule: ResolvedLinkRule, node_by_id: dict[str, ResolvedNode]) 
         for nid in endpoint.node_ids
         if nid in node_by_id
     ]
-    if not any(node.kind == "satellite" for node in members):
+    if not any(node.placement_frame == "orbit" for node in members):
         return "terrestrial_pending"
     return "computed"
 
@@ -363,8 +364,8 @@ def _pair_request(
     right = node_by_id.get(node_b)
     if left is None or right is None:
         return "no_geometry"
-    a_sat = left.kind == "satellite"
-    b_sat = right.kind == "satellite"
+    a_sat = left.placement_frame == "orbit"
+    b_sat = right.placement_frame == "orbit"
     if a_sat and b_sat:
         return _isl_request(node_a, node_b, candidate, sat_states, ctx, rule, left.central_body)
     if a_sat != b_sat:
@@ -614,7 +615,7 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
     # A satellite-less session cannot build OME inputs (the runtime requires a
     # satellite), but it is valid grammar that resolves and renders. Guard the
     # OME chain on satellite presence; the rest of the world is identical.
-    if any(node.kind == "satellite" for node in resolved.nodes):
+    if any(node.placement_frame == "orbit" for node in resolved.nodes):
         runtime = build_ome_inputs_from_resolved(resolved)
         ctx = build_step_context(
             satellites=runtime.satellites,
@@ -678,7 +679,7 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             segment_id=node.segment_id,
             namespace=node.namespace,
             tenant_id=node.tenant_id,
-            kind=node.kind,
+            kind=node_kind_of(node.placement_frame),
             plane=node.plane,
             slot=node.slot,
             tags=node.tags,

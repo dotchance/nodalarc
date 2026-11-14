@@ -179,7 +179,7 @@ def _check_selection_score_scale(resolved: ResolvedSession) -> list[ValidationRe
     ranking: tuple[str, ...] | None = None
     for node in resolved.nodes:
         scheduling = node.ground_scheduling
-        if node.kind != "ground_station" or scheduling is None:
+        if node.placement_frame != "surface" or scheduling is None:
             continue
         if scheduling.selection_policy is not None:
             for field, name in _SELECTION_POLICY_NAMES.items():
@@ -221,7 +221,7 @@ def _site_lan_neighbors_by_node(resolved: ResolvedSession) -> dict[str, set[str]
     members_by_site: dict[str, list[str]] = {}
     for node in resolved.nodes:
         if (
-            node.kind == "ground_station"
+            node.placement_frame == "surface"
             and node.forwarding == "routed"
             and node.interfaces is not None
             and node.interfaces.ethernet
@@ -264,7 +264,7 @@ def _check_ground_mbb_capacity(resolved: ResolvedSession) -> list[ValidationResu
     # selects never allocate, so they carry nothing to validate here.
     selected_access = resolved.selected_access_terminals_by_node()
     for node in resolved.nodes:
-        if node.kind != "ground_station" or node.ground_scheduling is None:
+        if node.placement_frame != "surface" or node.ground_scheduling is None:
             continue
         scheduling = node.ground_scheduling
         if scheduling.handover_mode != "mbb":
@@ -321,7 +321,7 @@ def _check_access_geometry_feasibility(resolved: ResolvedSession) -> list[Valida
             continue
         node_a = node_by_id[candidate.node_a]
         node_b = node_by_id[candidate.node_b]
-        ground, sat = (node_a, node_b) if node_a.kind == "ground_station" else (node_b, node_a)
+        ground, sat = (node_a, node_b) if node_a.placement_frame == "surface" else (node_b, node_a)
         if ground.surface_position is None or sat.orbit is None:
             continue
         # The inclination band bounds where a satellite passes over its own body. It says

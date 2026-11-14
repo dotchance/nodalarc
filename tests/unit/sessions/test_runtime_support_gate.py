@@ -128,7 +128,7 @@ class TestMandatoryGate:
         raw = _lunar_constellation(_session())
         _move_ground_sites_to_luna(raw)
         resolved = resolve_session(raw)
-        assert {n.central_body for n in resolved.nodes if n.kind == "satellite"} == {"luna"}
+        assert {n.central_body for n in resolved.nodes if n.placement_frame == "orbit"} == {"luna"}
         # The platform selects the data for the session's bodies.
         assert [f.file_id for f in resolved.ephemeris_files] == [
             "de440s",
@@ -140,7 +140,7 @@ class TestMandatoryGate:
         raw = _constellation_around(_session(), "mars", altitude_km=400)
         _move_ground_sites_to(raw, "mars")
         resolved = resolve_session(raw)
-        assert {n.central_body for n in resolved.nodes if n.kind == "satellite"} == {"mars"}
+        assert {n.central_body for n in resolved.nodes if n.placement_frame == "orbit"} == {"mars"}
         assert [f.file_id for f in resolved.ephemeris_files] == [
             "de440s",
             "mars-satellites",
@@ -165,7 +165,7 @@ class TestCrossBodyAccess:
         rule pairs them: a station and orbiters of another body. Each orbiter's access terminal
         points at Earth, the body of the stations it serves."""
         resolved = resolve_session(_lunar_constellation(_session()))
-        satellites = [node for node in resolved.nodes if node.kind == "satellite"]
+        satellites = [node for node in resolved.nodes if node.placement_frame == "orbit"]
         assert satellites
         for node in satellites:
             assert node.central_body == "luna"
@@ -263,7 +263,7 @@ class TestUnconsumedGrammarClass:
         raw = _session()
         raw["segments"][0]["clock"] = {"model": "session"}
         resolved = resolve_session(raw)
-        sats = [n for n in resolved.nodes if n.kind == "satellite"]
+        sats = [n for n in resolved.nodes if n.placement_frame == "orbit"]
         assert sats and all(n.clock.model == "session" for n in sats)
 
     def test_affine_explicit_node_clock_rejected_typed(self, tmp_path: Path) -> None:
@@ -441,7 +441,7 @@ class TestTerminalBindingClass:
         raw.write_catalog(raw.space_node_ref, node_document)
 
         resolved = resolve_session(raw)
-        sat = next(n for n in resolved.nodes if n.kind == "satellite")
+        sat = next(n for n in resolved.nodes if n.placement_frame == "orbit")
         name_by_terminal = {w.name: w.terminal_id for w in sat.wan_interfaces}
         optical_candidates = [
             candidate
@@ -487,7 +487,7 @@ class TestSharedSitePlacement:
     def test_site_placed_by_two_groups_instantiates_once(self) -> None:
         raw = self._two_group_session()
         resolved = resolve_session(raw)
-        ground_nodes = [n for n in resolved.nodes if n.kind == "ground_station"]
+        ground_nodes = [n for n in resolved.nodes if n.placement_frame == "surface"]
         assert len(ground_nodes) == 1
         node = ground_nodes[0]
         assert node.placement_groups == ("ground", "ground_b")

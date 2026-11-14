@@ -263,7 +263,7 @@ def test_projection_normalizes_incidental_collection_and_endpoint_order(resolved
 
 def test_projection_digest_changes_for_runtime_semantic_changes(resolved) -> None:
     baseline = resolved_session_semantic_digest(resolved)
-    satellite = next(node for node in resolved.nodes if node.kind == "satellite")
+    satellite = next(node for node in resolved.nodes if node.placement_frame == "orbit")
 
     def replace_satellite(changed_satellite):
         return resolved.model_copy(

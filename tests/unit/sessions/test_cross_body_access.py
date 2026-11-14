@@ -100,7 +100,7 @@ def test_each_access_terminal_points_at_the_body_of_the_stations_it_serves(
     earth_stations = {
         node.node_id
         for node in resolved.nodes
-        if node.kind == "ground_station" and node.reference_body == "earth"
+        if node.placement_frame == "surface" and node.reference_body == "earth"
     }
     cross_body = [
         candidate

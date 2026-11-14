@@ -390,9 +390,9 @@ def _pod_inventory(resolved: ResolvedSession) -> dict[str, dict]:
     inventory: dict[str, dict] = {}
     for node in resolved.nodes:
         facts: dict = {
-            "node_type": "satellite" if node.kind == "satellite" else "ground_station",
+            "node_type": "satellite" if node.placement_frame == "orbit" else "ground_station",
         }
-        if node.kind == "ground_station":
+        if node.placement_frame == "surface":
             facts["gs_name"] = node.local_node_id
         if node.plane is not None and node.slot is not None:
             facts.update({"plane": node.plane, "slot": node.slot})
@@ -566,8 +566,8 @@ def ensure_session_configmaps(
 
     # --- Step 2: Use catalog-resolved runtime truth ---
     _progress("Using resolved catalog runtime definitions")
-    satellite_count = sum(1 for node in resolved_session.nodes if node.kind == "satellite")
-    ground_count = sum(1 for node in resolved_session.nodes if node.kind == "ground_station")
+    satellite_count = sum(1 for node in resolved_session.nodes if node.placement_frame == "orbit")
+    ground_count = sum(1 for node in resolved_session.nodes if node.placement_frame == "surface")
     _progress(
         f"Expanded {satellite_count} satellites and {ground_count} ground nodes "
         f"across {len(resolved_session.routing_domains)} routing domain(s)"
@@ -996,7 +996,7 @@ def write_wiring_manifest(
             **address_family_sysctls(node),
             **requirements.sysctls,
         }
-        if node.kind == "satellite":
+        if node.placement_frame == "orbit":
             # plane/slot are optional grid coordinates — individually
             # placed satellites (GEO longitude slots, state vectors) have
             # neither. The Node Agent never reads them; included only
@@ -1016,7 +1016,7 @@ def write_wiring_manifest(
                 "remove_default_route": True,
             }
             continue
-        if node.kind == "ground_station":
+        if node.placement_frame == "surface":
             nodes[node.node_id] = {
                 "node_type": "ground_station",
                 "gs_name": node.local_node_id,
@@ -1030,7 +1030,9 @@ def write_wiring_manifest(
             }
             ground_bridges[node.node_id] = {}
             continue
-        raise ValueError(f"unsupported node kind in wiring manifest: {node.kind!r}")
+        raise ValueError(
+            f"unsupported placement frame in wiring manifest: {node.placement_frame!r}"
+        )
 
     # Every link interface's MAC address comes from its node and name on whichever host wires it
     # (a long-delay link's static neighbors name the far end's). The derivation is a hash, so the

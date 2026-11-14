@@ -49,7 +49,19 @@ from nodalarc.models.segments import GroundScheduling, SegmentClock
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.tle import tle_epoch_unix, tle_norad_id, validate_tle_pair
 
+# Where a node is placed: fixed to a body's surface, or in orbit about a body. Every
+# difference between the two that the runtime acts on is a difference of placement: a surface
+# node has a position and a horizon, an orbiting node has an orbit.
+type PlacementFrame = Literal["orbit", "surface"]
+# What the page calls a node of each placement frame.
 type NodeKind = Literal["satellite", "ground_station"]
+
+
+def node_kind_of(placement_frame: PlacementFrame) -> NodeKind:
+    """The page's name for a node of one placement frame."""
+    return "satellite" if placement_frame == "orbit" else "ground_station"
+
+
 # The authored object a resolution refusal names, when its raise site knows it.
 type ResolutionSubjectKind = Literal["segment", "link_rule", "node"]
 
@@ -424,7 +436,7 @@ class ResolvedRoutingDomain(BaseModel):
                 if assignment is not None and assignment.gs_area_id
                 else first_area
             )
-        if node.kind != "satellite":
+        if node.placement_frame != "orbit":
             if assignment.strategy == "explicit":
                 matches = [
                     mapping.area_id
@@ -599,7 +611,7 @@ class ResolvedNode(BaseModel):
     # first placing group for surfaces that need a single primary label.
     # Empty for space nodes (their segment IS their namespace).
     placement_groups: tuple[NonEmptyReference, ...] = ()
-    kind: NodeKind
+    placement_frame: PlacementFrame
     frame_id: NonEmptyReference
     central_body: FrameBodyName | None = None
     reference_body: SupportedSurfaceBody | None = None
@@ -684,7 +696,7 @@ class ResolvedNode(BaseModel):
                     f"{block.owner_node_id!r} != node_id {self.node_id!r}"
                 )
             if block.endpoint_role == "access":
-                if self.kind == "ground_station" and not isinstance(
+                if self.placement_frame == "surface" and not isinstance(
                     block.boresight, TerminalBoresight
                 ):
                     raise ValueError(
@@ -693,7 +705,7 @@ class ResolvedNode(BaseModel):
                     )
                 # The body a satellite access terminal points at is the body of the stations its
                 # access rules select (resolver-derived); it may differ from the central body.
-                if self.kind == "satellite" and not isinstance(
+                if self.placement_frame == "orbit" and not isinstance(
                     block.boresight, SatGroundTerminalBoresight
                 ):
                     raise ValueError(
@@ -711,20 +723,20 @@ class ResolvedNode(BaseModel):
                     f"node {self.node_id!r} WAN interface {wan.name!r} names terminal "
                     f"{wan.terminal_id!r}, which is not in its terminal inventory"
                 )
-        if self.kind == "ground_station":
+        if self.placement_frame == "surface":
             if self.reference_body is None:
                 raise ValueError(f"ground station {self.node_id!r} requires reference_body")
             if self.surface_position is None:
                 raise ValueError(f"ground station {self.node_id!r} requires surface_position")
         elif self.ground_scheduling is not None:
             raise ValueError(f"non-ground node {self.node_id!r} must not set ground_scheduling")
-        if self.kind == "satellite" and self.central_body is None:
+        if self.placement_frame == "orbit" and self.central_body is None:
             raise ValueError(f"satellite {self.node_id!r} requires central_body")
-        if self.kind == "satellite" and self.orbit is None:
+        if self.placement_frame == "orbit" and self.orbit is None:
             raise ValueError(f"satellite {self.node_id!r} requires orbit facts")
-        if self.kind != "satellite" and self.orbit is not None:
+        if self.placement_frame != "orbit" and self.orbit is not None:
             raise ValueError(f"non-satellite node {self.node_id!r} must not set orbit")
-        if self.kind != "satellite" and (self.plane is not None or self.slot is not None):
+        if self.placement_frame != "orbit" and (self.plane is not None or self.slot is not None):
             raise ValueError(f"non-satellite node {self.node_id!r} must not set plane/slot")
         return self
 
@@ -1372,7 +1384,7 @@ class ResolvedSession(BaseModel):
             for endpoint in rule.endpoints:
                 for node_id in endpoint.node_ids:
                     node = node_by_id[node_id]
-                    if node.kind != "ground_station":
+                    if node.placement_frame != "surface":
                         continue
                     installed_floors = [
                         item.block.installed_min_elevation_deg
@@ -1543,7 +1555,7 @@ class ResolvedSession(BaseModel):
         """
         return {
             node.node_id: index
-            for index, node in enumerate(n for n in self.nodes if n.kind == "ground_station")
+            for index, node in enumerate(n for n in self.nodes if n.placement_frame == "surface")
         }
 
     def sid_index_by_domain(self) -> dict[str, dict[str, int]]:
@@ -1626,8 +1638,8 @@ class ResolvedSession(BaseModel):
 
     def ground_candidate_satellites_by_gs(self) -> dict[str, tuple[str, ...]]:
         """Return access candidate satellites keyed by ground station node id."""
-        ground_ids = {node.node_id for node in self.nodes if node.kind == "ground_station"}
-        satellite_ids = {node.node_id for node in self.nodes if node.kind == "satellite"}
+        ground_ids = {node.node_id for node in self.nodes if node.placement_frame == "surface"}
+        satellite_ids = {node.node_id for node in self.nodes if node.placement_frame == "orbit"}
         result: dict[str, list[str]] = {}
         for candidate in self.link_candidates:
             if candidate.kind != "access":

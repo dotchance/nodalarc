@@ -100,8 +100,12 @@ def test_ome_inputs_are_resolved_owned_and_materialize_ground_candidates(tmp_pat
 
     runtime = build_ome_inputs_from_resolved(resolved)
 
-    resolved_satellite_ids = {node.node_id for node in resolved.nodes if node.kind == "satellite"}
-    resolved_ground_ids = {node.node_id for node in resolved.nodes if node.kind == "ground_station"}
+    resolved_satellite_ids = {
+        node.node_id for node in resolved.nodes if node.placement_frame == "orbit"
+    }
+    resolved_ground_ids = {
+        node.node_id for node in resolved.nodes if node.placement_frame == "surface"
+    }
     assert {sat.node_id for sat in runtime.satellites} == resolved_satellite_ids
     assert runtime.gs_file is not None
     assert {station.name for station in runtime.gs_file.stations} == resolved_ground_ids
@@ -178,7 +182,7 @@ def test_tdrs_access_rule_selects_reciprocal_ka_mounts_with_global_indices() -> 
         for station in cfg.gs_file.stations
         for index in (2, 3)
     } == {InterfaceRates(transmit_mbps=600.0, receive_mbps=50.0)}
-    satellites = {node.node_id for node in cfg.resolved.nodes if node.kind == "satellite"}
+    satellites = {node.node_id for node in cfg.resolved.nodes if node.placement_frame == "orbit"}
     assert {rates[(node_id, f"gnd{index}")] for node_id in satellites for index in (5, 6)} == {
         InterfaceRates(transmit_mbps=50.0, receive_mbps=600.0)
     }
@@ -236,7 +240,7 @@ def test_ome_maps_resolved_two_body_to_truthful_runtime_propagator_id(tmp_path: 
     resolved = _resolved(tmp_path)
     nodes = [
         node.model_copy(update={"orbit": node.orbit.model_copy(update={"propagator": "two_body"})})
-        if node.kind == "satellite" and node.orbit is not None
+        if node.placement_frame == "orbit" and node.orbit is not None
         else node
         for node in resolved.nodes
     ]
@@ -252,7 +256,7 @@ def test_ome_inputs_support_mixed_resolved_satellite_propagators(tmp_path: Path)
     nodes = []
     changed = False
     for node in resolved.nodes:
-        if node.kind == "satellite" and node.orbit is not None and not changed:
+        if node.placement_frame == "orbit" and node.orbit is not None and not changed:
             nodes.append(
                 node.model_copy(
                     update={"orbit": node.orbit.model_copy(update={"propagator": "two_body"})}
@@ -351,7 +355,7 @@ def test_ome_materializes_eccentric_orbits_into_runtime_elements(tmp_path: Path)
     resolved = _resolved(tmp_path)
     nodes = list(resolved.nodes)
     for index, node in enumerate(nodes):
-        if node.kind == "satellite":
+        if node.placement_frame == "orbit":
             assert node.orbit is not None
             nodes[index] = node.model_copy(
                 update={
@@ -408,7 +412,7 @@ def test_rule_endpoint_elevation_mask_is_enforced_not_just_displayed(tmp_path: P
     resolved = _resolved(tmp_path, raw)
 
     masks = resolved.effective_ground_min_elevation_by_gs()
-    gs_id = next(node.node_id for node in resolved.nodes if node.kind == "ground_station")
+    gs_id = next(node.node_id for node in resolved.nodes if node.placement_frame == "surface")
     assert masks[gs_id] >= 37.0
 
     runtime = build_ome_inputs_from_resolved(resolved)

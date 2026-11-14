@@ -121,7 +121,7 @@ def test_enabled_link_rule_with_no_candidates_is_error() -> None:
 
 def test_routing_domain_member_without_internal_candidate_is_error() -> None:
     resolved = _resolved(ground_stations={"stations": ["a", "b", "c"]})
-    ground_ids = [node.node_id for node in resolved.nodes if node.kind == "ground_station"]
+    ground_ids = [node.node_id for node in resolved.nodes if node.placement_frame == "surface"]
     isolated_domain = ResolvedRoutingDomain(
         domain_id="ground_only_domain",
         protocol="isis",

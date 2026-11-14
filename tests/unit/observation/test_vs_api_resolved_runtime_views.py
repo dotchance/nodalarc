@@ -105,7 +105,7 @@ def test_a_session_without_authored_routing_reports_the_domain_it_runs():
     areas = resolved.instance_areas_by_node()
     assert set(areas) == set(domain.node_ids)
     assert set(areas.values()) == {(IsisInstanceAreas("default_domain", ("49.0001",)),)}
-    ground = next(n for n in resolved.nodes if n.kind == "ground_station")
+    ground = next(n for n in resolved.nodes if n.placement_frame == "surface")
     state = context.nodes[ground.node_id]
     assert state.role == "router"
     assert state.routing_instances == (
@@ -147,7 +147,7 @@ def test_a_router_in_two_instances_reports_each_instance_with_its_own_areas():
         source_id="user:sessions/two-domains.yaml",
         history_path=None,
     )
-    ground = next(n for n in resolution.resolved.nodes if n.kind == "ground_station")
+    ground = next(n for n in resolution.resolved.nodes if n.placement_frame == "surface")
     lan = tuple(sorted(ground.interfaces.ethernet))
 
     [isis, ospf] = context.nodes[ground.node_id].routing_instances

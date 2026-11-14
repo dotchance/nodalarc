@@ -27,7 +27,7 @@ def _resolved(stations: list[str] | None = None):
 
 
 def _ground_ids(resolved):
-    return [node.node_id for node in resolved.nodes if node.kind == "ground_station"]
+    return [node.node_id for node in resolved.nodes if node.placement_frame == "surface"]
 
 
 def test_resolves_first_non_default_originated_ipv4_prefix() -> None:
@@ -43,7 +43,7 @@ def test_default_route_originated_prefix_is_not_probe_destination() -> None:
     resolved = _resolved(["a"])
     nodes = []
     for node in resolved.nodes:
-        if node.kind == "ground_station" and node.originated_prefixes is not None:
+        if node.placement_frame == "surface" and node.originated_prefixes is not None:
             nodes.append(
                 node.model_copy(
                     update={
@@ -67,7 +67,7 @@ def test_falls_back_to_resolved_terr0_when_no_originated_prefix_exists() -> None
     resolved = _resolved(["a"])
     nodes = [
         node.model_copy(update={"originated_prefixes": None})
-        if node.kind == "ground_station"
+        if node.placement_frame == "surface"
         else node
         for node in resolved.nodes
     ]
@@ -91,7 +91,7 @@ def test_unknown_or_unqualified_destination_raises() -> None:
 
 def test_satellite_destination_is_rejected() -> None:
     resolved = _resolved(["a"])
-    sat_id = next(node.node_id for node in resolved.nodes if node.kind == "satellite")
+    sat_id = next(node.node_id for node in resolved.nodes if node.placement_frame == "orbit")
 
     with pytest.raises(ValueError, match="not a ground node"):
         resolve_dst_ip(sat_id, resolved)

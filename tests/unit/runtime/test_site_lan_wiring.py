@@ -356,7 +356,7 @@ class TestRenderAndReadiness:
             _two_node_site_session(),
             source_context=SourceContext(origin="test.site_lan", run_id="run-test-0001"),
         )
-        ground = [n for n in resolved.nodes if n.kind == "ground_station"]
+        ground = [n for n in resolved.nodes if n.placement_frame == "surface"]
         assert len(ground) == 2
         for node in ground:
             assert terr0_facts(resolved, node)["igp_active"] is True
@@ -369,7 +369,7 @@ class TestRenderAndReadiness:
             ),
             source_context=SourceContext(origin="test.site_lan", run_id="run-test-0002"),
         )
-        lone = next(n for n in single.nodes if n.kind == "ground_station")
+        lone = next(n for n in single.nodes if n.placement_frame == "surface")
         assert terr0_facts(single, lone)["igp_active"] is False
 
     def test_site_lan_membership_satisfies_domain_connectivity(self) -> None:

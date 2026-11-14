@@ -19,7 +19,6 @@ from typing import Literal
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
     HandoverPolicySpec,
-    HysteresisParameters,
     MbbPreemptionPolicy,
     RankingComponent,
     SelectionPolicySpec,
@@ -36,11 +35,7 @@ from nodalarc.models.link_decisions import (
     UnscheduledPair,
 )
 
-from ome.ground_handover_policies import (
-    HandoverContext,
-    compute_effective_hysteresis_discount,
-    evaluate_handover,
-)
+from ome.ground_handover_policies import HandoverContext, evaluate_handover
 from ome.ground_selection_policies import SelectionContext, score_candidate
 from ome.types import (
     MbbTeardown,
@@ -104,41 +99,6 @@ _LOCKED_REJECTION_REASONS: frozenset[GroundUnscheduledReason] = frozenset(
         "failed_acquire",
     }
 )
-
-
-def _compute_pair_score(
-    elevation_deg: float,
-    policy: str,
-    remaining_visible_s: float | None = None,
-) -> float:
-    """Legacy test helper for pure selection scoring. Higher is better."""
-
-    if policy == "highest-elevation":
-        return elevation_deg
-    if policy == "lowest-elevation":
-        return 90.0 - elevation_deg
-    if policy == "longest-remaining-pass":
-        if remaining_visible_s is None:
-            raise ValueError(
-                "Ground scheduling policy 'longest-remaining-pass' requires "
-                "OME pass lookahead; missing remaining_visible_s"
-            )
-        return remaining_visible_s
-    raise ValueError(f"Unknown ground scheduling policy: {policy!r}")
-
-
-def _compute_effective_discount(
-    elevation_deg: float,
-    min_elevation_deg: float,
-    hyst: HysteresisParameters,
-) -> float:
-    """Legacy test helper for hysteresis hold-score calculation."""
-
-    return compute_effective_hysteresis_discount(
-        elevation_deg=elevation_deg,
-        min_elevation_deg=min_elevation_deg,
-        params=hyst,
-    )
 
 
 def _normalized_pair(gs_id: str, sat_id: str) -> tuple[str, str]:

@@ -3,9 +3,10 @@
 # Additional terms under AGPL-3.0 Section 7 are in the NOTICE file.
 """Tests for hysteresis-aware ground link allocation.
 
-The helper-function tests pin score/discount invariants; the allocator tests
-exercise real make-before-break replacement decisions so production ordering,
-terminal occupancy, and pending teardown behavior are covered together.
+The score and discount tests pin the values the selection scorer and the
+hysteresis discount return; the allocator tests exercise real make-before-break
+replacement decisions so production ordering, terminal occupancy, and pending
+teardown behavior are covered together.
 """
 
 from __future__ import annotations
@@ -16,11 +17,9 @@ from nodalarc.models.ground_policy import (
     HysteresisParameters,
     SelectionPolicySpec,
 )
-from ome.ground_allocator import (
-    _compute_effective_discount,
-    _compute_pair_score,
-    allocate_ground_links,
-)
+from ome.ground_allocator import allocate_ground_links
+from ome.ground_handover_policies import compute_effective_hysteresis_discount
+from ome.ground_selection_policies import SelectionContext, score_candidate
 from ome.visibility import GroundVisibility
 
 from tests.ome_runtime_fixtures import allocator_timing_kwargs
@@ -78,71 +77,102 @@ def _visible_gv(sat_id: str, elevation_deg: float, range_km: float) -> GroundVis
     )
 
 
-class TestComputePairScore:
-    """_compute_pair_score must always return positive, higher=better."""
+def _score(
+    elevation_deg: float,
+    policy: SelectionPolicySpec,
+    remaining_visible_s: float | None = None,
+) -> float:
+    """Score one visible candidate through the production scorer."""
+    return score_candidate(
+        policy=policy,
+        visibility=GroundVisibility(
+            sat_id="sat-test",
+            visible=True,
+            elevation_deg=elevation_deg,
+            range_km=1000.0,
+            remaining_visible_s=remaining_visible_s,
+            reject_reason="ok",
+        ),
+        context=SelectionContext(step=0, gs_id="gs-test", sat_id="sat-test"),
+    )
+
+
+def _discount(elevation_deg: float, min_elevation_deg: float, hyst: HysteresisParameters) -> float:
+    return compute_effective_hysteresis_discount(
+        elevation_deg=elevation_deg,
+        min_elevation_deg=min_elevation_deg,
+        params=hyst,
+    )
+
+
+class TestSelectionScore:
+    """The selection scorer returns a non-negative score; higher is better."""
 
     def test_highest_elevation_positive(self):
-        assert _compute_pair_score(45.0, "highest-elevation") == 45.0
+        assert _score(45.0, _selection_policy("highest-elevation")) == 45.0
 
     def test_lowest_elevation_positive(self):
-        score = _compute_pair_score(45.0, "lowest-elevation")
+        score = _score(45.0, _selection_policy("lowest-elevation"))
         assert score == 45.0  # 90 - 45
 
     def test_lowest_elevation_lower_elev_higher_score(self):
-        s30 = _compute_pair_score(30.0, "lowest-elevation")
-        s45 = _compute_pair_score(45.0, "lowest-elevation")
+        s30 = _score(30.0, _selection_policy("lowest-elevation"))
+        s45 = _score(45.0, _selection_policy("lowest-elevation"))
         assert s30 > s45  # 60 > 45
 
     def test_highest_elevation_higher_elev_higher_score(self):
-        s30 = _compute_pair_score(30.0, "highest-elevation")
-        s45 = _compute_pair_score(45.0, "highest-elevation")
+        s30 = _score(30.0, _selection_policy("highest-elevation"))
+        s45 = _score(45.0, _selection_policy("highest-elevation"))
         assert s45 > s30
 
     def test_longest_remaining_pass_uses_dwell_time(self):
-        s_short = _compute_pair_score(70.0, "longest-remaining-pass", 12.0)
-        s_long = _compute_pair_score(30.0, "longest-remaining-pass", 90.0)
+        s_short = _score(70.0, _selection_policy("longest-remaining-pass"), 12.0)
+        s_long = _score(30.0, _selection_policy("longest-remaining-pass"), 90.0)
         assert s_long > s_short
 
     def test_longest_remaining_pass_requires_lookahead_value(self):
         with pytest.raises(ValueError, match="requires OME pass lookahead"):
-            _compute_pair_score(50.0, "longest-remaining-pass")
+            _score(50.0, _selection_policy("longest-remaining-pass"))
 
     def test_unknown_policy_fails_loudly(self):
-        with pytest.raises(ValueError, match="Unknown ground scheduling policy"):
-            _compute_pair_score(50.0, "unknown")
+        # The grammar model refuses an unknown name; build the spec without validation so the
+        # scorer's own refusal at its dispatch boundary is what this test reaches.
+        unknown = SelectionPolicySpec.model_construct(name="unknown", params={})
+        with pytest.raises(ValueError, match="Unknown ground selection policy"):
+            _score(50.0, unknown)
 
 
-class TestComputeEffectiveDiscount:
-    """_compute_effective_discount uses raw physical elevation for fade."""
+class TestEffectiveHysteresisDiscount:
+    """The hysteresis discount uses raw physical elevation for its fade."""
 
     def test_below_mask_no_discount(self):
         hyst = HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0)
-        assert _compute_effective_discount(24.0, 25.0, hyst) == 1.0
+        assert _discount(24.0, 25.0, hyst) == 1.0
 
     def test_at_mask_no_discount(self):
         hyst = HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0)
-        assert _compute_effective_discount(25.0, 25.0, hyst) == 1.0
+        assert _discount(25.0, 25.0, hyst) == 1.0
 
     def test_above_fade_full_discount(self):
         hyst = HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0)
-        assert _compute_effective_discount(30.0, 25.0, hyst) == 1.15
+        assert _discount(30.0, 25.0, hyst) == 1.15
 
     def test_well_above_fade_full_discount(self):
         hyst = HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0)
-        assert _compute_effective_discount(60.0, 25.0, hyst) == 1.15
+        assert _discount(60.0, 25.0, hyst) == 1.15
 
     def test_mid_fade_partial_discount(self):
         # min_elev=25, fade_range=5 → fade zone [25, 30]
         # elevation=27 → t = (27-25)/5 = 0.4
         # discount = 1.0 + 0.4 * 0.15 = 1.06
         hyst = HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0)
-        d = _compute_effective_discount(27.0, 25.0, hyst)
+        d = _discount(27.0, 25.0, hyst)
         assert abs(d - 1.06) < 1e-10
 
     def test_fade_top_boundary(self):
         # elevation exactly at fade_top → full discount
         hyst = HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0)
-        d = _compute_effective_discount(30.0, 25.0, hyst)
+        d = _discount(30.0, 25.0, hyst)
         assert d == 1.15
 
 

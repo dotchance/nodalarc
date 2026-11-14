@@ -77,11 +77,11 @@ def _local_pass() -> ActiveLinkInfo:
 
 def _plan(expected_up: dict[tuple[str, str], ActiveLinkInfo]):
     return ground_inventory_requests(
-        gs_id=STATION,
+        node_id=STATION,
         expected_up=expected_up,
         expected_down={},
         locator=_locator(),
-        gs_capacities={STATION: 2},
+        ground_station_ids={STATION: 2},
         interface_rates=RATES,
     )
 

@@ -2022,17 +2022,18 @@ def get_ops_health() -> ActuationHealth:
     dependencies=[Depends(_require_api_key)],
 )
 async def request_operator_repair(body: OperatorRepairRequest) -> Any:
-    """Explicit operator-triggered GS repair routed to the reporting Scheduler."""
+    """Explicit operator-triggered repair of the links one node chooses, routed to the
+    Scheduler that reports that node."""
     ctx = _require_active_context()
     nc = _nats_connection
     if nc is None:
         return JSONResponse(status_code=503, content={"error": "NATS not connected"})
-    gs_id = body.gs_id
+    node_id = body.node_id
     with ctx.state_lock:
         matching = [
             event
-            for (_instance, event_gs), event in ctx.actuation_latest_by_gs.items()
-            if event_gs == gs_id
+            for (_instance, event_node), event in ctx.actuation_latest_by_node.items()
+            if event_node == node_id
         ]
         latest = matching[-1] if matching else {}
     details = latest.get("details") or {}
@@ -2041,13 +2042,13 @@ async def request_operator_repair(body: OperatorRepairRequest) -> Any:
     if not scheduler_instance_id or not wiring_generation:
         return JSONResponse(
             status_code=409,
-            content={"error": "No Scheduler actuation state is available for that GS"},
+            content={"error": "No Scheduler actuation state is available for that node"},
         )
     cmd = OperatorRepairCommand(
         session_id=ctx.session_id,
         wiring_generation=wiring_generation,
         scheduler_instance_id=scheduler_instance_id,
-        gs_id=gs_id,
+        node_id=node_id,
         reason=body.reason,
         intervention_id=body.intervention_id or str(uuid.uuid4()),
     )
@@ -2063,7 +2064,7 @@ async def request_operator_repair(body: OperatorRepairRequest) -> Any:
             status_code=504, content={"error": "Scheduler repair request timed out"}
         )
     except Exception as exc:
-        log.warning("Scheduler repair request failed for %s: %s", gs_id, exc, exc_info=True)
+        log.warning("Scheduler repair request failed for %s: %s", node_id, exc, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Scheduler repair request failed"})
 
 
@@ -2695,9 +2696,9 @@ def get_decision_explanation(query: Annotated[DecisionExplanationQuery, Query()]
         actuation_by_gs: dict[str, str] = {}
         health = ctx.build_actuation_health()
         for inst in health.get("scheduler_instances", []):
-            for gs_entry in inst.get("ground_stations", []):
-                gid = gs_entry.get("gs_id")
-                state = gs_entry.get("actuation_state")
+            for entry in inst.get("nodes", []):
+                gid = entry.get("node_id")
+                state = entry.get("actuation_state")
                 if gid and state:
                     actuation_by_gs[gid] = state
     if snapshot is None:

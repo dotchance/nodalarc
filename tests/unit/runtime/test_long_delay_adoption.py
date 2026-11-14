@@ -131,7 +131,7 @@ def test_a_recovered_drain_closes_each_end_after_the_bound_from_the_proven_stop(
         pairs={TRUNK},
         actual_links={TRUNK: info},
         locator=_Locator(),
-        gs_capacities={},
+        ground_station_ids={},
         stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
         ends={TRUNK: frozenset(TRUNK)},
     )
@@ -150,7 +150,7 @@ def test_the_recovery_stop_reaches_only_carrying_ends_with_their_own_contacts():
         pairs={TRUNK},
         actual_links={TRUNK: info},
         locator=_Locator(),
-        gs_capacities={},
+        ground_station_ids={},
         stage=node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION,
         ends={TRUNK: frozenset(found.carried)},
         contact_ids={(TRUNK[1], INTERFACES[1]): OLD.contact_id},

@@ -5,7 +5,7 @@
 
 The Scheduler that last commanded a session's wiring generation retains two kinds of record on
 NODALARC_LINKS. Its ActualLinkSnapshot lists the links the Node Agents proved up, with the delays
-it commanded on each. Each ground station's actuation record holds the station's state, its
+it commanded on each. Each actuation record holds the state of one node that chooses links, its
 recovery and its stale footprint. A Scheduler that holds the writer Lease reads both before it
 commands anything, so its first reconcile starts from what the kernel carries: it takes down the
 links OME no longer wants, brings up the new ones and retimes every link it took over.
@@ -16,8 +16,8 @@ rolls the session images replaces every one) was wired anew by its Node Agent fr
 the same session and wiring generation. What the record says about that pod is not in the
 kernel, so the successor takes over only what sits in sandboxes its own wiring gate still
 proves. A link with both ends on replaced pods is gone. A link with one end on a replaced pod
-left its other half where it was: an access link's half becomes its station's stale footprint
-and the station starts unproven; a fixed link is left out, and the first reconcile brings it up
+left its other half where it was: the half of a link a node chooses becomes that node's stale
+footprint and the node starts unproven; a fixed link is left out, and the first reconcile brings it up
 as a Scheduler with no predecessor does.
 
 Rejected alternative: survey the kernel with KernelInventory and build ``_actual_links`` from what
@@ -45,12 +45,11 @@ from nodalarc.models.scheduler_ops import (
 )
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from scheduler.actuation import GroundActuationState, LinkPair
+from scheduler.actuation import LinkPair, NodeActuationState
 from scheduler.desired_state import ActiveLinkInfo
-from scheduler.dispatch_planner import ground_side
 
-# The retained per-station records that carry a station's state; every other code is log only.
-STATION_STATE_CODES = frozenset(
+# The retained per-node records that carry a node's state; every other code is log only.
+NODE_STATE_CODES = frozenset(
     {
         SchedulerOpsCode.ACTUATION_CLEAN,
         SchedulerOpsCode.ACTUATION_BLOCKED,
@@ -63,9 +62,9 @@ STATION_STATE_CODES = frozenset(
 class Takeover:
     """What a starting Scheduler took over from its predecessor.
 
-    ``recorded``: the stations whose retained state it resumes. ``rewired``: the nodes whose pod
+    ``recorded``: the nodes whose retained state it resumes. ``rewired``: the nodes whose pod
     was replaced since the predecessor's wiring gate; their Node Agent wired them anew, and the
-    successor's own wiring gate proved that wiring. ``unproven``: the stations left holding a link
+    successor's own wiring gate proved that wiring. ``unproven``: the nodes left holding a link
     half whose other end was rewired, which start kernel_dirty until KernelInventory proves the
     half down.
     """
@@ -152,29 +151,29 @@ def predecessor_snapshot(
     )
 
 
-def predecessor_station_records(
+def predecessor_node_records(
     messages: list[bytes], *, session_id: str, wiring_generation: str
 ) -> dict[str, tuple[SchedulerOpsCode, ActuationOpsDetails]]:
-    """Each station's retained actuation record of this session's wiring generation, by station.
+    """Each node's retained actuation record of this session's wiring generation, by node.
     A record of the generation that this build cannot read refuses the start."""
     records: dict[str, tuple[SchedulerOpsCode, ActuationOpsDetails]] = {}
     for data in messages:
         event = OpsEvent.model_validate_json(data)
         if event.details is None:
-            raise RuntimeError(f"retained station record {event.code} carries no details")
+            raise RuntimeError(f"retained actuation record {event.code} carries no details")
         identity = _RecordIdentity.model_validate(event.details)
         if (identity.session_id, identity.wiring_generation) != (session_id, wiring_generation):
             continue
         try:
             details = ActuationOpsDetails.model_validate(event.details)
         except ValidationError as exc:
-            raise _incompatible("station record", identity, exc) from exc
+            raise _incompatible("actuation record", identity, exc) from exc
         code = SchedulerOpsCode(event.code)
-        if code not in STATION_STATE_CODES or details.gs_id is None:
+        if code not in NODE_STATE_CODES or details.node_id is None:
             raise RuntimeError(
-                f"retained station record {code} of {details.gs_id} is not a station state"
+                f"retained actuation record {code} of {details.node_id} is not a node state"
             )
-        records[details.gs_id] = (code, details)
+        records[details.node_id] = (code, details)
     return records
 
 
@@ -182,21 +181,23 @@ def inherited_actual_links(
     snapshot: ActualLinkSnapshot,
     *,
     interface_map: Mapping[LinkPair, tuple[str, str]],
-    gs_capacities: Mapping[str, int],
+    terminal_capacities: Mapping[str, int],
     long_delay_pairs: frozenset[LinkPair],
     rewired: frozenset[str],
 ) -> tuple[dict[LinkPair, ActiveLinkInfo], dict[LinkPair, ActiveLinkInfo]]:
-    """The predecessor's proven links as this Scheduler's record of them, and the access-link
-    halves that a rewired pod left at the other end.
+    """The predecessor's proven links as this Scheduler's record of them, and the halves of
+    links with assigned terminals that a rewired pod left at the other end.
 
     Each record holds the delays the kernel was commanded and no OME range: OME's geometry for
     the link is unknown until its next snapshot, so the first reconcile retimes every inherited
     link it still wants, as it retimes an adopted long-delay contact. A fixed link sits on the
-    interfaces the session's map gives it, an access link on a station's terminal; a link that
-    fits neither is not this session's and refuses the start. Long-delay links are left out:
+    interfaces the session's map gives it, every other link on terminals OME assigned at two
+    nodes that have such terminals; a link that fits neither is not this session's and refuses
+    the start. Long-delay links are left out:
     their contacts live in the kernel, and the long-delay adoption surveys them there. A link
     with an end on a rewired pod is not in the kernel (see the module docstring); when only one
-    end of an access link was rewired, the other half comes back as a stale footprint row.
+    end of a link with assigned terminals was rewired, the other half comes back as a stale
+    footprint row.
     """
     links: dict[LinkPair, ActiveLinkInfo] = {}
     stale: dict[LinkPair, ActiveLinkInfo] = {}
@@ -212,12 +213,13 @@ def inherited_actual_links(
                     f"the session wires it on {interface_map[pair]}"
                 )
             link_type = "isl"
-        elif ground_side(pair, gs_capacities) is not None:
+        elif all(node_id in terminal_capacities for node_id in pair):
             link_type = "ground"
         else:
             raise RuntimeError(
                 f"Scheduler {snapshot.scheduler_instance_id} proved {pair} up; it is neither a "
-                "fixed link nor an access link of this session"
+                "fixed link of this session nor a link between two nodes with terminals OME "
+                "assigns"
             )
         ends_rewired = len(set(pair) & rewired)
         if ends_rewired == 1 and link_type == "ground":
@@ -236,22 +238,22 @@ def inherited_actual_links(
     return links, stale
 
 
-def inherited_station_state(
-    gs_id: str, code: SchedulerOpsCode, details: ActuationOpsDetails
-) -> tuple[GroundActuationState, dict[LinkPair, ActiveLinkInfo]]:
-    """A station's state as its predecessor last recorded it, and its stale footprint.
+def inherited_node_state(
+    node_id: str, code: SchedulerOpsCode, details: ActuationOpsDetails
+) -> tuple[NodeActuationState, dict[LinkPair, ActiveLinkInfo]]:
+    """A node's state as its predecessor last recorded it, and its stale footprint.
 
-    A clean station carries nothing more. A station that is not clean keeps its failure, its
+    A clean node carries nothing more. A node that is not clean keeps its failure, its
     Node Agent results and its recovery (verify attempts, schedule, exhaustion), so the successor
-    resumes the same proof. Its stale footprint comes back as access-link records that only name
+    resumes the same proof. Its stale footprint comes back as link records that only name
     interfaces: KernelInventory proves them down and repair takes them down, and neither reads a
     delay, so they hold none.
     """
     state = details.actuation_state_after
     if state == ActuationState.UNKNOWN:
-        raise RuntimeError(f"the retained record of {gs_id} states no actuation state")
+        raise RuntimeError(f"the retained record of {node_id} states no actuation state")
     if state == ActuationState.CLEAN:
-        return GroundActuationState(gs_id=gs_id), {}
+        return NodeActuationState(node_id=node_id), {}
     stale = {
         (row.pair[0], row.pair[1]): ActiveLinkInfo(
             row.interfaces[0], row.interfaces[1], 0.0, 0.0, link_type="ground"
@@ -259,8 +261,8 @@ def inherited_station_state(
         for row in details.stale_links
     }
     return (
-        GroundActuationState(
-            gs_id=gs_id,
+        NodeActuationState(
+            node_id=node_id,
             state=state,
             reason_code=code,
             affected_pairs=frozenset((a, b) for a, b in details.affected_pairs),
@@ -292,7 +294,7 @@ def commanded_rows(
 
 
 def footprint_rows(stale: Mapping[LinkPair, ActiveLinkInfo]) -> list[LinkFootprint]:
-    """A station's stale footprint as its retained record lists it."""
+    """A node's stale footprint as its retained record lists it."""
     return [
         LinkFootprint(pair=[pair[0], pair[1]], interfaces=[info.interface_a, info.interface_b])
         for pair, info in sorted(stale.items())

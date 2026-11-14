@@ -149,8 +149,6 @@ def _result(operation: str, counts):
         operation=operation,
         requested_pairs=[TRUNK],
         pair_agent_ifaces={TRUNK: {("agent-mars", "mars-relay", "isl0")}},
-        pair_link_type={TRUNK: "isl"},
-        pair_gs_id={TRUNK: None},
         agent_results=[agent],
     )
 

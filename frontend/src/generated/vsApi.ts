@@ -54,36 +54,36 @@ export interface ActuationHealth {
   readonly scheduler_instances: ReadonlyArray<ActuationHealthInstance>;
 }
 
-/** Latest actuation state for one GS on one Scheduler instance. */
-export interface ActuationHealthGroundStation {
-  readonly gs_id: string;
-  readonly actuation_state: ActuationState;
-  readonly since: string | null;
-  readonly reason_code: SchedulerOpsCode;
-  readonly blocking_new_ground_link_up: boolean;
-  readonly recovery_status: Readonly<Record<string, JsonValue>>;
-}
-
 /** Aggregated actuation health for one Scheduler instance. */
 export interface ActuationHealthInstance {
   readonly scheduler_instance_id: string;
   readonly hostname: string;
   readonly status: "clean" | "dirty" | "degraded" | "unknown";
-  readonly ground_stations: ReadonlyArray<ActuationHealthGroundStation>;
+  readonly nodes: ReadonlyArray<ActuationHealthNode>;
 }
 
-/** User-visible Scheduler actuation problem for one ground station. */
+/** Latest actuation state of one node that chooses links, on one Scheduler instance. */
+export interface ActuationHealthNode {
+  readonly node_id: string;
+  readonly actuation_state: ActuationState;
+  readonly since: string | null;
+  readonly reason_code: SchedulerOpsCode;
+  readonly blocking_new_link_up: boolean;
+  readonly recovery_status: Readonly<Record<string, JsonValue>>;
+}
+
+/** User-visible Scheduler actuation problem at one node: the links that node chooses. */
 export interface ActuationNotice {
-  readonly gs_id: string;
+  readonly node_id: string;
   readonly actuation_state: ActuationState;
   readonly reason_code: SchedulerOpsCode;
   readonly message: string;
   readonly since: string | null;
-  readonly blocking_new_ground_link_up: boolean;
+  readonly blocking_new_link_up: boolean;
   readonly affected_pairs: ReadonlyArray<ReadonlyArray<string>>;
-  readonly desired_pairs_for_gs: ReadonlyArray<ReadonlyArray<string>>;
-  readonly actual_pairs_for_gs: ReadonlyArray<ReadonlyArray<string>>;
-  readonly ome_visible_scheduled_pairs_for_gs: ReadonlyArray<ReadonlyArray<string>>;
+  readonly desired_pairs: ReadonlyArray<ReadonlyArray<string>>;
+  readonly actual_pairs: ReadonlyArray<ReadonlyArray<string>>;
+  readonly ome_visible_scheduled_pairs: ReadonlyArray<ReadonlyArray<string>>;
   readonly recovery_status: Readonly<Record<string, JsonValue>>;
   readonly last_event: Readonly<Record<string, JsonValue>>;
 }
@@ -644,9 +644,9 @@ export interface NodeState {
 /**  */
 export type ObserverFrame = "body_local";
 
-/** What an operator sends to repair one station. VS-API fills the Scheduler instance and wiring generation from the station's latest actuation state when the request leaves them out, then sends an OperatorRepairCommand. */
+/** What an operator sends to repair the links one node chooses. VS-API fills the Scheduler instance and wiring generation from the node's latest actuation state when the request leaves them out, then sends an OperatorRepairCommand. */
 export interface OperatorRepairRequest {
-  readonly gs_id: string;
+  readonly node_id: string;
   readonly reason: string;
   readonly scheduler_instance_id?: string | null;
   readonly wiring_generation?: string | null;
@@ -719,7 +719,7 @@ export interface RecentEvent {
 }
 
 /**  */
-export type SchedulerOpsCode = "REPLACEMENT_LINK_UP_FAILED" | "GROUND_LINK_UP_FAILED" | "GROUND_LINK_DOWN_FAILED" | "GROUND_LATENCY_UPDATE_FAILED" | "OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR" | "ACTUATION_BLOCKED" | "ACTUATION_CLEAN" | "KERNEL_DIRTY" | "KERNEL_VERIFY_ATTEMPTED" | "KERNEL_VERIFY_EXHAUSTED" | "AUTHORITY_SUBSET_VIOLATION" | "ACTUATION_HALTED" | "SCHEDULER_SUPERSEDED" | "OPERATOR_REPAIR_REQUESTED" | "OPERATOR_REPAIR_STARTED" | "OPERATOR_REPAIR_SUCCEEDED" | "OPERATOR_REPAIR_FAILED" | "OPERATOR_REPAIR_REJECTED" | "AGENT_DEGRADED" | "AGENT_RECOVERED";
+export type SchedulerOpsCode = "REPLACEMENT_LINK_UP_FAILED" | "LINK_UP_FAILED" | "LINK_DOWN_FAILED" | "LATENCY_UPDATE_FAILED" | "OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR" | "ACTUATION_BLOCKED" | "ACTUATION_CLEAN" | "KERNEL_DIRTY" | "KERNEL_VERIFY_ATTEMPTED" | "KERNEL_VERIFY_EXHAUSTED" | "AUTHORITY_SUBSET_VIOLATION" | "ACTUATION_HALTED" | "SCHEDULER_SUPERSEDED" | "OPERATOR_REPAIR_REQUESTED" | "OPERATOR_REPAIR_STARTED" | "OPERATOR_REPAIR_SUCCEEDED" | "OPERATOR_REPAIR_FAILED" | "OPERATOR_REPAIR_REJECTED" | "AGENT_DEGRADED" | "AGENT_RECOVERED";
 
 /**  */
 export type SchedulingState = "active" | "teardown";

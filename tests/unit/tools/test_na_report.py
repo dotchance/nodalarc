@@ -199,7 +199,7 @@ def session_db(tmp_path: Path) -> str:
         wiring_generation="sha256:" + "a" * 64,
         scheduler_instance_id="sched-1",
         hostname="sched-host",
-        gs_id="gs-den",
+        node_id="gs-den",
         operation="OperatorRepair",
         failure_class=ActuationFailureClass.NONE,
         intervention_id="repair-1",

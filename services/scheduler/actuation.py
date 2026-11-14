@@ -23,8 +23,11 @@ InterfaceAck = tuple[str, str, str]
 
 
 @dataclass(frozen=True, slots=True)
-class GroundActuationState:
-    gs_id: str
+class NodeActuationState:
+    """Whether the kernel state of the links one node chooses is proven to match the
+    Scheduler's record, with the failure and the recovery when it is not."""
+
+    node_id: str
     state: ActuationState = ActuationState.CLEAN
     reason_code: SchedulerOpsCode = SchedulerOpsCode.ACTUATION_CLEAN
     since: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -34,14 +37,12 @@ class GroundActuationState:
     recovery: RecoveryStatus = field(default_factory=RecoveryStatus)
 
     @property
-    def blocking_new_ground_link_up(self) -> bool:
+    def blocking_new_link_up(self) -> bool:
         return self.state != ActuationState.CLEAN
 
     def __post_init__(self) -> None:
         if self.state == ActuationState.UNKNOWN:
-            raise ValueError(
-                "GroundActuationState cannot store unknown; unknown is a wire fallback"
-            )
+            raise ValueError("NodeActuationState cannot store unknown; unknown is a wire fallback")
         if not isinstance(self.reason_code, SchedulerOpsCode):
             raise TypeError(f"reason_code must be SchedulerOpsCode, got {self.reason_code!r}")
 
@@ -96,8 +97,6 @@ class AgentCommandResult:
 @dataclass(frozen=True, slots=True)
 class PairActuationResult:
     pair: LinkPair
-    link_type: str
-    gs_id: str | None
     expected_ifaces: frozenset[InterfaceAck]
     successful_ifaces: frozenset[InterfaceAck]
     failure_class: ActuationFailureClass
@@ -231,18 +230,18 @@ def classify_agent_response(
         failure_class = ActuationFailureClass.FENCE
         unknown = False
     elif dirty_kernel or unverified_success:
-        failure_class = ActuationFailureClass.GROUND_KERNEL_DIRTY
+        failure_class = ActuationFailureClass.KERNEL_DIRTY
         unknown = False
         dirty_kernel = True
     elif not shape_ok:
-        failure_class = ActuationFailureClass.GROUND_UNKNOWN
+        failure_class = ActuationFailureClass.UNKNOWN_OUTCOME
         unknown = True
         dirty_kernel = True
     elif aggregate_success:
         failure_class = ActuationFailureClass.NONE
         unknown = False
     else:
-        failure_class = ActuationFailureClass.GROUND_CLEAN_FAILURE
+        failure_class = ActuationFailureClass.CLEAN_FAILURE
         unknown = False
 
     success_acks = frozenset(
@@ -373,8 +372,6 @@ def build_actuation_result(
     operation: str,
     requested_pairs: Iterable[LinkPair],
     pair_agent_ifaces: Mapping[LinkPair, set[InterfaceAck]],
-    pair_link_type: Mapping[LinkPair, str],
-    pair_gs_id: Mapping[LinkPair, str | None],
     agent_results: Iterable[AgentCommandResult],
 ) -> ActuationResult:
     agent_tuple = tuple(agent_results)
@@ -392,11 +389,9 @@ def build_actuation_result(
             if any(ack in expected for ack in r.success_acks)
             or any((r.agent_addr, node, iface) in expected for node, iface in r.requested)
         ]
-        failure_class = _pair_failure_class(involved, pair_link_type.get(pair, ""))
+        failure_class = _pair_failure_class(involved)
         result = PairActuationResult(
             pair=pair,
-            link_type=pair_link_type.get(pair, ""),
-            gs_id=pair_gs_id.get(pair),
             expected_ifaces=expected,
             successful_ifaces=frozenset(ack for ack in successful_ifaces if ack in expected),
             failure_class=failure_class,
@@ -416,36 +411,26 @@ def build_actuation_result(
     )
 
 
-def _pair_failure_class(
-    agent_results: list[AgentCommandResult], link_type: str
-) -> ActuationFailureClass:
+def _pair_failure_class(agent_results: list[AgentCommandResult]) -> ActuationFailureClass:
     if any(r.failure_class == ActuationFailureClass.FENCE for r in agent_results):
         return ActuationFailureClass.FENCE
     failing = [r for r in agent_results if r.failure_class != ActuationFailureClass.NONE]
     if failing and all(r.failure_class == ActuationFailureClass.AGENT_UNREACHABLE for r in failing):
         # The command did not reach an end, or got no answer from it: nothing was observed
-        # there, on any link type. The pair keeps its last proven record, and the next
+        # there, on any link. The pair keeps its last proven record, and the next
         # reconcile sends the command again. Rejected alternative: count it an observed
-        # failure, which halted the Scheduler on an ISL and blocked a station on an access
-        # link while a Node Agent restarted, and left a station whose command reached one end
+        # failure, which halted the Scheduler on a fixed link and blocked a node on a link it
+        # chooses while a Node Agent restarted, and left a node whose command reached one end
         # proving a half-changed kernel against its old record for good.
         return ActuationFailureClass.AGENT_UNREACHABLE
-    if link_type == "isl" and any(
-        r.failure_class != ActuationFailureClass.NONE for r in agent_results
-    ):
-        return ActuationFailureClass.ISL_FAILURE
     if not agent_results:
-        return (
-            ActuationFailureClass.ISL_FAILURE
-            if link_type == "isl"
-            else ActuationFailureClass.GROUND_UNKNOWN
-        )
-    if any(r.failure_class == ActuationFailureClass.GROUND_KERNEL_DIRTY for r in agent_results):
-        return ActuationFailureClass.GROUND_KERNEL_DIRTY
-    if any(r.failure_class == ActuationFailureClass.GROUND_UNKNOWN for r in agent_results):
-        return ActuationFailureClass.GROUND_UNKNOWN
-    if any(r.failure_class == ActuationFailureClass.GROUND_CLEAN_FAILURE for r in agent_results):
-        return ActuationFailureClass.GROUND_CLEAN_FAILURE
+        return ActuationFailureClass.UNKNOWN_OUTCOME
+    if any(r.failure_class == ActuationFailureClass.KERNEL_DIRTY for r in agent_results):
+        return ActuationFailureClass.KERNEL_DIRTY
+    if any(r.failure_class == ActuationFailureClass.UNKNOWN_OUTCOME for r in agent_results):
+        return ActuationFailureClass.UNKNOWN_OUTCOME
+    if any(r.failure_class == ActuationFailureClass.CLEAN_FAILURE for r in agent_results):
+        return ActuationFailureClass.CLEAN_FAILURE
     return ActuationFailureClass.NONE
 
 

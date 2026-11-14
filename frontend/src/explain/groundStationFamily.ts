@@ -37,10 +37,10 @@ export function groundStationFamily(
   links: readonly LinkState[],
   actuationNotices: readonly ActuationNotice[],
 ): GsFamily {
-  const notice = actuationNotices.find((n) => n.gs_id === gsId);
+  const notice = actuationNotices.find((n) => n.node_id === gsId);
   if (notice) {
     const reason = notice.message;
-    if (notice.blocking_new_ground_link_up) return { family: "faulted", reason };
+    if (notice.blocking_new_link_up) return { family: "faulted", reason };
     const family = ACTUATION_FAMILY[notice.actuation_state];
     if (family !== null) return { family, reason };
     // A retained clean heartbeat is health metadata, not a visual state. Fall through to the

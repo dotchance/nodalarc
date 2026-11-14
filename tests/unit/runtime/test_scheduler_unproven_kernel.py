@@ -95,6 +95,8 @@ def _scheduler(agent: _NodeAgent, published: _Published) -> Dispatcher:
         # The session also declares one ground station; it plays no part here.
         terminal_capacities={"gs-a": 1, PAIR[0]: 1},
         handover_modes={"gs-a": "bbm"},
+        tracked_nodes=frozenset({"gs-a": "bbm"}),
+        ground_station_ids=frozenset({"gs-a": "bbm"}),
         long_delay_bounds_s={},
     )
     scheduler._js = published

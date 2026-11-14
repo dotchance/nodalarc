@@ -52,7 +52,7 @@ def test_resolved_runtime_identity_fails_loud_without_operator_run_id() -> None:
 def test_scheduler_reads_terminal_capacity_and_stated_modes_from_the_resolved_session() -> None:
     resolved = _resolved()
 
-    capacities, modes = _scheduler_terminal_maps(resolved)
+    capacities, modes, tracked = _scheduler_terminal_maps(resolved)
     ground_candidates = resolved.ground_candidate_satellites_by_gs()
     candidate_nodes = set(ground_candidates) | {
         sat for sats in ground_candidates.values() for sat in sats
@@ -62,6 +62,9 @@ def test_scheduler_reads_terminal_capacity_and_stated_modes_from_the_resolved_se
     # state scheduling in this session are its stations.
     assert candidate_nodes.issubset(capacities)
     assert set(modes) == set(ground_candidates)
+    # Each access pair has one node that states scheduling, so the nodes that choose links
+    # are the stations.
+    assert tracked == set(ground_candidates)
     assert all(capacity > 0 for capacity in capacities.values())
 
 

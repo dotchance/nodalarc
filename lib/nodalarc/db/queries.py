@@ -562,12 +562,12 @@ def insert_operator_intervention_event(
     """
     what = "operator intervention event"
     _require_session(event, session_id, what)
-    if details.intervention_id is None or details.gs_id is None:
-        raise ValueError(f"{what} needs its intervention_id and gs_id")
+    if details.intervention_id is None or details.node_id is None:
+        raise ValueError(f"{what} needs its intervention_id and node_id")
     cur = conn.execute(
         """INSERT INTO operator_interventions (
                intervention_id, session_id, wiring_generation, scheduler_instance_id,
-               hostname, gs_id, status, reason, event_time, event_code, event_json
+               hostname, node_id, status, reason, event_time, event_code, event_json
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             details.intervention_id,
@@ -575,7 +575,7 @@ def insert_operator_intervention_event(
             details.wiring_generation,
             details.scheduler_instance_id,
             event.hostname,
-            details.gs_id,
+            details.node_id,
             event.code,
             details.reason,
             history_time(event.timestamp),

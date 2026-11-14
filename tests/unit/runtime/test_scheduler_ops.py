@@ -34,9 +34,9 @@ from scheduler.predecessor import (
     commanded_rows,
     footprint_rows,
     inherited_actual_links,
-    inherited_station_state,
+    inherited_node_state,
+    predecessor_node_records,
     predecessor_snapshot,
-    predecessor_station_records,
     rewired_nodes,
     still_in_kernel,
 )
@@ -63,6 +63,8 @@ NEW_PASS = (STATION, "leo-sat-p00s18")
 INTERFACE_MAP = {ISL: ("isl0", "isl1"), LONG_DELAY: ("isl3", "isl0")}
 STATIONS = {STATION: 1}
 OTHER_STATION = "earth-de-frankfurt-gw1"
+# Every node with terminals OME may assign: the stations and the satellites they link to.
+TERMINALS = {STATION: 1, OTHER_STATION: 1, OLD_PASS[1]: 1, NEW_PASS[1]: 1}
 NODES = (*ISL, *LONG_DELAY, STATION, OTHER_STATION, OLD_PASS[1], NEW_PASS[1])
 # The pod sandbox each node's wiring proof names; a replaced pod gets a new one.
 SANDBOXES = {node_id: f"sandbox-{node_id}" for node_id in NODES}
@@ -135,7 +137,7 @@ def test_a_successor_holds_the_links_its_predecessor_proved_and_retimes_them() -
     taken, halves = inherited_actual_links(
         snapshot,
         interface_map=INTERFACE_MAP,
-        gs_capacities=STATIONS,
+        terminal_capacities=TERMINALS,
         long_delay_pairs=frozenset({LONG_DELAY}),
         rewired=rewired_nodes(snapshot, SANDBOXES),
     )
@@ -171,7 +173,7 @@ def test_a_link_record_that_is_not_this_sessions_refuses_the_start() -> None:
         inherited_actual_links(
             moved,
             interface_map=INTERFACE_MAP,
-            gs_capacities=STATIONS,
+            terminal_capacities=TERMINALS,
             long_delay_pairs=frozenset(),
             rewired=frozenset(),
         )
@@ -179,11 +181,11 @@ def test_a_link_record_that_is_not_this_sessions_refuses_the_start() -> None:
     unknown = _snapshot(
         "sched-b", 5, commanded_rows({stranger: _proven("isl2", "isl3", (1.0, 1.0))}, {stranger})
     )
-    with pytest.raises(RuntimeError, match="neither a fixed link nor an access link"):
+    with pytest.raises(RuntimeError, match="neither a fixed link of this session nor a link"):
         inherited_actual_links(
             unknown,
             interface_map=INTERFACE_MAP,
-            gs_capacities=STATIONS,
+            terminal_capacities=TERMINALS,
             long_delay_pairs=frozenset(),
             rewired=frozenset(),
         )
@@ -207,14 +209,14 @@ def _station_record(details: ActuationOpsDetails, code: SchedulerOpsCode) -> byt
 
 
 def _station_details(
-    *, gs_id: str = STATION, generation: str = GENERATION, **fields
+    *, node_id: str = STATION, generation: str = GENERATION, **fields
 ) -> ActuationOpsDetails:
     return ActuationOpsDetails(
         session_id=SESSION,
         wiring_generation=generation,
         scheduler_instance_id="sched-b",
         hostname="sched-b-host",
-        gs_id=gs_id,
+        node_id=node_id,
         operation="RecoverableStateHeartbeat",
         failure_class=ActuationFailureClass.NONE,
         **fields,
@@ -237,7 +239,7 @@ def test_a_successor_resumes_each_station_where_its_predecessor_left_it() -> Non
         stale_links=footprint_rows({NEW_PASS: _proven("term1", "gnd2", (3.0, 3.0))}),
     )
     clean = _station_details(
-        gs_id="earth-de-frankfurt-gw1",
+        node_id="earth-de-frankfurt-gw1",
         actuation_state_before=ActuationState.CLEAN,
         actuation_state_after=ActuationState.CLEAN,
     )
@@ -245,16 +247,14 @@ def test_a_successor_resumes_each_station_where_its_predecessor_left_it() -> Non
         _station_record(dirty, SchedulerOpsCode.KERNEL_DIRTY),
         _station_record(clean, SchedulerOpsCode.ACTUATION_CLEAN),
         _station_record(
-            _station_details(gs_id="earth-jp-yamaguchi-gw1", generation="sha256:" + "c" * 64),
+            _station_details(node_id="earth-jp-yamaguchi-gw1", generation="sha256:" + "c" * 64),
             SchedulerOpsCode.KERNEL_DIRTY,
         ),
     ]
-    records = predecessor_station_records(
-        messages, session_id=SESSION, wiring_generation=GENERATION
-    )
+    records = predecessor_node_records(messages, session_id=SESSION, wiring_generation=GENERATION)
     assert set(records) == {STATION, "earth-de-frankfurt-gw1"}
 
-    state, stale = inherited_station_state(STATION, *records[STATION])
+    state, stale = inherited_node_state(STATION, *records[STATION])
     assert state.state == ActuationState.KERNEL_DIRTY
     assert state.affected_pairs == frozenset({NEW_PASS})
     assert state.recovery == exhausted, "an exhausted verify still asks the operator for repair"
@@ -263,7 +263,7 @@ def test_a_successor_resumes_each_station_where_its_predecessor_left_it() -> Non
         NEW_PASS: ("term1", "gnd2")
     }, "the successor proves the same stale footprint down"
 
-    state, stale = inherited_station_state(
+    state, stale = inherited_node_state(
         "earth-de-frankfurt-gw1", *records["earth-de-frankfurt-gw1"]
     )
     assert state.state == ActuationState.CLEAN and stale == {}
@@ -331,6 +331,8 @@ def test_a_station_its_predecessor_left_no_record_for_starts_unproven() -> None:
         max_latency_age_s=1.0,
         terminal_capacities={STATION: 1, other: 1, OLD_PASS[1]: 1},
         handover_modes={STATION: "bbm", other: "bbm"},
+        tracked_nodes=frozenset({STATION: "bbm", other: "bbm"}),
+        ground_station_ids=frozenset({STATION: "bbm", other: "bbm"}),
         long_delay_bounds_s={},
     )
     scheduler._js = stream
@@ -343,8 +345,8 @@ def test_a_station_its_predecessor_left_no_record_for_starts_unproven() -> None:
     asyncio.run(start())
 
     assert set(scheduler._actual_links) == {OLD_PASS}, "the predecessor's proven pass is held"
-    assert scheduler._ground_state(STATION).state == ActuationState.CLEAN
-    assert scheduler._ground_state(other).state == ActuationState.KERNEL_DIRTY, (
+    assert scheduler._node_state(STATION).state == ActuationState.CLEAN
+    assert scheduler._node_state(other).state == ActuationState.KERNEL_DIRTY, (
         "a station nobody recorded is shown clean"
     )
     retained_states = {
@@ -373,6 +375,8 @@ def test_a_successor_takes_over_the_delays_its_predecessor_last_commanded() -> N
         max_latency_age_s=1.0,
         terminal_capacities={**STATIONS, OLD_PASS[1]: 1},
         handover_modes={STATION: "bbm"},
+        tracked_nodes=frozenset({STATION: "bbm"}),
+        ground_station_ids=frozenset({STATION: "bbm"}),
         long_delay_bounds_s={},
     )
     predecessor._js = stream
@@ -397,7 +401,7 @@ def test_a_successor_takes_over_the_delays_its_predecessor_last_commanded() -> N
     taken, _halves = inherited_actual_links(
         snapshot,
         interface_map=INTERFACE_MAP,
-        gs_capacities=STATIONS,
+        terminal_capacities=TERMINALS,
         long_delay_pairs=frozenset(),
         rewired=frozenset(),
     )
@@ -424,7 +428,7 @@ def test_a_link_on_a_pod_wired_anew_is_not_taken_over() -> None:
     taken, halves = inherited_actual_links(
         snapshot,
         interface_map=INTERFACE_MAP,
-        gs_capacities={STATION: 1, OTHER_STATION: 1},
+        terminal_capacities=TERMINALS,
         long_delay_pairs=frozenset(),
         rewired=rewired,
     )
@@ -454,6 +458,8 @@ def _successor(stream: _RetainedLinkStream, wired_sandboxes: dict[str, str]) -> 
         max_latency_age_s=1.0,
         terminal_capacities={STATION: 1, OTHER_STATION: 1, OLD_PASS[1]: 1, NEW_PASS[1]: 1},
         handover_modes={STATION: "bbm", OTHER_STATION: "bbm"},
+        tracked_nodes=frozenset({STATION: "bbm", OTHER_STATION: "bbm"}),
+        ground_station_ids=frozenset({STATION: "bbm", OTHER_STATION: "bbm"}),
         long_delay_bounds_s={},
     )
     scheduler._js = stream
@@ -470,7 +476,7 @@ def _successor(stream: _RetainedLinkStream, wired_sandboxes: dict[str, str]) -> 
 def _retained_station_states(stream: _RetainedLinkStream) -> dict[str, str]:
     prefix = actuation_state_subscribe_subject(SESSION).removesuffix(">")
     return {
-        message["details"]["gs_id"]: message["details"]["actuation_state_after"]
+        message["details"]["node_id"]: message["details"]["actuation_state_after"]
         for subject, message in stream.published
         if subject.startswith(prefix)
     }
@@ -482,7 +488,7 @@ def _predecessor_records() -> dict[str, bytes]:
         OLD_PASS: _proven("term0", "gnd0", (3.1, 3.4)),
     }
     dirty = _station_details(
-        gs_id=OTHER_STATION,
+        node_id=OTHER_STATION,
         affected_pairs=[[OTHER_STATION, NEW_PASS[1]]],
         actuation_state_before=ActuationState.KERNEL_DIRTY,
         actuation_state_after=ActuationState.KERNEL_DIRTY,
@@ -516,9 +522,9 @@ def test_after_every_pod_is_wired_anew_a_successor_starts_as_with_no_predecessor
     scheduler = _successor(stream, _replaced(*NODES))
 
     assert scheduler._actual_links == {}
-    assert scheduler._gs_stale_link_infos == {}
-    assert scheduler._ground_state(STATION).state == ActuationState.CLEAN
-    assert scheduler._ground_state(OTHER_STATION).state == ActuationState.CLEAN, (
+    assert scheduler._stale_link_infos == {}
+    assert scheduler._node_state(STATION).state == ActuationState.CLEAN
+    assert scheduler._node_state(OTHER_STATION).state == ActuationState.CLEAN, (
         "a station wired anew keeps the dirty state of the pod it replaced"
     )
     assert _retained_station_states(stream) == {STATION: "clean", OTHER_STATION: "clean"}
@@ -532,9 +538,9 @@ def test_a_station_left_holding_half_of_a_link_starts_unproven() -> None:
     scheduler = _successor(stream, _replaced(OLD_PASS[1], NEW_PASS[1]))
 
     assert set(scheduler._actual_links) == {ISL}
-    assert scheduler._ground_state(STATION).state == ActuationState.KERNEL_DIRTY
-    assert scheduler._ground_state(STATION).stale_pairs == {OLD_PASS}
-    other = scheduler._ground_state(OTHER_STATION)
+    assert scheduler._node_state(STATION).state == ActuationState.KERNEL_DIRTY
+    assert scheduler._node_state(STATION).stale_pairs == {OLD_PASS}
+    other = scheduler._node_state(OTHER_STATION)
     assert other.state == ActuationState.KERNEL_DIRTY
     assert other.stale_pairs == {(OTHER_STATION, NEW_PASS[1])}
     assert _retained_station_states(stream) == {

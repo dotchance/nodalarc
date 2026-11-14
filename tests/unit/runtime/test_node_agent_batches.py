@@ -77,7 +77,7 @@ def test_cross_node_isl_link_up_plan_builds_two_remote_interfaces():
         pairs={pair},
         desired=desired,
         locator=locator,
-        gs_capacities={},
+        ground_station_ids={},
         compensation_for_pair=_compensation,
         stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
     )
@@ -122,7 +122,7 @@ def test_cross_node_link_up_missing_remote_ip_fails_loudly():
             pairs={pair},
             desired=desired,
             locator=locator,
-            gs_capacities={},
+            ground_station_ids={},
             compensation_for_pair=_compensation,
             stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
         )
@@ -145,7 +145,7 @@ def test_local_ground_link_down_plan_preserves_single_agent_bridge_operation():
         pairs={pair},
         actual_links=actual,
         locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
-        gs_capacities={"gs-den": 1},
+        ground_station_ids={"gs-den": 1},
         stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
     )
 
@@ -182,7 +182,7 @@ def test_link_up_without_terminal_rates_for_an_interface_fails_loudly():
                 node_agent_pb2.LOCALITY_CROSS_NODE,
                 node_ips={"k3s-sat-a": "10.0.0.1", "k3s-sat-b": "10.0.0.2"},
             ),
-            gs_capacities={},
+            ground_station_ids={},
             compensation_for_pair=_compensation,
             stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
         )
@@ -234,7 +234,7 @@ def test_every_end_carries_the_delay_of_the_direction_it_transmits(locality):
             locality,
             node_ips={f"k3s-{node}": f"10.0.0.{index}" for index, node in enumerate(transmits)},
         ),
-        gs_capacities={"gs-den": 1, "gs-hou": 1},
+        ground_station_ids={"gs-den": 1, "gs-hou": 1},
         compensation_for_pair=_compensation,
         stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
     )
@@ -286,7 +286,7 @@ def test_a_long_delay_link_up_names_its_contact_and_the_delay_each_end_receives(
             node_agent_pb2.LOCALITY_CROSS_NODE,
             {"k3s-earth-relay": "10.0.0.1", "k3s-mars-relay": "10.0.0.2"},
         ),
-        gs_capacities={},
+        ground_station_ids={},
         compensation_for_pair=_compensation,
         interface_rates=ANY_INTERFACE_RATES,
         stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
@@ -305,7 +305,7 @@ def test_a_long_delay_stop_reaches_both_ends_with_its_stage_and_contact():
         pairs={TRUNK},
         actual_links={TRUNK: _trunk()},
         locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
-        gs_capacities={},
+        ground_station_ids={},
         stage=node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION,
     )
     entries = [entry for entries in plan.agent_ifaces.values() for entry in entries]
@@ -322,7 +322,7 @@ def test_a_long_delay_close_reaches_only_the_ends_it_names():
         pairs={TRUNK},
         actual_links={TRUNK: _trunk()},
         locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
-        gs_capacities={},
+        ground_station_ids={},
         stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
         ends={TRUNK: frozenset({"mars-relay"})},
     )
@@ -341,7 +341,7 @@ def test_a_close_that_names_no_end_never_reaches_a_long_delay_queue():
             pairs={TRUNK},
             actual_links={TRUNK: _trunk()},
             locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
-            gs_capacities={},
+            ground_station_ids={},
             stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
         )
 
@@ -361,7 +361,7 @@ def test_a_local_link_has_no_admission_stage():
             pairs={pair},
             actual_links={pair: local},
             locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
-            gs_capacities={},
+            ground_station_ids={},
             stage=node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION,
         )
 
@@ -388,7 +388,7 @@ def test_a_long_delay_contact_opens_with_the_entries_it_was_prepared_with():
         pairs={TRUNK},
         desired={TRUNK: _trunk()},
         locator=locator,
-        gs_capacities={},
+        ground_station_ids={},
         compensation_for_pair=drifting,
         interface_rates=ANY_INTERFACE_RATES,
         stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
@@ -407,7 +407,7 @@ def test_a_long_delay_contact_opens_with_the_entries_it_was_prepared_with():
         pairs={TRUNK},
         desired={TRUNK: _trunk()},
         locator=locator,
-        gs_capacities={},
+        ground_station_ids={},
         compensation_for_pair=drifting,
         interface_rates=ANY_INTERFACE_RATES,
         stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
@@ -440,7 +440,7 @@ def test_a_local_link_has_no_prepare():
             pairs={pair},
             desired={pair: local},
             locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
-            gs_capacities={},
+            ground_station_ids={},
             compensation_for_pair=_compensation,
             interface_rates=ANY_INTERFACE_RATES,
             stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
@@ -476,7 +476,7 @@ def test_a_long_delay_ground_pass_stages_each_end_with_its_own_contact():
         pairs={pair},
         desired={pair: info},
         locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
-        gs_capacities={"dss-43": 1},
+        ground_station_ids={"dss-43": 1},
         compensation_for_pair=_compensation,
         interface_rates=rates,
         stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
@@ -515,7 +515,7 @@ def test_a_long_delay_ground_pass_stages_each_end_with_its_own_contact():
         pairs={pair},
         actual_links={pair: info},
         locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
-        gs_capacities={"dss-43": 1},
+        ground_station_ids={"dss-43": 1},
         stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
         ends={pair: frozenset({"mars-orbiter"})},
     )

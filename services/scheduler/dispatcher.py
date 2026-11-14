@@ -49,7 +49,7 @@ import logging
 import os
 import socket
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -112,7 +112,7 @@ from pydantic import ValidationError
 from scheduler.actuation import (
     ActuationResult,
     EndSurvey,
-    GroundActuationState,
+    NodeActuationState,
     next_verify_time,
 )
 from scheduler.agent_health import AgentHealthTracker, AgentHealthTransition
@@ -151,7 +151,6 @@ from scheduler.dispatch_actuator import (
 from scheduler.dispatch_planner import (
     choosing_nodes,
     diff_link_state,
-    gs_id_for_pair,
     interface_colliding_downs,
     stage_changes,
 )
@@ -170,9 +169,9 @@ from scheduler.predecessor import (
     commanded_rows,
     footprint_rows,
     inherited_actual_links,
-    inherited_station_state,
+    inherited_node_state,
+    predecessor_node_records,
     predecessor_snapshot,
-    predecessor_station_records,
     read_retained,
     rewired_nodes,
     still_in_kernel,
@@ -273,6 +272,8 @@ class Dispatcher:
         epsilon_ms: float = 100.0,
         terminal_capacities: Mapping[str, int] | None = None,
         handover_modes: Mapping[str, Literal["bbm", "mbb"]] | None = None,
+        tracked_nodes: Collection[str] | None = None,
+        ground_station_ids: Collection[str] | None = None,
         rtt_to_one_way_policy: Literal["half-rtt"] = "half-rtt",
         clean_kernel_audit_interval_s: float | None = 60.0,
         now: Callable[[], datetime] | None = None,
@@ -359,11 +360,23 @@ class Dispatcher:
         # spare terminals allow.
         self._terminal_capacities = dict(terminal_capacities)
         self._handover_modes = dict(handover_modes)
-        # The stations: until actuation state is kept per choosing node, its code reads the
-        # nodes that state scheduling.
-        self._gs_capacities = {
-            node_id: self._terminal_capacities[node_id] for node_id in self._handover_modes
-        }
+        if tracked_nodes is None:
+            log.error("FATAL: Dispatcher created with no tracked_nodes")
+            raise ValueError("tracked_nodes is required")
+        untracked = sorted(set(tracked_nodes) - set(self._terminal_capacities))
+        if untracked:
+            raise ValueError(
+                f"nodes that choose a link but have no terminals OME may assign: {untracked}"
+            )
+        # Every node that chooses at least one candidate link of the session. Each has an
+        # actuation state, declared at start.
+        self._tracked_nodes = frozenset(tracked_nodes)
+        if ground_station_ids is None:
+            log.error("FATAL: Dispatcher created with no ground_station_ids")
+            raise ValueError("ground_station_ids is required")
+        # Which nodes are ground stations. Read only where a Node Agent command is built:
+        # its contract still names a link's ground station and satellite.
+        self._ground_station_ids = frozenset(ground_station_ids)
         self._session_id = session_id
         if not wiring_generation:
             raise ValueError("wiring_generation is required")
@@ -507,17 +520,17 @@ class Dispatcher:
         self._scenario_sub = None
         self._repair_sub = None
 
-        # Per-ground-station actuation truth. OME authority changes never clear
+        # Actuation truth of each node that chooses links. OME authority changes never clear
         # this state; only read-only kernel proof or explicit operator repair can.
         now_value = self._now()
-        self._gs_actuation: dict[str, GroundActuationState] = {
-            gs_id: GroundActuationState(gs_id=gs_id, since=now_value)
-            for gs_id in sorted(self._gs_capacities)
+        self._node_actuation: dict[str, NodeActuationState] = {
+            node_id: NodeActuationState(node_id=node_id, since=now_value)
+            for node_id in sorted(self._tracked_nodes)
         }
-        self._gs_stale_link_infos: dict[tuple[str, str], ActiveLinkInfo] = {}
+        self._stale_link_infos: dict[tuple[str, str], ActiveLinkInfo] = {}
         self._pending_fold_diagnostics: list[dict] = []
         self._active_repair_tasks: set[asyncio.Task] = set()
-        self._repair_original_states: dict[str, GroundActuationState] = {}
+        self._repair_original_states: dict[str, NodeActuationState] = {}
         self._max_kernel_verify_attempts = 5
         # Re-prove cadence when the prover itself is unreachable (agent
         # restart/rollout). Short and fixed: recovery should land within
@@ -531,7 +544,7 @@ class Dispatcher:
         self._agent_health = AgentHealthTracker()
         # Serializes normal reconciliation and explicit operator repair. The
         # Scheduler must never have two concurrent writers to Node Agent or
-        # _actual_links for the same GS.
+        # _actual_links for the same node.
         self._actuation_lock = asyncio.Lock()
 
         # Queue: decision engine / control plane → actuator (dispatch worker)
@@ -1261,26 +1274,26 @@ class Dispatcher:
     ) -> list[list[str]]:
         return [[a, b] for a, b in sorted(pairs)]
 
-    def _actual_ground_pairs_for_gs(self, gs_id: str) -> dict[tuple[str, str], ActiveLinkInfo]:
+    def _actual_pairs_of(self, node_id: str) -> dict[tuple[str, str], ActiveLinkInfo]:
+        """The proven links a node chooses."""
         return {
             pair: info
             for pair, info in self._actual_links.items()
-            if info.link_type == "ground" and gs_id_for_pair(pair, self._gs_capacities) == gs_id
+            if node_id in self._choosing_nodes(pair)
         }
 
-    def _desired_ground_pairs_for_gs(self, gs_id: str) -> dict[tuple[str, str], ActiveLinkInfo]:
+    def _desired_pairs_of(self, node_id: str) -> dict[tuple[str, str], ActiveLinkInfo]:
+        """The links a node chooses, as the Scheduler desires them."""
         effective = self._effective_desired_links()
         return {
-            pair: info
-            for pair, info in effective.items()
-            if info.link_type == "ground" and gs_id_for_pair(pair, self._gs_capacities) == gs_id
+            pair: info for pair, info in effective.items() if node_id in self._choosing_nodes(pair)
         }
 
-    def _ome_visible_scheduled_pairs_for_gs(self, gs_id: str) -> set[tuple[str, str]]:
+    def _ome_visible_scheduled_pairs_of(self, node_id: str) -> set[tuple[str, str]]:
         return {
             pair
             for pair, (visible, scheduled, _state) in self._ome_view.items()
-            if visible and scheduled and gs_id_for_pair(pair, self._gs_capacities) == gs_id
+            if visible and scheduled and node_id in self._choosing_nodes(pair)
         }
 
     def _effective_desired_links(self) -> dict[tuple[str, str], ActiveLinkInfo]:
@@ -1292,24 +1305,24 @@ class Dispatcher:
             and pair[1] not in self._override_nodes
         }
 
-    def _ground_state(self, gs_id: str) -> GroundActuationState:
-        state = self._gs_actuation.get(gs_id)
+    def _node_state(self, node_id: str) -> NodeActuationState:
+        state = self._node_actuation.get(node_id)
         if state is None:
-            state = GroundActuationState(gs_id=gs_id)
-            self._gs_actuation[gs_id] = state
+            state = NodeActuationState(node_id=node_id)
+            self._node_actuation[node_id] = state
         return state
 
     def _actuation_details(
         self,
         *,
-        gs_id: str | None,
+        node_id: str | None,
         operation: str,
         failure_class: ActuationFailureClass,
         affected_pairs: set[tuple[str, str]] | frozenset[tuple[str, str]] | None = None,
         result: ActuationResult | None = None,
         sim_time: datetime | None = None,
-        state_before: GroundActuationState | None = None,
-        state_after: GroundActuationState | None = None,
+        state_before: NodeActuationState | None = None,
+        state_after: NodeActuationState | None = None,
         intervention_id: str | None = None,
         reason: str | None = None,
         remediation: str | None = None,
@@ -1326,30 +1339,26 @@ class Dispatcher:
             sim_time=sim_time or self._current_sim_time,
             epoch_id=self._last_snapshot_epoch_id,
             snapshot_seq=self._last_snapshot_seq,
-            gs_id=gs_id,
+            node_id=node_id,
             operation=operation,
             failure_class=failure_class,
             remediation=remediation,
             affected_pairs=self._pair_rows(affected),
-            desired_pairs_for_gs=self._pair_rows(set(self._desired_ground_pairs_for_gs(gs_id)))
-            if gs_id
-            else [],
-            actual_pairs_for_gs=self._pair_rows(set(self._actual_ground_pairs_for_gs(gs_id)))
-            if gs_id
-            else [],
+            desired_pairs=self._pair_rows(set(self._desired_pairs_of(node_id))) if node_id else [],
+            actual_pairs=self._pair_rows(set(self._actual_pairs_of(node_id))) if node_id else [],
             stale_links=footprint_rows(
                 {
                     pair: info
-                    for pair, info in self._gs_stale_link_infos.items()
-                    if gs_id_for_pair(pair, self._gs_capacities) == gs_id
+                    for pair, info in self._stale_link_infos.items()
+                    if node_id in self._choosing_nodes(pair)
                 }
             )
-            if gs_id
+            if node_id
             else [],
-            ome_visible_scheduled_pairs_for_gs=self._pair_rows(
-                self._ome_visible_scheduled_pairs_for_gs(gs_id)
+            ome_visible_scheduled_pairs=self._pair_rows(
+                self._ome_visible_scheduled_pairs_of(node_id)
             )
-            if gs_id
+            if node_id
             else [],
             node_agent_results=result.node_agent_details() if result else [],
             actuation_state_before=before_value,
@@ -1391,23 +1400,23 @@ class Dispatcher:
             ops_event_subject(self._session_id, "scheduler", code.value),
             event.model_dump_json().encode(),
         )
-        # Per-GS actuation STATE is also published to a retained, replace-not-merge
+        # Each node's actuation STATE is also published to a retained, replace-not-merge
         # subject (MaxMsgsPerSubject=1 on NODALARC_LINKS) so VS-API recovers the full
         # health roster via LAST_PER_SUBJECT on (re)subscribe. The ops event above is
         # the append-only audit log; this is the recoverable current state. Only the
-        # per-GS state codes are retained — transient/halt codes stay log-only.
-        gs_id = details_dict.get("gs_id") if isinstance(details_dict, dict) else None
-        if gs_id and code in (
+        # per-node state codes are retained — transient/halt codes stay log-only.
+        node_id = details_dict.get("node_id") if isinstance(details_dict, dict) else None
+        if node_id and code in (
             SchedulerOpsCode.ACTUATION_CLEAN,
             SchedulerOpsCode.ACTUATION_BLOCKED,
             SchedulerOpsCode.KERNEL_DIRTY,
         ):
             await js.publish(
-                actuation_state_subject(self._session_id, gs_id),
+                actuation_state_subject(self._session_id, node_id),
                 event.model_dump_json().encode(),
             )
 
-    def _actuation_state_code_for(self, state: GroundActuationState) -> SchedulerOpsCode:
+    def _actuation_state_code_for(self, state: NodeActuationState) -> SchedulerOpsCode:
         if state.state == ActuationState.KERNEL_DIRTY:
             return SchedulerOpsCode.KERNEL_DIRTY
         if state.state == ActuationState.ACTUATION_BLOCKED:
@@ -1417,11 +1426,11 @@ class Dispatcher:
     async def _publish_recoverable_actuation_state(
         self,
         *,
-        gs_id: str,
+        node_id: str,
         sim_time: datetime,
         reason: str,
     ) -> None:
-        """Publish current per-GS actuation state to the retained roster subject only.
+        """Publish one node's current actuation state to the retained roster subject only.
 
         This is not an operator event. It is the replace-not-merge recovery record
         paired with ActualLinkSnapshot so a VS-API restart does not infer health from
@@ -1430,9 +1439,9 @@ class Dispatcher:
         js = getattr(self, "_js", None)
         if js is None:
             return
-        state = self._ground_state(gs_id)
+        state = self._node_state(node_id)
         details = self._actuation_details(
-            gs_id=gs_id,
+            node_id=node_id,
             operation="RecoverableStateHeartbeat",
             failure_class=ActuationFailureClass.NONE,
             affected_pairs=state.affected_pairs,
@@ -1449,25 +1458,25 @@ class Dispatcher:
             hostname=self._hostname,
             level="debug",
             code=code.value,
-            message=f"Ground station {gs_id} actuation state heartbeat: {state.state.value}",
+            message=f"Node {node_id} actuation state heartbeat: {state.state.value}",
             details=details.model_dump(mode="json"),
         )
         await js.publish(
-            actuation_state_subject(self._session_id, gs_id),
+            actuation_state_subject(self._session_id, node_id),
             event.model_dump_json().encode(),
         )
 
     async def _publish_recoverable_state_heartbeat(self, *, sim_time: datetime) -> None:
         """Refresh both retained recovery subjects in lockstep.
 
-        ActualLinkSnapshot and per-GS actuation state are consumed together by VS-API.
+        ActualLinkSnapshot and per-node actuation state are consumed together by VS-API.
         Refreshing only one side can make a missing actual-kernel source look like a
         clean roster or vice versa, so the heartbeat always writes both surfaces.
         """
         await self._publish_actual_links()
-        for gs_id in sorted(self._gs_capacities):
+        for node_id in sorted(self._tracked_nodes):
             await self._publish_recoverable_actuation_state(
-                gs_id=gs_id,
+                node_id=node_id,
                 sim_time=sim_time,
                 reason="recoverable state heartbeat",
             )
@@ -1650,7 +1659,7 @@ class Dispatcher:
         if not violations:
             return
         details = self._actuation_details(
-            gs_id=None,
+            node_id=None,
             operation=location,
             failure_class=ActuationFailureClass.AUTHORITY_INVARIANT,
             affected_pairs=violations,
@@ -1662,46 +1671,42 @@ class Dispatcher:
             details=details,
         )
 
-    def _record_stale_infos_for_gs(self, gs_id: str, pairs: set[tuple[str, str]]) -> None:
+    def _record_stale_infos_of(self, node_id: str, pairs: set[tuple[str, str]]) -> None:
         for pair in pairs:
             info = self._actual_links.get(pair) or self._desired_links.get(pair)
-            if (
-                info is not None
-                and info.link_type == "ground"
-                and gs_id_for_pair(pair, self._gs_capacities) == gs_id
-            ):
-                self._gs_stale_link_infos[pair] = info
+            if info is not None and node_id in self._choosing_nodes(pair):
+                self._stale_link_infos[pair] = info
 
-    def _kernel_expected_down_for_gs(
-        self, gs_id: str, expected_up: dict[tuple[str, str], ActiveLinkInfo]
+    def _kernel_expected_down_of(
+        self, node_id: str, expected_up: dict[tuple[str, str], ActiveLinkInfo]
     ) -> dict[tuple[str, str], ActiveLinkInfo]:
         expected_down = {
             pair: info
-            for pair, info in self._actual_ground_pairs_for_gs(gs_id).items()
+            for pair, info in self._actual_pairs_of(node_id).items()
             if pair not in expected_up
         }
-        for pair, info in self._gs_stale_link_infos.items():
-            if pair not in expected_up and gs_id_for_pair(pair, self._gs_capacities) == gs_id:
+        for pair, info in self._stale_link_infos.items():
+            if pair not in expected_up and node_id in self._choosing_nodes(pair):
                 expected_down[pair] = info
         return expected_down
 
     async def _send_kernel_inventory(
         self,
         *,
-        gs_id: str,
+        node_id: str,
         expected_up: dict[tuple[str, str], ActiveLinkInfo],
         expected_down: dict[tuple[str, str], ActiveLinkInfo],
         sim_time: datetime,
     ) -> ActuationResult:
         result = await verify_ground_kernel_inventory(
-            gs_id=gs_id,
+            node_id=node_id,
             expected_up=expected_up,
             expected_down=expected_down,
             locator=self._loc,
             pool=self._pool,
             sim_iso=sim_time.isoformat(),
             sim_time=sim_time,
-            gs_capacities=self._gs_capacities,
+            ground_station_ids=self._ground_station_ids,
             interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
@@ -1731,7 +1736,7 @@ class Dispatcher:
                     message=(f"Node Agent {agent_result.agent_addr} appears down: {summary}"),
                     level="error",
                     details=self._actuation_details(
-                        gs_id=None,
+                        node_id=None,
                         operation="AgentHealth",
                         failure_class=ActuationFailureClass.AGENT_UNREACHABLE,
                         sim_time=self._current_sim_time,
@@ -1741,7 +1746,7 @@ class Dispatcher:
                             "of its recent calls. Check the nodalarc-node-agent "
                             "DaemonSet pod on that Kubernetes node (kubectl get "
                             "pods -l app=nodalarc-node-agent -o wide). Affected "
-                            "ground stations keep their last proven state and "
+                            "nodes keep their last proven state and "
                             "re-prove automatically when the agent answers."
                         ),
                     ),
@@ -1752,7 +1757,7 @@ class Dispatcher:
                     message=f"Node Agent {agent_result.agent_addr} is answering again",
                     level="info",
                     details=self._actuation_details(
-                        gs_id=None,
+                        node_id=None,
                         operation="AgentHealth",
                         failure_class=ActuationFailureClass.NONE,
                         sim_time=self._current_sim_time,
@@ -1760,24 +1765,24 @@ class Dispatcher:
                     ),
                 )
 
-    async def _mark_gs_clean(
+    async def _mark_node_clean(
         self,
         *,
-        gs_id: str,
+        node_id: str,
         sim_time: datetime,
         intervention_id: str | None = None,
         reason: str = "read-only kernel proof matched Scheduler authority",
     ) -> None:
-        before = self._ground_state(gs_id)
-        after = GroundActuationState(gs_id=gs_id, since=self._now())
-        self._gs_actuation[gs_id] = after
-        self._gs_stale_link_infos = {
+        before = self._node_state(node_id)
+        after = NodeActuationState(node_id=node_id, since=self._now())
+        self._node_actuation[node_id] = after
+        self._stale_link_infos = {
             pair: info
-            for pair, info in self._gs_stale_link_infos.items()
-            if gs_id_for_pair(pair, self._gs_capacities) != gs_id
+            for pair, info in self._stale_link_infos.items()
+            if node_id not in self._choosing_nodes(pair)
         }
         details = self._actuation_details(
-            gs_id=gs_id,
+            node_id=node_id,
             operation="KernelInventory",
             failure_class=ActuationFailureClass.NONE,
             sim_time=sim_time,
@@ -1788,14 +1793,14 @@ class Dispatcher:
         )
         await self._publish_scheduler_ops(
             code=SchedulerOpsCode.ACTUATION_CLEAN,
-            message=f"Ground station {gs_id} actuation state is clean",
+            message=f"Node {node_id} actuation state is clean",
             level="info",
             details=details,
         )
 
     async def _take_over_from_predecessor(self) -> Takeover | None:
         """Take over the record of the Scheduler that last commanded this wiring generation
-        (``scheduler.predecessor``): the links its Node Agents proved up and each station's
+        (``scheduler.predecessor``): the links its Node Agents proved up and each node's
         actuation state with its stale footprint, on the pods its wiring gate proved and this
         Scheduler's wiring gate still proves. Runs once the writer Lease is held and before any
         command. None when no Scheduler of this generation published a link record (nothing has
@@ -1820,15 +1825,15 @@ class Dispatcher:
         links, halves = inherited_actual_links(
             snapshot,
             interface_map=self._interface_map,
-            gs_capacities=self._gs_capacities,
+            terminal_capacities=self._terminal_capacities,
             long_delay_pairs=frozenset(self._long_delay_bounds_s),
             rewired=rewired,
         )
         self._actual_links.update(links)
-        self._gs_stale_link_infos.update(halves)
+        self._stale_link_infos.update(halves)
         for pair, info in self._actual_links.items():
             self._last_latencies[pair] = info.latencies_ms
-        records = predecessor_station_records(
+        records = predecessor_node_records(
             await read_retained(
                 js,
                 stream=STREAM_LINK_EVENTS,
@@ -1838,29 +1843,30 @@ class Dispatcher:
             wiring_generation=self._wiring_generation,
         )
         resumed = set()
-        unproven = {gs_id_for_pair(pair, self._gs_capacities) for pair in halves}
-        for gs_id, (code, details) in sorted(records.items()):
-            if gs_id not in self._gs_capacities:
+        unproven = {node_id for pair in halves for node_id in self._choosing_nodes(pair)}
+        for node_id, (code, details) in sorted(records.items()):
+            if node_id not in self._tracked_nodes:
                 raise RuntimeError(
-                    f"retained station record names {gs_id}, not a station of this session"
+                    f"retained actuation record names {node_id}, which chooses no link of this "
+                    "session"
                 )
-            state, stale = inherited_station_state(gs_id, code, details)
+            state, stale = inherited_node_state(node_id, code, details)
             surviving = still_in_kernel(stale, rewired)
-            self._gs_stale_link_infos.update(surviving)
-            if gs_id in rewired:
+            self._stale_link_infos.update(surviving)
+            if node_id in rewired:
                 # Its own state was the old pod's; what its footprint left elsewhere is unproven.
                 if surviving:
-                    unproven.add(gs_id)
+                    unproven.add(node_id)
                 continue
             if state.state != ActuationState.CLEAN:
                 state = replace(
                     state,
-                    stale_pairs=frozenset(self._kernel_expected_down_for_gs(gs_id, {})),
+                    stale_pairs=frozenset(self._kernel_expected_down_of(node_id, {})),
                 )
-            self._gs_actuation[gs_id] = state
-            resumed.add(gs_id)
+            self._node_actuation[node_id] = state
+            resumed.add(node_id)
         log.info(
-            "Took over %d of %d links and %d station records from Scheduler %s (writer epoch "
+            "Took over %d of %d links and %d node records from Scheduler %s (writer epoch "
             "%d); %d pods were wired anew since, leaving %d link halves to prove down",
             len(links),
             len(snapshot.active_links),
@@ -1878,58 +1884,58 @@ class Dispatcher:
         )
 
     async def _publish_startup_actuation_roster(self, takeover: Takeover | None) -> None:
-        """Publish every configured station's state at Scheduler start.
+        """Publish the state of every node that chooses links, at Scheduler start.
 
         VS-API derives actuation health from Scheduler OpsEvents. If startup
-        does not declare the roster, a missing station can look healthy by omission.
+        does not declare the roster, a missing node can look healthy by omission.
         With no predecessor, the wiring gate is the proof boundary: reaching this
         point means startup verified the generation's managed kernel state, and no
         Scheduler has commanded a link on it. With a predecessor:
-        - a station left holding a link half whose other end was wired anew is unproven: it
+        - a node left holding a link half whose other end was wired anew is unproven: it
           enters kernel_dirty and the KernelInventory verify proves the half down;
-        - a station whose state the predecessor recorded keeps that state;
-        - a station whose pod was wired anew since is clean on this Scheduler's wiring gate,
+        - a node whose state the predecessor recorded keeps that state;
+        - a node whose pod was wired anew since is clean on this Scheduler's wiring gate,
           as with no predecessor;
-        - a station the predecessor left no record for is unproven, as above.
+        - a node the predecessor left no record for is unproven, as above.
         """
         sim_time = self._current_sim_time or self._now()
-        for gs_id in sorted(self._gs_capacities):
+        for node_id in sorted(self._tracked_nodes):
             if takeover is None:
-                await self._mark_gs_clean(
-                    gs_id=gs_id,
+                await self._mark_node_clean(
+                    node_id=node_id,
                     sim_time=sim_time,
                     reason="scheduler startup roster: wiring gate verified clean kernel state",
                 )
                 continue
             predecessor = takeover.predecessor
-            if gs_id in takeover.unproven:
-                await self._set_gs_nonclean(
-                    gs_id=gs_id,
+            if node_id in takeover.unproven:
+                await self._set_node_nonclean(
+                    node_id=node_id,
                     state_name=ActuationState.KERNEL_DIRTY,
                     code=SchedulerOpsCode.KERNEL_DIRTY,
                     operation="SchedulerTakeover",
-                    failure_class=ActuationFailureClass.GROUND_UNKNOWN,
-                    affected_pairs=set(self._kernel_expected_down_for_gs(gs_id, {})),
+                    failure_class=ActuationFailureClass.UNKNOWN_OUTCOME,
+                    affected_pairs=set(self._kernel_expected_down_of(node_id, {})),
                     result=None,
                     sim_time=sim_time,
                     reason=(
                         f"a pod at one end of a link Scheduler {predecessor} proved for this "
-                        "station was wired anew; the other half is unproven until "
+                        "node was wired anew; the other half is unproven until "
                         "KernelInventory proves it down"
                     ),
                 )
-            elif gs_id in takeover.recorded:
-                state = self._ground_state(gs_id)
+            elif node_id in takeover.recorded:
+                state = self._node_state(node_id)
                 await self._publish_scheduler_ops(
                     code=self._actuation_state_code_for(state),
                     message=(
-                        f"Ground station {gs_id} actuation state {state.state.value} "
+                        f"Node {node_id} actuation state {state.state.value} "
                         f"taken over from Scheduler {predecessor}"
                     ),
                     # A failing state was reported when the predecessor entered it.
                     level="info" if state.state == ActuationState.CLEAN else "warning",
                     details=self._actuation_details(
-                        gs_id=gs_id,
+                        node_id=node_id,
                         operation="SchedulerTakeover",
                         failure_class=ActuationFailureClass.NONE,
                         affected_pairs=state.affected_pairs,
@@ -1939,9 +1945,9 @@ class Dispatcher:
                         reason=f"state recorded by Scheduler {predecessor}",
                     ),
                 )
-            elif gs_id in takeover.rewired:
-                await self._mark_gs_clean(
-                    gs_id=gs_id,
+            elif node_id in takeover.rewired:
+                await self._mark_node_clean(
+                    node_id=node_id,
                     sim_time=sim_time,
                     reason=(
                         f"its pod was wired anew since Scheduler {predecessor} recorded it; "
@@ -1949,25 +1955,25 @@ class Dispatcher:
                     ),
                 )
             else:
-                await self._set_gs_nonclean(
-                    gs_id=gs_id,
+                await self._set_node_nonclean(
+                    node_id=node_id,
                     state_name=ActuationState.KERNEL_DIRTY,
                     code=SchedulerOpsCode.KERNEL_DIRTY,
                     operation="SchedulerTakeover",
-                    failure_class=ActuationFailureClass.GROUND_UNKNOWN,
-                    affected_pairs=set(self._actual_ground_pairs_for_gs(gs_id)),
+                    failure_class=ActuationFailureClass.UNKNOWN_OUTCOME,
+                    affected_pairs=set(self._actual_pairs_of(node_id)),
                     result=None,
                     sim_time=sim_time,
                     reason=(
-                        f"Scheduler {predecessor} left no actuation record for this station; "
+                        f"Scheduler {predecessor} left no actuation record for this node; "
                         "its kernel is unproven until KernelInventory proves it"
                     ),
                 )
 
-    async def _set_gs_nonclean(
+    async def _set_node_nonclean(
         self,
         *,
-        gs_id: str,
+        node_id: str,
         state_name: ActuationState,
         code: SchedulerOpsCode,
         operation: str,
@@ -1978,9 +1984,9 @@ class Dispatcher:
         intervention_id: str | None = None,
         reason: str | None = None,
     ) -> None:
-        before = self._ground_state(gs_id)
-        self._record_stale_infos_for_gs(
-            gs_id, set(affected_pairs) | set(self._actual_ground_pairs_for_gs(gs_id))
+        before = self._node_state(node_id)
+        self._record_stale_infos_of(
+            node_id, set(affected_pairs) | set(self._actual_pairs_of(node_id))
         )
         prior_attempts = before.recovery.verify_attempt_count
         recovery = RecoveryStatus(
@@ -1991,11 +1997,9 @@ class Dispatcher:
             operator_action_required=False,
             active_intervention_id=intervention_id,
         )
-        stale = set(
-            self._kernel_expected_down_for_gs(gs_id, self._desired_ground_pairs_for_gs(gs_id))
-        )
-        after = GroundActuationState(
-            gs_id=gs_id,
+        stale = set(self._kernel_expected_down_of(node_id, self._desired_pairs_of(node_id)))
+        after = NodeActuationState(
+            node_id=node_id,
             state=state_name,
             reason_code=code,
             since=self._now(),
@@ -2004,9 +2008,9 @@ class Dispatcher:
             node_agent_results=tuple(result.node_agent_details()) if result else (),
             recovery=recovery,
         )
-        self._gs_actuation[gs_id] = after
+        self._node_actuation[node_id] = after
         details = self._actuation_details(
-            gs_id=gs_id,
+            node_id=node_id,
             operation=operation,
             failure_class=failure_class,
             affected_pairs=affected_pairs,
@@ -2017,18 +2021,18 @@ class Dispatcher:
             intervention_id=intervention_id,
             reason=reason,
             remediation=(
-                "Dispatch to this ground station is suppressed until its kernel "
+                "New links this node chooses are held back until its kernel "
                 "is re-proven. The Scheduler re-verifies automatically on a "
                 "backoff; if verification exhausts, trigger operator repair "
-                "(POST /api/v1/ops/repair with gs_id and reason, or the Repair "
-                "action in the UI) to reconcile the GS kernel to current "
+                "(POST /api/v1/ops/repair with node_id and reason, or the Repair "
+                "action in the UI) to reconcile the node's links to current "
                 "authority under a logged intervention id. Per-interface "
                 "mismatches are listed in node_agent_results."
             ),
         )
         await self._publish_scheduler_ops(
             code=code,
-            message=f"Ground station {gs_id} actuation is {state_name.value}: {operation}",
+            message=f"Node {node_id} actuation is {state_name.value}: {operation}",
             level="error",
             details=details,
         )
@@ -2040,7 +2044,7 @@ class Dispatcher:
         if state_code != code:
             await self._publish_scheduler_ops(
                 code=state_code,
-                message=f"Ground station {gs_id} entered {state_name.value}",
+                message=f"Node {node_id} entered {state_name.value}",
                 level="error",
                 details=details,
             )
@@ -2137,11 +2141,11 @@ class Dispatcher:
         if context == "replacement_up":
             return SchedulerOpsCode.REPLACEMENT_LINK_UP_FAILED
         if operation == "BatchLinkUp":
-            return SchedulerOpsCode.GROUND_LINK_UP_FAILED
+            return SchedulerOpsCode.LINK_UP_FAILED
         if operation == "BatchLinkDown":
-            return SchedulerOpsCode.GROUND_LINK_DOWN_FAILED
+            return SchedulerOpsCode.LINK_DOWN_FAILED
         if operation == "SetLatency":
-            return SchedulerOpsCode.GROUND_LATENCY_UPDATE_FAILED
+            return SchedulerOpsCode.LATENCY_UPDATE_FAILED
         return SchedulerOpsCode.KERNEL_DIRTY
 
     async def _handle_actuation_result(
@@ -2159,20 +2163,21 @@ class Dispatcher:
             return
         # A pair whose command reached no answer observed nothing: it keeps its last proven
         # record, the next reconcile sends it again, and the agent health above tells the
-        # operator the Node Agent is not answering. It neither halts nor blocks a station.
+        # operator the Node Agent is not answering. It neither halts nor blocks a node.
         observed = {
             pair
             for pair in result.failed_pairs
             if result.pair_results[pair].failure_class != ActuationFailureClass.AGENT_UNREACHABLE
         }
+        # An observed failure on a link no node chooses (its interfaces are fixed) cannot be
+        # held at a node and proven again: it stops dispatch.
         fatal_pairs = {
             pair
             for pair, pair_result in result.pair_results.items()
             if pair in observed
             and (
-                pair_result.failure_class
-                in {ActuationFailureClass.FENCE, ActuationFailureClass.ISL_FAILURE}
-                or pair_result.link_type != "ground"
+                pair_result.failure_class == ActuationFailureClass.FENCE
+                or not self._choosing_nodes(pair)
             )
         }
         if result.writer_fenced:
@@ -2187,16 +2192,20 @@ class Dispatcher:
             # Consult the authority once to tell them apart; raises
             # DispatcherSuperseded when this instance is the stale party.
             await self._stop_if_superseded(operation=result.operation)
+            failed = fatal_pairs or result.failed_pairs
             details = self._actuation_details(
-                gs_id=None,
+                node_id=None,
                 operation=result.operation,
                 failure_class=ActuationFailureClass.FENCE
                 if result.fence_failure
-                else ActuationFailureClass.ISL_FAILURE,
-                affected_pairs=fatal_pairs or result.failed_pairs,
+                else result.pair_results[min(failed)].failure_class,
+                affected_pairs=failed,
                 result=result,
                 sim_time=sim_time,
-                reason="Node Agent actuation failure cannot be degraded per-GS",
+                reason=(
+                    "a fence refusal, or a failure on a link no node chooses, cannot be held "
+                    "at one node"
+                ),
             )
             await self._halt_dispatcher(
                 reason=f"Fatal actuation failure during {result.operation}: {sorted(fatal_pairs or result.failed_pairs)}",
@@ -2204,27 +2213,25 @@ class Dispatcher:
                 details=details,
             )
 
-        by_gs: dict[str, set[tuple[str, str]]] = {}
+        # An observed failure on a link marks every node that chooses it.
+        by_node: dict[str, set[tuple[str, str]]] = {}
         for pair in observed:
-            pair_result = result.pair_results[pair]
-            if pair_result.link_type != "ground" or pair_result.gs_id is None:
-                continue
-            by_gs.setdefault(pair_result.gs_id, set()).add(pair)
+            for node_id in self._choosing_nodes(pair):
+                by_node.setdefault(node_id, set()).add(pair)
 
-        for gs_id, pairs in by_gs.items():
+        for node_id, pairs in sorted(by_node.items()):
             failures = [result.pair_results[pair].failure_class for pair in pairs]
             if any(
-                f
-                in {ActuationFailureClass.GROUND_KERNEL_DIRTY, ActuationFailureClass.GROUND_UNKNOWN}
+                f in {ActuationFailureClass.KERNEL_DIRTY, ActuationFailureClass.UNKNOWN_OUTCOME}
                 for f in failures
             ):
                 state_name = ActuationState.KERNEL_DIRTY
-                failure_class = ActuationFailureClass.GROUND_KERNEL_DIRTY
+                failure_class = ActuationFailureClass.KERNEL_DIRTY
             else:
                 state_name = ActuationState.ACTUATION_BLOCKED
-                failure_class = ActuationFailureClass.GROUND_CLEAN_FAILURE
-            await self._set_gs_nonclean(
-                gs_id=gs_id,
+                failure_class = ActuationFailureClass.CLEAN_FAILURE
+            await self._set_node_nonclean(
+                node_id=node_id,
                 state_name=state_name,
                 code=self._failure_code_for_operation(
                     operation=result.operation, context=operation_context
@@ -2238,7 +2245,7 @@ class Dispatcher:
                 reason=operation_context,
             )
 
-    def _filter_blocked_ground_mutations(
+    def _filter_blocked_ups(
         self,
         pairs: set[tuple[str, str]],
         *,
@@ -2247,29 +2254,28 @@ class Dispatcher:
         allowed: set[tuple[str, str]] = set()
         blocked: set[tuple[str, str]] = set()
         for pair in pairs:
-            gs_id = gs_id_for_pair(pair, self._gs_capacities)
-            if gs_id is None:
-                allowed.add(pair)
-                continue
-            if self._ground_state(gs_id).blocking_new_ground_link_up:
+            if any(
+                self._node_state(node_id).blocking_new_link_up
+                for node_id in self._choosing_nodes(pair)
+            ):
                 blocked.add(pair)
             else:
                 allowed.add(pair)
         if blocked:
             log.warning(
-                "Suppressed %s for blocked ground station(s): %s",
+                "Suppressed %s at node(s) whose actuation is not clean: %s",
                 operation,
                 sorted(blocked),
             )
         return allowed
 
-    def _filter_ground_down_mutations(
+    def _filter_blocked_downs(
         self,
         pairs: set[tuple[str, str]],
         *,
         operation: str,
     ) -> set[tuple[str, str]]:
-        """Allow only truthful automatic ground LinkDown operations.
+        """Allow only truthful automatic LinkDown operations.
 
         actuation_blocked may still use cleanup downs because a clean failure
         means the kernel was not mutated. kernel_dirty and active repair are
@@ -2279,27 +2285,26 @@ class Dispatcher:
         allowed: set[tuple[str, str]] = set()
         blocked: set[tuple[str, str]] = set()
         for pair in pairs:
-            gs_id = gs_id_for_pair(pair, self._gs_capacities)
-            if gs_id is None:
-                allowed.add(pair)
-                continue
-            state = self._ground_state(gs_id)
-            if state.recovery.active_intervention_id or state.state == ActuationState.KERNEL_DIRTY:
+            states = [self._node_state(node_id) for node_id in self._choosing_nodes(pair)]
+            if any(
+                state.recovery.active_intervention_id or state.state == ActuationState.KERNEL_DIRTY
+                for state in states
+            ):
                 blocked.add(pair)
             else:
                 allowed.add(pair)
         if blocked:
             log.warning(
-                "Suppressed %s for kernel-dirty or repairing ground station(s): %s",
+                "Suppressed %s at kernel-dirty or repairing node(s): %s",
                 operation,
                 sorted(blocked),
             )
         return allowed
 
-    async def _verify_gs_against_current_authority(
+    async def _verify_node_against_record(
         self,
         *,
-        gs_id: str,
+        node_id: str,
         sim_time: datetime,
         intervention_id: str | None = None,
     ) -> bool:
@@ -2311,19 +2316,19 @@ class Dispatcher:
         # recovery structurally impossible and exhaustion guaranteed.
         # Convergence to desire is the reconcile loop's job, and it resumes
         # the moment this proof re-establishes trust.
-        expected_up = self._actual_ground_pairs_for_gs(gs_id)
-        expected_down = self._kernel_expected_down_for_gs(gs_id, expected_up)
-        state_before = self._ground_state(gs_id)
+        expected_up = self._actual_pairs_of(node_id)
+        expected_down = self._kernel_expected_down_of(node_id, expected_up)
+        state_before = self._node_state(node_id)
         if not expected_up and not expected_down:
-            await self._mark_gs_clean(
-                gs_id=gs_id,
+            await self._mark_node_clean(
+                node_id=node_id,
                 sim_time=sim_time,
                 intervention_id=intervention_id,
-                reason="Scheduler has no known GS kernel footprint for current authority",
+                reason="Scheduler has no known kernel footprint for this node",
             )
             return True
         result = await self._send_kernel_inventory(
-            gs_id=gs_id,
+            node_id=node_id,
             expected_up=expected_up,
             expected_down=expected_down,
             sim_time=sim_time,
@@ -2352,16 +2357,16 @@ class Dispatcher:
                 active_intervention_id=intervention_id,
             )
             after = replace(state_before, recovery=recovery)
-            self._gs_actuation[gs_id] = after
+            self._node_actuation[node_id] = after
             await self._publish_scheduler_ops(
                 code=SchedulerOpsCode.KERNEL_VERIFY_ATTEMPTED,
                 message=(
-                    f"KernelInventory for {gs_id} could not reach its Node Agent; "
+                    f"KernelInventory for {node_id} could not reach its Node Agent; "
                     "re-proving automatically"
                 ),
                 level="warning",
                 details=self._actuation_details(
-                    gs_id=gs_id,
+                    node_id=node_id,
                     operation="KernelInventory",
                     failure_class=ActuationFailureClass.AGENT_UNREACHABLE,
                     affected_pairs=result.failed_pairs,
@@ -2370,7 +2375,7 @@ class Dispatcher:
                     state_before=state_before,
                     state_after=after,
                     intervention_id=intervention_id,
-                    reason="read-only GS kernel verification: prover unreachable",
+                    reason="read-only kernel verification: prover unreachable",
                     remediation=(
                         "The Node Agent did not answer - typically a node-agent "
                         "restart or rollout. The Scheduler re-proves automatically "
@@ -2383,28 +2388,28 @@ class Dispatcher:
             )
             return False
         details = self._actuation_details(
-            gs_id=gs_id,
+            node_id=node_id,
             operation="KernelInventory",
             failure_class=ActuationFailureClass.NONE
             if not result.has_failures
-            else ActuationFailureClass.GROUND_KERNEL_DIRTY,
+            else ActuationFailureClass.KERNEL_DIRTY,
             affected_pairs=result.failed_pairs,
             result=result,
             sim_time=sim_time,
             state_before=state_before,
             state_after=state_before,
             intervention_id=intervention_id,
-            reason="read-only GS kernel verification",
+            reason="read-only kernel verification",
         )
         await self._publish_scheduler_ops(
             code=SchedulerOpsCode.KERNEL_VERIFY_ATTEMPTED,
-            message=f"KernelInventory attempted for {gs_id}",
+            message=f"KernelInventory attempted for {node_id}",
             level="info" if not result.has_failures else "warning",
             details=details,
         )
         if not result.has_failures:
-            await self._mark_gs_clean(
-                gs_id=gs_id, sim_time=sim_time, intervention_id=intervention_id
+            await self._mark_node_clean(
+                node_id=node_id, sim_time=sim_time, intervention_id=intervention_id
             )
             return True
 
@@ -2418,8 +2423,8 @@ class Dispatcher:
             operator_action_required=exhausted,
             active_intervention_id=intervention_id,
         )
-        after = GroundActuationState(
-            gs_id=gs_id,
+        after = NodeActuationState(
+            node_id=node_id,
             state=ActuationState.KERNEL_DIRTY,
             reason_code=(
                 SchedulerOpsCode.KERNEL_VERIFY_EXHAUSTED
@@ -2432,12 +2437,12 @@ class Dispatcher:
             node_agent_results=tuple(result.node_agent_details()),
             recovery=recovery,
         )
-        self._gs_actuation[gs_id] = after
+        self._node_actuation[node_id] = after
         if exhausted:
             exhausted_details = self._actuation_details(
-                gs_id=gs_id,
+                node_id=node_id,
                 operation="KernelInventory",
-                failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+                failure_class=ActuationFailureClass.KERNEL_DIRTY,
                 affected_pairs=result.failed_pairs,
                 result=result,
                 sim_time=sim_time,
@@ -2448,52 +2453,52 @@ class Dispatcher:
                 remediation=(
                     "Automatic verification is exhausted: the kernel repeatedly "
                     "disagreed with Scheduler authority. Trigger operator repair "
-                    "(POST /api/v1/ops/repair with gs_id and reason, or the "
-                    "Repair action in the UI). Repair reconciles the GS kernel "
+                    "(POST /api/v1/ops/repair with node_id and reason, or the "
+                    "Repair action in the UI). Repair reconciles the node's links "
                     "to current authority once, under a logged intervention id; "
                     "per-interface mismatches are in node_agent_results."
                 ),
             )
             await self._publish_scheduler_ops(
                 code=SchedulerOpsCode.KERNEL_VERIFY_EXHAUSTED,
-                message=f"KernelInventory auto-verify exhausted for {gs_id}; operator action required",
+                message=f"KernelInventory auto-verify exhausted for {node_id}; operator action required",
                 level="error",
                 details=exhausted_details,
             )
         return False
 
-    async def _audit_clean_ground_kernel_state(
+    async def _audit_clean_kernel_state(
         self,
         *,
         sim_time: datetime,
-        gs_ids: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+        node_ids: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, bool]:
-        """Read-only reconciliation audit for GSes currently believed clean.
+        """Read-only reconciliation audit for the nodes currently believed clean.
 
         The same non-mutating proof boundary used for dirty recovery audits the
-        *clean* claim: every actual ground
-        link the Scheduler believes the kernel has up must still be provable, and
+        *clean* claim: every link a node chooses that
+        the Scheduler believes the kernel has up must still be provable, and
         every tracked stale footprint must still be provably down. A mismatch does
-        not self-heal and does not clear by inference; it transitions the GS to
+        not self-heal and does not clear by inference; it transitions the node to
         kernel_dirty with typed ops details so the operator sees the truth.
         """
-        selected = sorted(gs_ids) if gs_ids is not None else sorted(self._gs_capacities)
+        selected = sorted(node_ids) if node_ids is not None else sorted(self._tracked_nodes)
         outcomes: dict[str, bool] = {}
-        for gs_id in selected:
+        for node_id in selected:
             if self._stop_requested.is_set():
                 break
-            state_before = self._ground_state(gs_id)
+            state_before = self._node_state(node_id)
             if state_before.state != ActuationState.CLEAN:
                 continue
 
-            expected_up = self._actual_ground_pairs_for_gs(gs_id)
-            expected_down = self._kernel_expected_down_for_gs(gs_id, expected_up)
+            expected_up = self._actual_pairs_of(node_id)
+            expected_down = self._kernel_expected_down_of(node_id, expected_up)
             if not expected_up and not expected_down:
-                outcomes[gs_id] = True
+                outcomes[node_id] = True
                 continue
 
             result = await self._send_kernel_inventory(
-                gs_id=gs_id,
+                node_id=node_id,
                 expected_up=expected_up,
                 expected_down=expected_down,
                 sim_time=sim_time,
@@ -2506,12 +2511,12 @@ class Dispatcher:
                 await self._publish_scheduler_ops(
                     code=SchedulerOpsCode.KERNEL_VERIFY_ATTEMPTED,
                     message=(
-                        f"Clean-state audit for {gs_id} could not reach its "
+                        f"Clean-state audit for {node_id} could not reach its "
                         "Node Agent; keeping proven-clean state"
                     ),
                     level="warning",
                     details=self._actuation_details(
-                        gs_id=gs_id,
+                        node_id=node_id,
                         operation="KernelInventoryAudit",
                         failure_class=ActuationFailureClass.AGENT_UNREACHABLE,
                         affected_pairs=result.failed_pairs,
@@ -2529,14 +2534,14 @@ class Dispatcher:
                         ),
                     ),
                 )
-                outcomes[gs_id] = True
+                outcomes[node_id] = True
                 continue
             details = self._actuation_details(
-                gs_id=gs_id,
+                node_id=node_id,
                 operation="KernelInventoryAudit",
                 failure_class=ActuationFailureClass.NONE
                 if not result.has_failures
-                else ActuationFailureClass.GROUND_KERNEL_DIRTY,
+                else ActuationFailureClass.KERNEL_DIRTY,
                 affected_pairs=result.failed_pairs,
                 result=result,
                 sim_time=sim_time,
@@ -2546,25 +2551,25 @@ class Dispatcher:
             )
             await self._publish_scheduler_ops(
                 code=SchedulerOpsCode.KERNEL_VERIFY_ATTEMPTED,
-                message=f"KernelInventory clean-state audit attempted for {gs_id}",
+                message=f"KernelInventory clean-state audit attempted for {node_id}",
                 level="debug" if not result.has_failures else "warning",
                 details=details,
             )
             if result.has_failures:
-                await self._set_gs_nonclean(
-                    gs_id=gs_id,
+                await self._set_node_nonclean(
+                    node_id=node_id,
                     state_name=ActuationState.KERNEL_DIRTY,
                     code=SchedulerOpsCode.KERNEL_DIRTY,
                     operation="KernelInventoryAudit",
-                    failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+                    failure_class=ActuationFailureClass.KERNEL_DIRTY,
                     affected_pairs=set(result.failed_pairs),
                     result=result,
                     sim_time=sim_time,
                     reason="clean-state kernel audit mismatch",
                 )
-                outcomes[gs_id] = False
+                outcomes[node_id] = False
             else:
-                outcomes[gs_id] = True
+                outcomes[node_id] = True
         return outcomes
 
     async def _run_due_clean_kernel_audit(self, *, sim_time: datetime) -> None:
@@ -2574,7 +2579,7 @@ class Dispatcher:
             seconds=interval_s
         ):
             self._last_clean_kernel_audit_at = now
-            await self._audit_clean_ground_kernel_state(sim_time=sim_time)
+            await self._audit_clean_kernel_state(sim_time=sim_time)
             await self._audit_long_delay_ends(sim_time=sim_time)
 
     async def _audit_long_delay_ends(self, *, sim_time: datetime) -> None:
@@ -2595,7 +2600,7 @@ class Dispatcher:
             pool=self._pool,
             sim_iso=sim_time.isoformat(),
             interface_rates=self._interface_rates,
-            gs_capacities=self._gs_capacities,
+            ground_station_ids=self._ground_station_ids,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
             writer_epoch=self._writer_epoch,
@@ -2607,7 +2612,7 @@ class Dispatcher:
     async def _run_due_kernel_verifications(
         self, *, sim_time: datetime, include_clean_audit: bool = True
     ) -> None:
-        for gs_id, state in list(self._gs_actuation.items()):
+        for node_id, state in list(self._node_actuation.items()):
             if self._stop_requested.is_set():
                 return
             next_time = state.recovery.next_verify_after
@@ -2616,7 +2621,7 @@ class Dispatcher:
             if state.recovery.verify_exhausted or state.recovery.operator_action_required:
                 continue
             if self._now() >= next_time:
-                await self._verify_gs_against_current_authority(gs_id=gs_id, sim_time=sim_time)
+                await self._verify_node_against_record(node_id=node_id, sim_time=sim_time)
 
         if include_clean_audit:
             await self._run_due_clean_kernel_audit(sim_time=sim_time)
@@ -2633,10 +2638,10 @@ class Dispatcher:
         diagnostics = self._pending_fold_diagnostics
         self._pending_fold_diagnostics = []
         for item in diagnostics:
-            gs_id = item.get("gs_id")
+            node_id = item.get("node_id")
             pair = tuple(item.get("pair", ()))
             details = self._actuation_details(
-                gs_id=gs_id,
+                node_id=node_id,
                 operation="VisibilityEventFold",
                 failure_class=ActuationFailureClass.NONE,
                 affected_pairs={pair} if len(pair) == 2 else set(),
@@ -2716,16 +2721,16 @@ class Dispatcher:
                 self._desired_links.pop(pair, None)
                 self._teardown_pairs.discard(pair)
             elif vis.visible and not vis.scheduled:
-                if vis.link_type == "ground" and pair in self._teardown_pairs:
-                    gs_id = gs_id_for_pair(pair, self._gs_capacities)
-                    self._pending_fold_diagnostics.append(
-                        {
-                            "code": SchedulerOpsCode.OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR.value,
-                            "pair": pair,
-                            "gs_id": gs_id,
-                            "reason": "OME release event marked teardown pair visible but unscheduled; Scheduler respects OME authority",
-                        }
-                    )
+                if pair in self._teardown_pairs:
+                    for node_id in self._choosing_nodes(pair):
+                        self._pending_fold_diagnostics.append(
+                            {
+                                "code": SchedulerOpsCode.OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR.value,
+                                "pair": pair,
+                                "node_id": node_id,
+                                "reason": "OME release event marked teardown pair visible but unscheduled; Scheduler respects OME authority",
+                            }
+                        )
                 self._desired_links.pop(pair, None)
                 self._teardown_pairs.discard(pair)
 
@@ -3031,7 +3036,7 @@ class Dispatcher:
         intervention_id = cmd.intervention_id if cmd else ""
         if cmd is not None:
             details = self._actuation_details(
-                gs_id=cmd.gs_id,
+                node_id=cmd.node_id,
                 operation="OperatorRepair",
                 failure_class=ActuationFailureClass.NONE,
                 intervention_id=cmd.intervention_id,
@@ -3078,23 +3083,25 @@ class Dispatcher:
                 msg, cmd, "Repair command targets a different Scheduler instance"
             )
             return
-        if cmd.gs_id not in self._gs_capacities:
-            await self._reject_repair(msg, cmd, f"Unknown ground station {cmd.gs_id}")
+        if cmd.node_id not in self._tracked_nodes:
+            await self._reject_repair(
+                msg, cmd, f"{cmd.node_id} chooses no link of this session; nothing to repair"
+            )
             return
         if self._suspended:
             await self._reject_repair(
                 msg, cmd, "Scheduler is seek-suspended; repair requires stable post-seek authority"
             )
             return
-        state = self._ground_state(cmd.gs_id)
+        state = self._node_state(cmd.node_id)
         if state.state == ActuationState.CLEAN:
-            await self._reject_repair(msg, cmd, f"Ground station {cmd.gs_id} is already clean")
+            await self._reject_repair(msg, cmd, f"Node {cmd.node_id} is already clean")
             return
         if state.recovery.active_intervention_id:
             await self._reject_repair(
                 msg,
                 cmd,
-                f"Ground station {cmd.gs_id} already has active intervention {state.recovery.active_intervention_id}",
+                f"Node {cmd.node_id} already has active intervention {state.recovery.active_intervention_id}",
             )
             return
 
@@ -3107,8 +3114,8 @@ class Dispatcher:
             operator_action_required=False,
             active_intervention_id=cmd.intervention_id,
         )
-        active_state = GroundActuationState(
-            gs_id=cmd.gs_id,
+        active_state = NodeActuationState(
+            node_id=cmd.node_id,
             state=state.state,
             reason_code=state.reason_code,
             since=state.since,
@@ -3117,10 +3124,10 @@ class Dispatcher:
             node_agent_results=state.node_agent_results,
             recovery=active_recovery,
         )
-        self._gs_actuation[cmd.gs_id] = active_state
+        self._node_actuation[cmd.node_id] = active_state
 
         details = self._actuation_details(
-            gs_id=cmd.gs_id,
+            node_id=cmd.node_id,
             operation="OperatorRepair",
             failure_class=ActuationFailureClass.NONE,
             state_before=state,
@@ -3130,7 +3137,7 @@ class Dispatcher:
         )
         await self._publish_scheduler_ops(
             code=SchedulerOpsCode.OPERATOR_REPAIR_REQUESTED,
-            message=f"Operator repair requested for {cmd.gs_id}",
+            message=f"Operator repair requested for {cmd.node_id}",
             level="warning",
             details=details,
         )
@@ -3138,7 +3145,7 @@ class Dispatcher:
             OperatorRepairResponse(
                 status="accepted",
                 intervention_id=cmd.intervention_id,
-                message="Repair accepted; Scheduler will reconcile GS to current authority once",
+                message="Repair accepted; Scheduler will reconcile the node's links to current authority once",
             )
             .model_dump_json()
             .encode()
@@ -3152,14 +3159,14 @@ class Dispatcher:
             await self._run_operator_repair_locked(cmd)
 
     async def _run_operator_repair_locked(self, cmd: OperatorRepairCommand) -> None:
-        gs_id = cmd.gs_id
+        node_id = cmd.node_id
         sim_time = self._current_sim_time or self._now()
         # Repair tears down and rewires _actual_links; capture entry membership so
         # the recoverable kernel-actual set is republished if repair changed it —
         # on success or on a partial-then-failed repair, not just at the next tick.
         actual_before = self._actual_record()
         pending_before = frozenset(self._pending_since)
-        before = self._repair_original_states.pop(cmd.intervention_id, self._ground_state(gs_id))
+        before = self._repair_original_states.pop(cmd.intervention_id, self._node_state(node_id))
         active_recovery = RecoveryStatus(
             verify_attempt_count=0,
             last_verify_result=before.recovery.last_verify_result,
@@ -3168,8 +3175,8 @@ class Dispatcher:
             operator_action_required=False,
             active_intervention_id=cmd.intervention_id,
         )
-        self._gs_actuation[gs_id] = GroundActuationState(
-            gs_id=gs_id,
+        self._node_actuation[node_id] = NodeActuationState(
+            node_id=node_id,
             state=before.state,
             reason_code=before.reason_code,
             since=before.since,
@@ -3178,26 +3185,26 @@ class Dispatcher:
             node_agent_results=before.node_agent_results,
             recovery=active_recovery,
         )
-        authority = self._desired_ground_pairs_for_gs(gs_id)
-        teardown = self._actual_ground_pairs_for_gs(gs_id)
+        authority = self._desired_pairs_of(node_id)
+        teardown = self._actual_pairs_of(node_id)
         for pair in before.stale_pairs:
-            info = self._gs_stale_link_infos.get(pair)
-            if info is not None and gs_id_for_pair(pair, self._gs_capacities) == gs_id:
+            info = self._stale_link_infos.get(pair)
+            if info is not None and node_id in self._choosing_nodes(pair):
                 teardown.setdefault(pair, info)
         start_details = self._actuation_details(
-            gs_id=gs_id,
+            node_id=node_id,
             operation="OperatorRepair",
             failure_class=ActuationFailureClass.NONE,
             affected_pairs=set(teardown) | set(authority),
             sim_time=sim_time,
             state_before=before,
-            state_after=self._ground_state(gs_id),
+            state_after=self._node_state(node_id),
             intervention_id=cmd.intervention_id,
             reason=cmd.reason,
         )
         await self._publish_scheduler_ops(
             code=SchedulerOpsCode.OPERATOR_REPAIR_STARTED,
-            message=f"Operator repair started for {gs_id}",
+            message=f"Operator repair started for {node_id}",
             level="warning",
             details=start_details,
         )
@@ -3226,18 +3233,18 @@ class Dispatcher:
                         f"Repair teardown failed for {sorted(set(teardown) - set(down_result.succeeded_pairs))}"
                     )
                 down_verify = await self._send_kernel_inventory(
-                    gs_id=gs_id,
+                    node_id=node_id,
                     expected_up={},
                     expected_down=teardown,
                     sim_time=sim_time,
                 )
                 if down_verify.has_failures:
-                    await self._set_gs_nonclean(
-                        gs_id=gs_id,
+                    await self._set_node_nonclean(
+                        node_id=node_id,
                         state_name=ActuationState.KERNEL_DIRTY,
                         code=SchedulerOpsCode.KERNEL_DIRTY,
                         operation="OperatorRepairDownVerify",
-                        failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+                        failure_class=ActuationFailureClass.KERNEL_DIRTY,
                         affected_pairs=set(down_verify.failed_pairs),
                         result=down_verify,
                         sim_time=sim_time,
@@ -3265,10 +3272,10 @@ class Dispatcher:
                         f"Repair rewire failed for {sorted(set(authority) - set(up_result.succeeded_pairs))}"
                     )
 
-            final_down = self._kernel_expected_down_for_gs(gs_id, authority)
+            final_down = self._kernel_expected_down_of(node_id, authority)
             final_verify = (
                 await self._send_kernel_inventory(
-                    gs_id=gs_id,
+                    node_id=node_id,
                     expected_up=authority,
                     expected_down=final_down,
                     sim_time=sim_time,
@@ -3277,12 +3284,12 @@ class Dispatcher:
                 else None
             )
             if final_verify is not None and final_verify.has_failures:
-                await self._set_gs_nonclean(
-                    gs_id=gs_id,
+                await self._set_node_nonclean(
+                    node_id=node_id,
                     state_name=ActuationState.KERNEL_DIRTY,
                     code=SchedulerOpsCode.KERNEL_DIRTY,
                     operation="OperatorRepairFinalVerify",
-                    failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+                    failure_class=ActuationFailureClass.KERNEL_DIRTY,
                     affected_pairs=set(final_verify.failed_pairs),
                     result=final_verify,
                     sim_time=sim_time,
@@ -3291,31 +3298,31 @@ class Dispatcher:
                 )
                 raise RuntimeError("Repair final proof failed")
 
-            await self._mark_gs_clean(
-                gs_id=gs_id,
+            await self._mark_node_clean(
+                node_id=node_id,
                 sim_time=sim_time,
                 intervention_id=cmd.intervention_id,
                 reason="operator repair matched current Scheduler authority",
             )
             success_details = self._actuation_details(
-                gs_id=gs_id,
+                node_id=node_id,
                 operation="OperatorRepair",
                 failure_class=ActuationFailureClass.NONE,
                 affected_pairs=set(teardown) | set(authority),
                 sim_time=sim_time,
                 state_before=before,
-                state_after=self._ground_state(gs_id),
+                state_after=self._node_state(node_id),
                 intervention_id=cmd.intervention_id,
                 reason=cmd.reason,
             )
             await self._publish_scheduler_ops(
                 code=SchedulerOpsCode.OPERATOR_REPAIR_SUCCEEDED,
-                message=f"Operator repair succeeded for {gs_id}",
+                message=f"Operator repair succeeded for {node_id}",
                 level="info",
                 details=success_details,
             )
         except Exception as exc:
-            current = self._ground_state(gs_id)
+            current = self._node_state(node_id)
             failed_recovery = RecoveryStatus(
                 verify_attempt_count=0,
                 last_verify_result="operator_repair_failed",
@@ -3324,8 +3331,8 @@ class Dispatcher:
                 operator_action_required=False,
                 active_intervention_id=None,
             )
-            self._gs_actuation[gs_id] = GroundActuationState(
-                gs_id=gs_id,
+            self._node_actuation[node_id] = NodeActuationState(
+                node_id=node_id,
                 state=ActuationState.KERNEL_DIRTY,
                 reason_code=SchedulerOpsCode.OPERATOR_REPAIR_FAILED,
                 since=current.since,
@@ -3335,19 +3342,19 @@ class Dispatcher:
                 recovery=failed_recovery,
             )
             fail_details = self._actuation_details(
-                gs_id=gs_id,
+                node_id=node_id,
                 operation="OperatorRepair",
-                failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+                failure_class=ActuationFailureClass.KERNEL_DIRTY,
                 affected_pairs=set(teardown) | set(authority),
                 sim_time=sim_time,
                 state_before=before,
-                state_after=self._ground_state(gs_id),
+                state_after=self._node_state(node_id),
                 intervention_id=cmd.intervention_id,
                 reason=str(exc),
             )
             await self._publish_scheduler_ops(
                 code=SchedulerOpsCode.OPERATOR_REPAIR_FAILED,
-                message=f"Operator repair failed for {gs_id}: {exc}",
+                message=f"Operator repair failed for {node_id}: {exc}",
                 level="error",
                 details=fail_details,
             )
@@ -3601,9 +3608,7 @@ class Dispatcher:
             long_delay = replace(
                 long_delay,
                 open=frozenset(
-                    self._filter_blocked_ground_mutations(
-                        set(long_delay.open), operation="BatchLinkUp"
-                    )
+                    self._filter_blocked_ups(set(long_delay.open), operation="BatchLinkUp")
                 ),
             )
             due = {
@@ -3615,11 +3620,9 @@ class Dispatcher:
                 {p: i for p, i in self._actual_links.items() if p not in self._long_delay_pairs},
                 {p: i for p, i in desired.items() if p not in self._long_delay_pairs},
             )
-            to_remove = self._filter_ground_down_mutations(
-                diff.to_remove, operation="BatchLinkDown"
-            )
-            to_add = self._filter_blocked_ground_mutations(diff.to_add, operation="BatchLinkUp")
-            to_update_latency = self._filter_blocked_ground_mutations(
+            to_remove = self._filter_blocked_downs(diff.to_remove, operation="BatchLinkDown")
+            to_add = self._filter_blocked_ups(diff.to_add, operation="BatchLinkUp")
+            to_update_latency = self._filter_blocked_ups(
                 diff.to_update_latency, operation="SetLatency"
             )
 
@@ -3742,7 +3745,7 @@ class Dispatcher:
             js=self._js,
             subj_latency=self._subj_latency,
             sim_time=sim_time,
-            gs_capacities=self._gs_capacities,
+            ground_station_ids=self._ground_station_ids,
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
@@ -3915,7 +3918,7 @@ class Dispatcher:
             sim_iso=sim_iso,
             sim_time=sim_time,
             down_reasons=down_reasons,
-            gs_capacities=self._gs_capacities,
+            ground_station_ids=self._ground_station_ids,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
             writer_epoch=self._writer_epoch,
@@ -3947,7 +3950,7 @@ class Dispatcher:
             sim_iso=sim_iso,
             sim_time=sim_time,
             down_reasons={},
-            gs_capacities=self._gs_capacities,
+            ground_station_ids=self._ground_station_ids,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
             writer_epoch=self._writer_epoch,
@@ -4197,7 +4200,7 @@ class Dispatcher:
                     pool=self._pool,
                     sim_iso=sim_iso,
                     interface_rates=self._interface_rates,
-                    gs_capacities=self._gs_capacities,
+                    ground_station_ids=self._ground_station_ids,
                     session_id=self._session_id,
                     wiring_generation=self._wiring_generation,
                     writer_epoch=self._writer_epoch,
@@ -4415,7 +4418,7 @@ class Dispatcher:
             )
             surveyed = await survey_ground_terminals(
                 terminals=terminals,
-                gs_capacities=self._gs_capacities,
+                ground_station_ids=self._ground_station_ids,
                 locator=self._loc,
                 pool=self._pool,
                 sim_iso=sim_iso,
@@ -4599,7 +4602,7 @@ class Dispatcher:
             pool=self._pool,
             sim_iso=sim_iso,
             sim_time=sim_time,
-            gs_capacities=self._gs_capacities,
+            ground_station_ids=self._ground_station_ids,
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             interface_rates=self._interface_rates,
@@ -4626,7 +4629,7 @@ class Dispatcher:
             subj_link_up=self._subj_link_up,
             sim_iso=sim_iso,
             sim_time=sim_time,
-            gs_capacities=self._gs_capacities,
+            ground_station_ids=self._ground_station_ids,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
             session_id=self._session_id,
@@ -4652,7 +4655,7 @@ class Dispatcher:
             subj_link_up=self._subj_link_up,
             sim_iso=sim_iso,
             sim_time=sim_time,
-            gs_capacities=self._gs_capacities,
+            ground_station_ids=self._ground_station_ids,
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,

@@ -291,11 +291,11 @@ def report_interventions(conn: sqlite3.Connection, session_id: str) -> str:
     if not rows:
         lines.append("  (no operator interventions)")
         return "\n".join(lines)
-    lines.append(f"{'Event time':<34} {'Intervention':<16} {'Station':<24} {'Status':<28} Reason")
+    lines.append(f"{'Event time':<34} {'Intervention':<16} {'Node':<24} {'Status':<28} Reason")
     lines.append("-" * 120)
     for row in rows:
         lines.append(
-            f"{row['event_time']:<34} {row['intervention_id']:<16} {row['gs_id']:<24} "
+            f"{row['event_time']:<34} {row['intervention_id']:<16} {row['node_id']:<24} "
             f"{row['status']:<28} {row['reason'] or ''}"
         )
     return "\n".join(lines)

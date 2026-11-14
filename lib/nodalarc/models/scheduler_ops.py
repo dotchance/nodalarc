@@ -27,13 +27,13 @@ class ActuationState(StrEnum):
     UNKNOWN = "unknown"
 
 
-# The roster states in which a station's actuation is not proven.
+# The roster states in which a node's actuation is not proven.
 type FailingActuationState = Literal[ActuationState.KERNEL_DIRTY, ActuationState.ACTUATION_BLOCKED]
 _FAILING_ACTUATION_STATES = frozenset(get_args(FailingActuationState.__value__))
 
 
 def is_failing_actuation(state: ActuationState) -> TypeIs[FailingActuationState]:
-    """Whether a roster state fails the station's actuation proof."""
+    """Whether a roster state fails the node's actuation proof."""
     return state in _FAILING_ACTUATION_STATES
 
 
@@ -51,9 +51,9 @@ def parse_actuation_state(value: object) -> ActuationState:
 
 class SchedulerOpsCode(StrEnum):
     REPLACEMENT_LINK_UP_FAILED = "REPLACEMENT_LINK_UP_FAILED"
-    GROUND_LINK_UP_FAILED = "GROUND_LINK_UP_FAILED"
-    GROUND_LINK_DOWN_FAILED = "GROUND_LINK_DOWN_FAILED"
-    GROUND_LATENCY_UPDATE_FAILED = "GROUND_LATENCY_UPDATE_FAILED"
+    LINK_UP_FAILED = "LINK_UP_FAILED"
+    LINK_DOWN_FAILED = "LINK_DOWN_FAILED"
+    LATENCY_UPDATE_FAILED = "LATENCY_UPDATE_FAILED"
     OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR = "OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR"
     ACTUATION_BLOCKED = "ACTUATION_BLOCKED"
     ACTUATION_CLEAN = "ACTUATION_CLEAN"
@@ -76,15 +76,17 @@ class ActuationFailureClass(StrEnum):
     NONE = "none"
     AUTHORITY_INVARIANT = "authority_invariant"
     FENCE = "fence"
-    GROUND_CLEAN_FAILURE = "ground_clean_failure"
-    GROUND_KERNEL_DIRTY = "ground_kernel_dirty"
-    GROUND_UNKNOWN = "ground_unknown"
+    # The Node Agent answered a clean failure: it changed nothing.
+    CLEAN_FAILURE = "clean_failure"
+    # The Node Agent reported dirty kernel state, or a success it did not prove.
+    KERNEL_DIRTY = "kernel_dirty"
+    # The reply does not match the request, so what the kernel holds is not known.
+    UNKNOWN_OUTCOME = "unknown_outcome"
     # The prover could not be reached at all (no responders, transport
     # timeout). For a mutating command this still implies conservative
     # unknown or dirty handling; for a read-only proof it is evidence of
     # nothing: "could not observe" is never reported as observed divergence.
     AGENT_UNREACHABLE = "agent_unreachable"
-    ISL_FAILURE = "isl_failure"
 
 
 class RecoveryStatus(BaseModel):
@@ -129,18 +131,21 @@ class ActuationOpsDetails(BaseModel):
     sim_time: datetime | None = None
     epoch_id: int | None = None
     snapshot_seq: int | None = None
-    gs_id: str | None = None
+    # The node whose actuation state the event is about; None on an event about no one node.
+    node_id: str | None = None
     operation: str
     failure_class: ActuationFailureClass
     affected_pairs: list[list[str]] = Field(default_factory=list)
     successor_pair: list[str] | None = None
     old_pair: list[str] | None = None
-    desired_pairs_for_gs: list[list[str]] = Field(default_factory=list)
-    actual_pairs_for_gs: list[list[str]] = Field(default_factory=list)
-    # The station's links that may still hold kernel state and must be down (its stale
+    # The node's links: those it chooses, as the Scheduler desires them and as the Node
+    # Agents proved them.
+    desired_pairs: list[list[str]] = Field(default_factory=list)
+    actual_pairs: list[list[str]] = Field(default_factory=list)
+    # The node's links that may still hold kernel state and must be down (its stale
     # footprint), so a successor Scheduler proves and repairs the same footprint.
     stale_links: list[LinkFootprint] = Field(default_factory=list)
-    ome_visible_scheduled_pairs_for_gs: list[list[str]] = Field(default_factory=list)
+    ome_visible_scheduled_pairs: list[list[str]] = Field(default_factory=list)
     node_agent_results: list[dict[str, Any]] = Field(default_factory=list)
     actuation_state_before: ActuationState = ActuationState.UNKNOWN
     actuation_state_after: ActuationState = ActuationState.UNKNOWN
@@ -284,13 +289,13 @@ def current_actual_links(
 
 
 class OperatorRepairRequest(BaseModel):
-    """What an operator sends to repair one station. VS-API fills the Scheduler
-    instance and wiring generation from the station's latest actuation state
+    """What an operator sends to repair the links one node chooses. VS-API fills the
+    Scheduler instance and wiring generation from the node's latest actuation state
     when the request leaves them out, then sends an OperatorRepairCommand."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    gs_id: str = Field(min_length=1)
+    node_id: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     scheduler_instance_id: str | None = None
     wiring_generation: str | None = None
@@ -303,7 +308,7 @@ class OperatorRepairCommand(BaseModel):
     session_id: str
     wiring_generation: str
     scheduler_instance_id: str
-    gs_id: str
+    node_id: str
     reason: str
     intervention_id: str
 

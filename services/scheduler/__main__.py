@@ -53,6 +53,7 @@ from nodalarc.substrate.wiring_status import failed_status_summary, pod_wiring_s
 from nodalarc.workload_target import NODE_ID_LABEL
 
 from scheduler.agent_pool import AgentPool
+from scheduler.dispatch_planner import choosing_nodes
 from scheduler.dispatcher import Dispatcher, DispatcherSuperseded
 from scheduler.pod_locator import PodLocationMap
 from scheduler.substrate_latency import (
@@ -96,9 +97,10 @@ def _dispatch_timing(resolved: ResolvedSession) -> tuple[float, float]:
 
 def _scheduler_terminal_maps(
     resolved: ResolvedSession,
-) -> tuple[dict[str, int], dict[str, str]]:
-    """The Scheduler's two per-node maps for links whose terminals OME assigns: how many
-    such terminals each node has, and the handover mode of each node that states scheduling."""
+) -> tuple[dict[str, int], dict[str, str], frozenset[str]]:
+    """What the Scheduler reads from the resolved session about links whose terminals OME
+    assigns: how many such terminals each node has, the handover mode of each node that
+    states scheduling, and every node that chooses at least one such candidate link."""
     terminal_capacities = {
         node_id: capacity
         for node_id, selections in resolved.selected_access_terminals_by_node().items()
@@ -127,7 +129,13 @@ def _scheduler_terminal_maps(
                 f"Resolved node {node.node_id} states scheduling without a handover mode"
             )
         handover_modes[node.node_id] = node.ground_scheduling.handover_mode
-    return terminal_capacities, handover_modes
+    tracked_nodes = frozenset(
+        node_id
+        for candidate in resolved.link_candidates
+        if candidate.kind == "access"
+        for node_id in choosing_nodes(candidate.pair, fixed_pairs=(), stating_nodes=handover_modes)
+    )
+    return terminal_capacities, handover_modes, tracked_nodes
 
 
 def _session_wiring_proofs(k8s_v1: Any, namespace: str, manifest: WiringManifest) -> dict:
@@ -574,7 +582,11 @@ def _run_scheduler() -> None:
     # Agent pool
     pool = AgentPool()
 
-    terminal_capacities, handover_modes = _scheduler_terminal_maps(resolved)
+    terminal_capacities, handover_modes, tracked_nodes = _scheduler_terminal_maps(resolved)
+    # The Node Agent's command contract names a link's ground station and its satellite.
+    ground_station_ids = frozenset(
+        node.node_id for node in resolved.nodes if node.kind == "ground_station"
+    )
     max_latency_age_s, compression_factor = _dispatch_timing(resolved)
     log.info(
         "Stated handover mode by node: %s (protocol=%s)",
@@ -611,6 +623,8 @@ def _run_scheduler() -> None:
             compression_factor=compression_factor,
             terminal_capacities=terminal_capacities,
             handover_modes=handover_modes,
+            tracked_nodes=tracked_nodes,
+            ground_station_ids=ground_station_ids,
             # Substrate compensation policy: half the measured RTT is the one-way
             # bound. The dispatcher rejects any other policy; this is the single
             # declared value, not a fallback.

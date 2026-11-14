@@ -352,34 +352,34 @@ class RecentEvent(BaseModel):
 
 
 class ActuationNotice(BaseModel):
-    """User-visible Scheduler actuation problem for one ground station."""
+    """User-visible Scheduler actuation problem at one node: the links that node chooses."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    gs_id: str
+    node_id: str
     actuation_state: ActuationState
     reason_code: SchedulerOpsCode
     message: str
     since: str | None = None
-    blocking_new_ground_link_up: bool
+    blocking_new_link_up: bool
     affected_pairs: list[list[str]] = Field(default_factory=list)
-    desired_pairs_for_gs: list[list[str]] = Field(default_factory=list)
-    actual_pairs_for_gs: list[list[str]] = Field(default_factory=list)
-    ome_visible_scheduled_pairs_for_gs: list[list[str]] = Field(default_factory=list)
+    desired_pairs: list[list[str]] = Field(default_factory=list)
+    actual_pairs: list[list[str]] = Field(default_factory=list)
+    ome_visible_scheduled_pairs: list[list[str]] = Field(default_factory=list)
     recovery_status: dict = Field(default_factory=dict)
     last_event: dict = Field(default_factory=dict)
 
 
-class ActuationHealthGroundStation(BaseModel):
-    """Latest actuation state for one GS on one Scheduler instance."""
+class ActuationHealthNode(BaseModel):
+    """Latest actuation state of one node that chooses links, on one Scheduler instance."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    gs_id: str
+    node_id: str
     actuation_state: ActuationState
     since: str | None = None
     reason_code: SchedulerOpsCode
-    blocking_new_ground_link_up: bool
+    blocking_new_link_up: bool
     recovery_status: dict = Field(default_factory=dict)
 
 
@@ -391,7 +391,7 @@ class ActuationHealthInstance(BaseModel):
     scheduler_instance_id: str
     hostname: str
     status: Literal["clean", "dirty", "degraded", "unknown"]
-    ground_stations: list[ActuationHealthGroundStation] = Field(default_factory=list)
+    nodes: list[ActuationHealthNode] = Field(default_factory=list)
 
 
 class ActuationHealth(BaseModel):

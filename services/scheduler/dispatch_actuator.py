@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -42,7 +42,6 @@ from scheduler.actuation import (
 )
 from scheduler.contact_drain import remaining_ends
 from scheduler.desired_state import ActiveLinkInfo, StageLoss
-from scheduler.dispatch_planner import gs_id_for_pair
 from scheduler.latency_compensator import LatencyCompensation, egress_ms
 from scheduler.node_agent_batches import (
     LinkUpBatchPlan,
@@ -114,11 +113,6 @@ def _chunked_operation_id(base: str, chunk_index: int, chunk_count: int) -> str:
     if chunk_count == 1:
         return base
     return f"{base}-part{chunk_index + 1:03d}of{chunk_count:03d}"
-
-
-def _gs_id_for_pair(pair: LinkPair, gs_capacities: Mapping[str, int], link_type: str) -> str | None:
-    """The station of a ground pair, None for any other link type."""
-    return gs_id_for_pair(pair, gs_capacities) if link_type == "ground" else None
 
 
 async def _send_chunked_command(
@@ -355,13 +349,13 @@ def _ground_inventory_entries_for_pair(
     info: ActiveLinkInfo,
     expected_admin_up: bool,
     locator: Any,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
 ) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
     if info.link_type != "ground":
         raise ValueError(f"KernelInventory is ground-only; got {pair} type={info.link_type!r}")
     node_a, node_b = pair
-    gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(pair, info, gs_capacities)
+    gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(pair, info, ground_station_ids)
     locality = locator.link_locality(node_a, node_b)
     vni = (
         compute_vni(gs_id, sat_id, gs_iface, sat_iface)
@@ -455,8 +449,9 @@ async def _send_kernel_inventory_to_agent(
 
 @dataclass(frozen=True, slots=True)
 class GroundInventoryRequests:
-    """The KernelInventory requests that prove one station's passes, by agent: station-scoped
-    requests (``gs_id`` set) for local passes, requests naming no station for long-delay ends."""
+    """The KernelInventory requests that prove the links one node chooses, by agent: requests
+    naming that node (the Node Agent contract's ``gs_id``) for local passes, requests naming
+    none for long-delay ends."""
 
     requests: tuple[tuple[str, str, tuple[node_agent_pb2.KernelInventoryEntry, ...]], ...]
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]]
@@ -464,26 +459,24 @@ class GroundInventoryRequests:
 
 def ground_inventory_requests(
     *,
-    gs_id: str,
+    node_id: str,
     expected_up: Mapping[LinkPair, ActiveLinkInfo],
     expected_down: Mapping[LinkPair, ActiveLinkInfo],
     locator: Any,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
 ) -> GroundInventoryRequests:
-    """The proof of each of a station's passes. A local pass is proven against the local ground
+    """The proof of each link one node chooses. A local pass is proven against the local ground
     layout (a delay queue on each pod interface). A long-delay pass that is up is proven by the
     long-delay inventory (``long_delay_inventory_entries``): its ends still carrying the contact
     hold it on their host-side veths, admission open or stopped, the transmit shaper and the
     received direction's delay queue. Rejected alternative: the local proof for every pass, which
-    finds no pod-interface queue on a long-delay pass and marks its station dirty."""
+    finds no pod-interface queue on a long-delay pass and marks its node dirty."""
     local_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     long_delay_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
     for expected_admin_up, pairs in ((True, expected_up), (False, expected_down)):
         for pair, info in pairs.items():
-            if _gs_id_for_pair(pair, gs_capacities, info.link_type) != gs_id:
-                continue
             if expected_admin_up and info.contact is not None:
                 agent_entries, ack_keys = long_delay_inventory_entries(
                     pair=pair,
@@ -491,7 +484,7 @@ def ground_inventory_requests(
                     node_ids=remaining_ends(pair, info),
                     locator=locator,
                     interface_rates=interface_rates,
-                    gs_capacities=gs_capacities,
+                    ground_station_ids=ground_station_ids,
                 )
                 by_agent = long_delay_by_agent
             else:
@@ -500,17 +493,17 @@ def ground_inventory_requests(
                     info=info,
                     expected_admin_up=expected_admin_up,
                     locator=locator,
-                    gs_capacities=gs_capacities,
+                    ground_station_ids=ground_station_ids,
                     interface_rates=interface_rates,
                 )
                 by_agent = local_by_agent
             pair_agent_ifaces.setdefault(pair, set()).update(ack_keys)
             for agent, entries in agent_entries.items():
                 by_agent.setdefault(agent, []).extend(entries)
-    # A station-scoped request proves local passes; a request naming no station proves
+    # A request naming the node proves local passes; a request naming none proves
     # long-delay ends, as the long-delay audit sends it.
     requests = [
-        (agent_addr, gs_id, tuple(entries))
+        (agent_addr, node_id, tuple(entries))
         for agent_addr, entries in sorted(local_by_agent.items())
     ] + [
         (agent_addr, "", tuple(entries))
@@ -521,14 +514,14 @@ def ground_inventory_requests(
 
 async def verify_ground_kernel_inventory(
     *,
-    gs_id: str,
+    node_id: str,
     expected_up: Mapping[LinkPair, ActiveLinkInfo],
     expected_down: Mapping[LinkPair, ActiveLinkInfo],
     locator: Any,
     pool: Any,
     sim_iso: str,
     sim_time: datetime,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
@@ -539,16 +532,14 @@ async def verify_ground_kernel_inventory(
     the proof of its class (``ground_inventory_requests``)."""
     del sim_time  # carried by the public signature for call-site symmetry and future audit fields
     planned = ground_inventory_requests(
-        gs_id=gs_id,
+        node_id=node_id,
         expected_up=expected_up,
         expected_down=expected_down,
         locator=locator,
-        gs_capacities=gs_capacities,
+        ground_station_ids=ground_station_ids,
         interface_rates=interface_rates,
     )
     pair_agent_ifaces = planned.pair_agent_ifaces
-    pair_link_type = dict.fromkeys(pair_agent_ifaces, "ground")
-    pair_gs_id: dict[LinkPair, str | None] = dict.fromkeys(pair_agent_ifaces, gs_id)
     agent_results: list[AgentCommandResult] = []
     if planned.requests:
         agent_results = list(
@@ -574,8 +565,6 @@ async def verify_ground_kernel_inventory(
         operation="KernelInventory",
         requested_pairs=requested,
         pair_agent_ifaces=pair_agent_ifaces,
-        pair_link_type=pair_link_type,
-        pair_gs_id=pair_gs_id,
         agent_results=agent_results,
     )
 
@@ -748,8 +737,6 @@ async def survey_long_delay_ends(
         operation="KernelInventory",
         requested_pairs=requested,
         pair_agent_ifaces=pair_agent_ifaces,
-        pair_link_type=dict.fromkeys(requested, "isl"),
-        pair_gs_id=dict.fromkeys(requested),
         agent_results=agent_results,
     )
 
@@ -757,7 +744,7 @@ async def survey_long_delay_ends(
 async def survey_ground_terminals(
     *,
     terminals: list[tuple[str, str]],
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     locator: Any,
     pool: Any,
     sim_iso: str,
@@ -773,7 +760,7 @@ async def survey_ground_terminals(
     keys: dict[tuple[str, str], set[InterfaceAck]] = {}
     for node_id, interface in sorted(terminals):
         agent = locator.agent_addr(node_id)
-        station = node_id in gs_capacities
+        station = node_id in ground_station_ids
         entries_by_agent.setdefault(agent, []).append(
             node_agent_pb2.KernelInventoryEntry(
                 node_id=node_id,
@@ -810,8 +797,6 @@ async def survey_ground_terminals(
         operation="KernelInventory",
         requested_pairs=requested,
         pair_agent_ifaces=keys,
-        pair_link_type=dict.fromkeys(requested, "ground"),
-        pair_gs_id=dict.fromkeys(requested),
         agent_results=agent_results,
     )
 
@@ -849,7 +834,7 @@ def long_delay_inventory_entries(
     node_ids: frozenset[str],
     locator: Any,
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
 ) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
     """KernelInventory entries proving the named ends of a long-delay contact in the stage the
     Scheduler holds it in: open (admission open) or draining (admission stopped); either way
@@ -864,7 +849,9 @@ def long_delay_inventory_entries(
     ground: dict[str, str] = {}
     if info.link_type == "ground":
         # A ground pass's tunnel is named from its station and satellite, as its LinkUp names it.
-        gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(pair, info, gs_capacities)
+        gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
+            pair, info, ground_station_ids
+        )
         ground = {"gs_id": gs_id, "sat_id": sat_id}
         vni = compute_vni(gs_id, sat_id, gs_iface, sat_iface) if cross else 0
     else:
@@ -918,7 +905,7 @@ async def verify_long_delay_ends(
     pool: Any,
     sim_iso: str,
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
@@ -933,7 +920,7 @@ async def verify_long_delay_ends(
             node_ids=node_ids,
             locator=locator,
             interface_rates=interface_rates,
-            gs_capacities=gs_capacities,
+            ground_station_ids=ground_station_ids,
         )
         pair_agent_ifaces[pair] = ack_keys
         for agent, entries in agent_entries.items():
@@ -962,11 +949,6 @@ async def verify_long_delay_ends(
         operation="KernelInventory",
         requested_pairs=requested,
         pair_agent_ifaces=pair_agent_ifaces,
-        pair_link_type={pair: actual_links[pair].link_type for pair in requested},
-        pair_gs_id={
-            pair: _gs_id_for_pair(pair, gs_capacities, actual_links[pair].link_type)
-            for pair in requested
-        },
         agent_results=agent_results,
     )
 
@@ -982,7 +964,7 @@ async def send_batch_down(
     sim_iso: str,
     sim_time: datetime,
     down_reasons: Mapping[LinkPair, str],
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
@@ -1001,7 +983,7 @@ async def send_batch_down(
         pairs=sorted_pairs,
         actual_links=actual_links,
         locator=locator,
-        gs_capacities=gs_capacities,
+        ground_station_ids=ground_station_ids,
         stage=stage,
         ends=ends,
         contact_ids=contact_ids,
@@ -1028,19 +1010,10 @@ async def send_batch_down(
         )
     dispatch_elapsed_ms = (time.monotonic() - dispatch_started) * 1000.0
 
-    pair_link_type = {
-        pair: actual_links[pair].link_type for pair in sorted_pairs if pair in actual_links
-    }
-    pair_gs_id = {
-        pair: _gs_id_for_pair(pair, gs_capacities, pair_link_type.get(pair, ""))
-        for pair in sorted_pairs
-    }
     result = build_actuation_result(
         operation="BatchLinkDown",
         requested_pairs=sorted_pairs,
         pair_agent_ifaces=plan.pair_agent_ifaces,
-        pair_link_type=pair_link_type,
-        pair_gs_id=pair_gs_id,
         agent_results=agent_results,
     )
     if agent_addrs:
@@ -1080,7 +1053,7 @@ async def _dispatch_link_up_plan(
     desired: Mapping[LinkPair, ActiveLinkInfo],
     pool: Any,
     sim_iso: str,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
@@ -1110,16 +1083,10 @@ async def _dispatch_link_up_plan(
         )
     dispatch_elapsed_ms = (time.monotonic() - dispatch_started) * 1000.0
 
-    pair_link_type = {pair: desired[pair].link_type for pair in pairs}
-    pair_gs_id = {
-        pair: _gs_id_for_pair(pair, gs_capacities, pair_link_type[pair]) for pair in pairs
-    }
     result = build_actuation_result(
         operation="BatchLinkUp",
         requested_pairs=pairs,
         pair_agent_ifaces=plan.pair_agent_ifaces,
-        pair_link_type=pair_link_type,
-        pair_gs_id=pair_gs_id,
         agent_results=agent_results,
     )
     if agent_addrs:
@@ -1179,7 +1146,7 @@ async def send_batch_up(
     subj_link_up: str,
     sim_iso: str,
     sim_time: datetime,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
@@ -1200,7 +1167,7 @@ async def send_batch_up(
         pairs=sorted_pairs,
         desired=desired,
         locator=locator,
-        gs_capacities=gs_capacities,
+        ground_station_ids=ground_station_ids,
         compensation_for_pair=latency_compensation,
         interface_rates=interface_rates,
         stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
@@ -1211,7 +1178,7 @@ async def send_batch_up(
         desired=desired,
         pool=pool,
         sim_iso=sim_iso,
-        gs_capacities=gs_capacities,
+        ground_station_ids=ground_station_ids,
         session_id=session_id,
         wiring_generation=wiring_generation,
         writer_epoch=writer_epoch,
@@ -1238,7 +1205,7 @@ async def prepare_long_delay_contacts(
     pool: Any,
     sim_iso: str,
     sim_time: datetime,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
@@ -1259,7 +1226,7 @@ async def prepare_long_delay_contacts(
         pairs=sorted_pairs,
         desired=desired,
         locator=locator,
-        gs_capacities=gs_capacities,
+        ground_station_ids=ground_station_ids,
         compensation_for_pair=latency_compensation,
         interface_rates=interface_rates,
         stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
@@ -1270,7 +1237,7 @@ async def prepare_long_delay_contacts(
         desired=desired,
         pool=pool,
         sim_iso=sim_iso,
-        gs_capacities=gs_capacities,
+        ground_station_ids=ground_station_ids,
         session_id=session_id,
         wiring_generation=wiring_generation,
         writer_epoch=writer_epoch,
@@ -1289,7 +1256,7 @@ async def open_prepared_contacts(
     subj_link_up: str,
     sim_iso: str,
     sim_time: datetime,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
     session_id: str,
@@ -1308,7 +1275,7 @@ async def open_prepared_contacts(
         desired=desired,
         pool=pool,
         sim_iso=sim_iso,
-        gs_capacities=gs_capacities,
+        ground_station_ids=ground_station_ids,
         session_id=session_id,
         wiring_generation=wiring_generation,
         writer_epoch=writer_epoch,
@@ -1336,7 +1303,7 @@ async def send_authoritative_latency_updates(
     js: Any,
     subj_latency: str,
     sim_time: datetime,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
@@ -1353,8 +1320,6 @@ async def send_authoritative_latency_updates(
     agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
     pair_compensation: dict[LinkPair, LatencyCompensation] = {}
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
-    pair_link_type: dict[LinkPair, str] = {}
-    pair_gs_id: dict[LinkPair, str | None] = {}
     now = datetime.now(UTC)
     sorted_pairs = sorted(pairs)
 
@@ -1366,8 +1331,6 @@ async def send_authoritative_latency_updates(
 
     for pair in sorted_pairs:
         info = desired[pair]
-        pair_link_type[pair] = info.link_type
-        pair_gs_id[pair] = _gs_id_for_pair(pair, gs_capacities, info.link_type)
         node_a, node_b = pair
         validate_authority_freshness(pair, info, sim_time, operation="LatencyUpdate")
         compensation = latency_compensation(node_a, node_b, info.latencies_ms)
@@ -1379,7 +1342,7 @@ async def send_authoritative_latency_updates(
 
         if info.link_type == "ground":
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
-                pair, info, gs_capacities
+                pair, info, ground_station_ids
             )
             locality = locator.link_locality(node_a, node_b)
             endpoint_agents = [(sat_id, sat_iface, locator.agent_addr(sat_id))]
@@ -1455,8 +1418,6 @@ async def send_authoritative_latency_updates(
         operation="SetLatency",
         requested_pairs=sorted_pairs,
         pair_agent_ifaces=pair_agent_ifaces,
-        pair_link_type=pair_link_type,
-        pair_gs_id=pair_gs_id,
         agent_results=agent_results,
     )
     if agent_entries:

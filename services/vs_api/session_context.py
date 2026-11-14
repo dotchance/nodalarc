@@ -302,7 +302,7 @@ class SessionContext:
         self.trace_lock = asyncio.Lock()
         self.session_ops_events: deque[StampedOpsEvent] = deque(maxlen=500)
         self.actuation_notices_by_key: dict[tuple[str, str], dict] = {}
-        self.actuation_latest_by_gs: dict[tuple[str, str], dict] = {}
+        self.actuation_latest_by_node: dict[tuple[str, str], dict] = {}
         # Recoverable kernel-actual + pending state per Scheduler instance, replace-not-
         # merge per instance, from the retained ActualLinkSnapshot. value = {"generation":
         # str, "snapshot": ActualLinkSnapshot, "pairs": frozenset[ordered pair], "pending":
@@ -1414,41 +1414,43 @@ class SessionContext:
         if event.get("source") != "scheduler":
             return
         details = event.get("details") or {}
-        gs_id = details.get("gs_id")
+        node_id = details.get("node_id")
         instance_id = details.get("scheduler_instance_id")
-        if not gs_id or not instance_id:
+        if not node_id or not instance_id:
             return
         after_state = parse_actuation_state(details.get("actuation_state_after"))
         after = after_state.value
-        key = (instance_id, gs_id)
+        key = (instance_id, node_id)
         generation = details.get("wiring_generation")
         if event.get("code") == "ACTUATION_CLEAN":
             # Single Scheduler owner per session. A startup clean roster from a
-            # new instance replaces stale per-GS health from a dead instance.
-            for old_key, old_event in list(self.actuation_latest_by_gs.items()):
-                old_instance, old_gs = old_key
+            # new instance replaces stale per-node health from a dead instance.
+            for old_key, old_event in list(self.actuation_latest_by_node.items()):
+                old_instance, old_node = old_key
                 old_generation = (old_event.get("details") or {}).get("wiring_generation")
-                if old_gs == gs_id and old_instance != instance_id and old_generation == generation:
-                    self.actuation_latest_by_gs.pop(old_key, None)
+                if (
+                    old_node == node_id
+                    and old_instance != instance_id
+                    and old_generation == generation
+                ):
+                    self.actuation_latest_by_node.pop(old_key, None)
                     self.actuation_notices_by_key.pop(old_key, None)
-        self.actuation_latest_by_gs[key] = event
+        self.actuation_latest_by_node[key] = event
         if after == "clean" or event.get("code") == "ACTUATION_CLEAN":
             self.actuation_notices_by_key.pop(key, None)
             return
         recovery = details.get("recovery_status") or {}
         notice = {
-            "gs_id": gs_id,
+            "node_id": node_id,
             "actuation_state": after,
             "reason_code": event["code"],
             "message": event.get("message", ""),
             "since": event.get("timestamp"),
-            "blocking_new_ground_link_up": after_state != ActuationState.CLEAN,
+            "blocking_new_link_up": after_state != ActuationState.CLEAN,
             "affected_pairs": details.get("affected_pairs", []),
-            "desired_pairs_for_gs": details.get("desired_pairs_for_gs", []),
-            "actual_pairs_for_gs": details.get("actual_pairs_for_gs", []),
-            "ome_visible_scheduled_pairs_for_gs": details.get(
-                "ome_visible_scheduled_pairs_for_gs", []
-            ),
+            "desired_pairs": details.get("desired_pairs", []),
+            "actual_pairs": details.get("actual_pairs", []),
+            "ome_visible_scheduled_pairs": details.get("ome_visible_scheduled_pairs", []),
             "recovery_status": recovery,
             "last_event": event,
         }
@@ -1488,8 +1490,8 @@ class SessionContext:
 
     def build_actuation_health(self) -> dict:
         by_instance: dict[str, dict] = {}
-        latest_items = list(self.actuation_latest_by_gs.items())
-        for (instance_id, gs_id), event in latest_items:
+        latest_items = list(self.actuation_latest_by_node.items())
+        for (instance_id, node_id), event in latest_items:
             details = event.get("details") or {}
             hostname = details.get("hostname") or event.get("hostname", "")
             state = parse_actuation_state(details.get("actuation_state_after")).value
@@ -1499,26 +1501,26 @@ class SessionContext:
                     "scheduler_instance_id": instance_id,
                     "hostname": hostname,
                     "status": "clean",
-                    "ground_stations": [],
+                    "nodes": [],
                 },
             )
-            inst["ground_stations"].append(
+            inst["nodes"].append(
                 {
-                    "gs_id": gs_id,
+                    "node_id": node_id,
                     "actuation_state": state,
                     "since": event.get("timestamp"),
                     "reason_code": event["code"],
-                    "blocking_new_ground_link_up": state != ActuationState.CLEAN.value,
+                    "blocking_new_link_up": state != ActuationState.CLEAN.value,
                     "recovery_status": details.get("recovery_status") or {},
                     # The raw event is deliberately NOT embedded: it
                     # duplicated every fact above plus internal payloads
-                    # and measured 126 KB on a healthy 4-station session,
+                    # and measured 126 KB on a healthy session of four such nodes,
                     # with no production consumer. Notices carry their
                     # own last_event for the failure path.
                 }
             )
         for inst in by_instance.values():
-            states = {gs["actuation_state"] for gs in inst["ground_stations"]}
+            states = {node["actuation_state"] for node in inst["nodes"]}
             if ActuationState.KERNEL_DIRTY.value in states:
                 inst["status"] = "dirty"
             elif ActuationState.ACTUATION_BLOCKED.value in states:
@@ -1527,7 +1529,7 @@ class SessionContext:
                 inst["status"] = "unknown"
             else:
                 inst["status"] = "clean"
-            inst["ground_stations"].sort(key=lambda item: item["gs_id"])
+            inst["nodes"].sort(key=lambda item: item["node_id"])
         latest_events = [event for _key, event in latest_items]
         latest_events.sort(key=lambda item: item.get("timestamp", ""))
         latest = latest_events[-1] if latest_events else {}

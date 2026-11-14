@@ -30,8 +30,8 @@ def _station_health(operator: Operator, ground: str) -> list[dict[str, Any]]:
     return [
         entry
         for scheduler in operator.get("/api/v1/ops/health")["scheduler_instances"]
-        for entry in scheduler["ground_stations"]
-        if entry["gs_id"] == ground
+        for entry in scheduler["nodes"]
+        if entry["node_id"] == ground
     ]
 
 
@@ -164,7 +164,7 @@ def test_a_cut_ground_link_is_shown_as_a_fault_and_an_operator_repair_restores_t
     accepted = operator.post(
         "/api/v1/ops/repair",
         {
-            "gs_id": ground,
+            "node_id": ground,
             "reason": "operator test: repair a ground link cut on purpose",
             "intervention_id": intervention,
         },
@@ -176,7 +176,7 @@ def test_a_cut_ground_link_is_shown_as_a_fault_and_an_operator_repair_restores_t
         180.0,
         lambda: (
             all(entry["actuation_state"] == "clean" for entry in _station_health(operator, ground))
-            and not [n for n in operator.state()["actuation_notices"] if n.get("gs_id") == ground]
+            and not [n for n in operator.state()["actuation_notices"] if n.get("node_id") == ground]
         ),
     )
     events = [

@@ -12,16 +12,15 @@ connection or a running dispatch worker.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.proto import node_agent_pb2
 from nodalarc.vxlan import compute_vni
 
 from scheduler.desired_state import ActiveLinkInfo
-from scheduler.dispatch_planner import GroundEndpoints, ground_endpoints
 from scheduler.latency_compensator import LatencyCompensation, egress_ms
 
 LinkPair = tuple[str, str]
@@ -61,14 +60,34 @@ def _ack_key(agent_addr: str, iface_msg) -> InterfaceAck:
     return (agent_addr, iface_msg.node_id, iface_msg.interface_name)
 
 
+class GroundEndpoints(NamedTuple):
+    """The station, the satellite and their interfaces for one link between the two."""
+
+    gs_id: str
+    sat_id: str
+    gs_iface: str
+    sat_iface: str
+
+
 def required_ground_endpoints(
-    pair: LinkPair, info: ActiveLinkInfo, gs_capacities: Mapping[str, int]
+    pair: LinkPair, info: ActiveLinkInfo, ground_station_ids: Collection[str]
 ) -> GroundEndpoints:
-    """The endpoints of a ground-typed link; a link without a station is refused."""
-    endpoints = ground_endpoints(pair, info, gs_capacities)
-    if endpoints is None:
-        raise RuntimeError(f"ground link {pair} has no ground station endpoint")
-    return endpoints
+    """Which end of a link with assigned terminals is the ground station, with each end's
+    interface (``info.interface_a`` belongs to ``pair[0]``).
+
+    The Node Agent's command contract names a link's ground station and its satellite. This
+    is the one place the Scheduler fills those names in. A link with no ground station, or
+    with one at each end, cannot be commanded through that contract and is refused.
+    """
+    stations = [index for index, node_id in enumerate(pair) if node_id in ground_station_ids]
+    if len(stations) != 1:
+        raise RuntimeError(
+            f"link {pair} has {len(stations)} ground station ends; the Node Agent command "
+            "contract carries a link between one ground station and one satellite"
+        )
+    side = stations[0]
+    interfaces = (info.interface_a, info.interface_b)
+    return GroundEndpoints(pair[side], pair[1 - side], interfaces[side], interfaces[1 - side])
 
 
 def build_link_down_batch_plan(
@@ -76,7 +95,7 @@ def build_link_down_batch_plan(
     pairs: Iterable[LinkPair],
     actual_links: Mapping[LinkPair, ActiveLinkInfo],
     locator: LinkLocator,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     stage: int,
     ends: Mapping[LinkPair, frozenset[str]] | None = None,
     contact_ids: Mapping[tuple[str, str], str] | None = None,
@@ -117,7 +136,7 @@ def build_link_down_batch_plan(
 
         if info.link_type == "ground":
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
-                pair, info, gs_capacities
+                pair, info, ground_station_ids
             )
             vni = (
                 compute_vni(gs_id, sat_id, gs_iface, sat_iface)
@@ -267,7 +286,7 @@ def build_link_up_batch_plan(
     pairs: Iterable[LinkPair],
     desired: Mapping[LinkPair, ActiveLinkInfo],
     locator: LinkLocator,
-    gs_capacities: Mapping[str, int],
+    ground_station_ids: Collection[str],
     compensation_for_pair: Callable[[str, str, tuple[float, float]], LatencyCompensation],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
     stage: int,
@@ -307,7 +326,7 @@ def build_link_up_batch_plan(
 
         if info.link_type == "ground":
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
-                pair, info, gs_capacities
+                pair, info, ground_station_ids
             )
             vni = (
                 compute_vni(gs_id, sat_id, gs_iface, sat_iface)

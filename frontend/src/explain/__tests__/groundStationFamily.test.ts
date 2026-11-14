@@ -25,18 +25,18 @@ function link(a: string, b: string): LinkState {
   } as LinkState;
 }
 
-function notice(gs_id: string, blocking: boolean, reason = "kernel dirty"): ActuationNotice {
+function notice(node_id: string, blocking: boolean, reason = "kernel dirty"): ActuationNotice {
   return {
-    gs_id,
+    node_id,
     actuation_state: blocking ? "kernel_dirty" : "clean",
     reason_code: blocking ? "KERNEL_DIRTY" : "ACTUATION_CLEAN",
     message: reason,
     since: null,
-    blocking_new_ground_link_up: blocking,
+    blocking_new_link_up: blocking,
     affected_pairs: [],
-    desired_pairs_for_gs: [],
-    actual_pairs_for_gs: [],
-    ome_visible_scheduled_pairs_for_gs: [],
+    desired_pairs: [],
+    actual_pairs: [],
+    ome_visible_scheduled_pairs: [],
     recovery_status: {},
     last_event: {},
   };

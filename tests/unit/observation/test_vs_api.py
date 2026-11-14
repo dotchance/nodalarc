@@ -2048,7 +2048,7 @@ class TestActuationHealth:
         self,
         *,
         instance: str,
-        gs_id: str,
+        node_id: str,
         code: str,
         after: str,
         generation: str = "sha256:" + "a" * 64,
@@ -2061,13 +2061,13 @@ class TestActuationHealth:
             "hostname": instance + "-host",
             "level": "info",
             "code": code,
-            "message": f"{gs_id} {after}",
+            "message": f"{node_id} {after}",
             "details": {
                 "session_id": "test",
                 "wiring_generation": generation,
                 "scheduler_instance_id": instance,
                 "hostname": instance + "-host",
-                "gs_id": gs_id,
+                "node_id": node_id,
                 "operation": "KernelInventory",
                 "failure_class": "none",
                 "actuation_state_after": after,
@@ -2080,24 +2080,24 @@ class TestActuationHealth:
         ctx._init_state_only()
         old_dirty = self._event(
             instance="sched-old",
-            gs_id="gs-den",
+            node_id="gs-den",
             code="KERNEL_DIRTY",
             after="kernel_dirty",
         )
         new_clean = self._event(
             instance="sched-new",
-            gs_id="gs-den",
+            node_id="gs-den",
             code="ACTUATION_CLEAN",
             after="clean",
             timestamp="2026-05-27T12:00:05+00:00",
         )
 
         ctx._update_actuation_notice(old_dirty)
-        assert ("sched-old", "gs-den") in ctx.actuation_latest_by_gs
+        assert ("sched-old", "gs-den") in ctx.actuation_latest_by_node
         ctx._update_actuation_notice(new_clean)
 
         health = ctx.build_actuation_health()
-        assert ("sched-old", "gs-den") not in ctx.actuation_latest_by_gs
+        assert ("sched-old", "gs-den") not in ctx.actuation_latest_by_node
         assert ctx.actuation_notices_by_key == {}
         assert [inst["scheduler_instance_id"] for inst in health["scheduler_instances"]] == [
             "sched-new"
@@ -2108,26 +2108,28 @@ class TestActuationHealth:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx._update_actuation_notice(
-            self._event(instance="sched-1", gs_id="gs-a", code="ACTUATION_CLEAN", after="clean")
+            self._event(instance="sched-1", node_id="gs-a", code="ACTUATION_CLEAN", after="clean")
         )
         ctx._update_actuation_notice(
             self._event(
                 instance="sched-1",
-                gs_id="gs-b",
+                node_id="gs-b",
                 code="ACTUATION_BLOCKED",
                 after="actuation_blocked",
             )
         )
         ctx._update_actuation_notice(
-            self._event(instance="sched-1", gs_id="gs-c", code="KERNEL_DIRTY", after="kernel_dirty")
+            self._event(
+                instance="sched-1", node_id="gs-c", code="KERNEL_DIRTY", after="kernel_dirty"
+            )
         )
 
         health = ctx.build_actuation_health()
 
         inst = health["scheduler_instances"][0]
         assert inst["status"] == "dirty"
-        assert [gs["gs_id"] for gs in inst["ground_stations"]] == ["gs-a", "gs-b", "gs-c"]
-        assert {gs["actuation_state"] for gs in inst["ground_stations"]} == {
+        assert [node["node_id"] for node in inst["nodes"]] == ["gs-a", "gs-b", "gs-c"]
+        assert {gs["actuation_state"] for gs in inst["nodes"]} == {
             "clean",
             "actuation_blocked",
             "kernel_dirty",
@@ -2144,7 +2146,7 @@ class TestActuationHealth:
         ctx._init_state_only()
         msg = _Message()
         msg.data = json.dumps(
-            self._event(instance="sched-1", gs_id="gs-den", code="ACTUATION_CLEAN", after="clean")
+            self._event(instance="sched-1", node_id="gs-den", code="ACTUATION_CLEAN", after="clean")
         ).encode()
 
         asyncio.run(ctx._on_actuation_state(msg))
@@ -2153,7 +2155,7 @@ class TestActuationHealth:
         inst = health["scheduler_instances"][0]
         assert inst["scheduler_instance_id"] == "sched-1"
         assert inst["status"] == "clean"
-        assert [gs["gs_id"] for gs in inst["ground_stations"]] == ["gs-den"]
+        assert [node["node_id"] for node in inst["nodes"]] == ["gs-den"]
         # Retained-state recovery must not append to the append-only ops event log.
         assert len(ctx.session_ops_events) == 0
 
@@ -2276,7 +2278,7 @@ class TestKernelActualRecovery:
                 "details": {
                     "scheduler_instance_id": "sched-1",
                     "hostname": "sched-1-host",
-                    "gs_id": "gs-den",
+                    "node_id": "gs-den",
                     "wiring_generation": "gen-1",
                     "actuation_state_after": "clean",
                     "recovery_status": {},
@@ -2490,7 +2492,7 @@ def _message(payload: dict):
     ("method", "path", "body"),
     [
         ("GET", "/api/v1/ops/health", None),
-        ("POST", "/api/v1/ops/repair", {"gs_id": "gs", "reason": "r"}),
+        ("POST", "/api/v1/ops/repair", {"node_id": "gs", "reason": "r"}),
         ("GET", "/api/v1/link-decision-traces", None),
         ("GET", "/api/v1/decision-explanation?gs=gs", None),
         ("GET", "/api/v1/decision-explanation/timeline?gs=gs", None),

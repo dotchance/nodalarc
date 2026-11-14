@@ -687,9 +687,9 @@ def no_fault_is_reported(operator: Operator) -> list[str]:
     """
     state = operator.state()
     faults = [
-        f"{entry['gs_id']} is shown as {entry['actuation_state']} ({entry['reason_code']})"
+        f"{entry['node_id']} is shown as {entry['actuation_state']} ({entry['reason_code']})"
         for scheduler in operator.get("/api/v1/ops/health")["scheduler_instances"]
-        for entry in scheduler["ground_stations"]
+        for entry in scheduler["nodes"]
         if entry["actuation_state"] != "clean"
     ]
     faults += [f"actuation notice: {notice}" for notice in state["actuation_notices"]]

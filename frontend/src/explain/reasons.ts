@@ -46,9 +46,9 @@ function ops(code: SchedulerOpsCode, label: string, sentence: string, severity: 
 
 export const SCHEDULER_OPS_REGISTRY: Record<SchedulerOpsCode, SchedulerOpsRecord> = {
   REPLACEMENT_LINK_UP_FAILED: ops("REPLACEMENT_LINK_UP_FAILED", "Replacement link-up failed", "The replacement ground link did not come up.", "alarm"),
-  GROUND_LINK_UP_FAILED: ops("GROUND_LINK_UP_FAILED", "Ground link-up failed", "A ground link-up command failed.", "alarm"),
-  GROUND_LINK_DOWN_FAILED: ops("GROUND_LINK_DOWN_FAILED", "Ground link-down failed", "A ground link-down command failed.", "alarm"),
-  GROUND_LATENCY_UPDATE_FAILED: ops("GROUND_LATENCY_UPDATE_FAILED", "Ground latency update failed", "A ground latency update failed.", "warning"),
+  LINK_UP_FAILED: ops("LINK_UP_FAILED", "Link-up failed", "A link-up command failed.", "alarm"),
+  LINK_DOWN_FAILED: ops("LINK_DOWN_FAILED", "Link-down failed", "A link-down command failed.", "alarm"),
+  LATENCY_UPDATE_FAILED: ops("LATENCY_UPDATE_FAILED", "Latency update failed", "A latency update failed.", "warning"),
   OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR: ops("OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR", "Old pair dropped without successor", "The old ground pair was dropped before a successor was proven up.", "alarm"),
   ACTUATION_BLOCKED: ops("ACTUATION_BLOCKED", "Actuation blocked", "A clean actuation failure blocks new ground link changes for this station.", "warning"),
   ACTUATION_CLEAN: ops("ACTUATION_CLEAN", "Actuation clean", "The station's desired and kernel state match.", "info"),

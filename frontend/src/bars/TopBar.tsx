@@ -43,11 +43,11 @@ function proofFailure(notice: ActuationNotice): string {
 function recoveryText(notice: ActuationNotice): string {
   const recovery = notice.recovery_status;
   if (recovery.operator_action_required === true || recovery.verify_exhausted === true) {
-    return `Run operator repair for ${notice.gs_id}, or restart/redeploy after capturing evidence.`;
+    return `Run operator repair for ${notice.node_id}, or restart/redeploy after capturing evidence.`;
   }
   const nextVerify = firstText(recovery.next_verify_after);
   if (nextVerify) return `Waiting for read-only kernel verification at ${nextVerify}.`;
-  return `Read-only kernel verification is still active for ${notice.gs_id}.`;
+  return `Read-only kernel verification is still active for ${notice.node_id}.`;
 }
 
 function plural(count: number, singular: string, pluralWord = `${singular}s`): string {
@@ -68,7 +68,7 @@ function ActuationNoticeButton({ notices, dirty }: { notices: readonly Actuation
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
   const label = noticeSummary(notices);
-  const title = notices.map((n) => `${n.gs_id}: ${schedulerOpsLabel(n.reason_code)}`).join("\n");
+  const title = notices.map((n) => `${n.node_id}: ${schedulerOpsLabel(n.reason_code)}`).join("\n");
 
   useEffect(() => {
     if (!open) return;
@@ -109,18 +109,18 @@ function ActuationNoticeButton({ notices, dirty }: { notices: readonly Actuation
             <Button onClick={() => setOpen(false)}>Close</Button>
           </div>
           {notices.map((notice) => (
-            <div key={`${notice.gs_id}:${notice.reason_code}:${notice.since}`} className="topbar-actuation-notice">
-              <div><strong>Ground station:</strong> {notice.gs_id}</div>
+            <div key={`${notice.node_id}:${notice.reason_code}:${notice.since}`} className="topbar-actuation-notice">
+              <div><strong>Node:</strong> {notice.node_id}</div>
               <div><strong>State:</strong> {notice.actuation_state}</div>
               <div><strong>Reason:</strong> {schedulerOpsLabel(notice.reason_code)}</div>
               <div>
                 <strong>Impact:</strong>{" "}
-                {notice.blocking_new_ground_link_up
-                  ? "new ground link changes are suppressed for this GS"
-                  : "automatic recovery is active; new ground links are not blocked"}
+                {notice.blocking_new_link_up
+                  ? "new links this node chooses are held back"
+                  : "automatic recovery is active; new links are not blocked"}
               </div>
-              <div><strong>OME wants:</strong> {pairList(notice.desired_pairs_for_gs)}</div>
-              <div><strong>Kernel/actual differs:</strong> {pairList(notice.affected_pairs.length ? notice.affected_pairs : notice.actual_pairs_for_gs)}</div>
+              <div><strong>OME wants:</strong> {pairList(notice.desired_pairs)}</div>
+              <div><strong>Kernel/actual differs:</strong> {pairList(notice.affected_pairs.length ? notice.affected_pairs : notice.actual_pairs)}</div>
               <div><strong>Last proof failure:</strong> {proofFailure(notice)}</div>
               <div><strong>Recovery:</strong> {recoveryText(notice)}</div>
             </div>

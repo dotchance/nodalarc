@@ -95,7 +95,7 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
   // fault exists"). Sourced from the Scheduler actuation notices (kernel dirty / dispatch blocked),
   // NOT OME link authority — only a real, blocking actuation problem reads as a fault.
   const satFault = snapshot.actuation_notices.find(
-    (n) => n.blocking_new_ground_link_up && n.affected_pairs.some((p) => p.includes(node.node_id)),
+    (n) => n.blocking_new_link_up && n.affected_pairs.some((p) => p.includes(node.node_id)),
   );
 
   const selectPeer = (peerId: string) => {

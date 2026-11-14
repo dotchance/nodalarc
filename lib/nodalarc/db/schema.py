@@ -16,7 +16,7 @@ to a model nested in it, or to what VS-API adds to a recorded frame bumps it.
 
 import sqlite3
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 class HistorySchemaError(RuntimeError):
@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS operator_interventions (
     wiring_generation TEXT NOT NULL,
     scheduler_instance_id TEXT NOT NULL,
     hostname TEXT NOT NULL,
-    gs_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
     status TEXT NOT NULL,
     reason TEXT,
     event_time TEXT NOT NULL,
@@ -158,7 +158,8 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_ome_lifecycle_outcome ON ome_lifecycle_events(terminal_outcome);",
     "CREATE INDEX IF NOT EXISTS idx_operator_interventions_session ON operator_interventions(session_id);",
     "CREATE INDEX IF NOT EXISTS idx_operator_interventions_id ON operator_interventions(intervention_id);",
-    "CREATE INDEX IF NOT EXISTS idx_operator_interventions_gs ON operator_interventions(gs_id);",
+    "CREATE INDEX IF NOT EXISTS idx_operator_interventions_node"
+    " ON operator_interventions(node_id);",
 ]
 
 # Every table that grows with the recording, with the column that says when each

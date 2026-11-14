@@ -41,16 +41,16 @@ function snapshotWithActuationNotice(): StateSnapshot {
     debug_events: [],
     actuation_notices: [
       {
-        gs_id: "gs-buenos-aires",
+        node_id: "gs-buenos-aires",
         actuation_state: "kernel_dirty",
         reason_code: "KERNEL_VERIFY_EXHAUSTED",
         message: "KernelInventory auto-verify exhausted for gs-buenos-aires; operator action required",
         since: "2026-06-01T12:00:01.000Z",
-        blocking_new_ground_link_up: true,
+        blocking_new_link_up: true,
         affected_pairs: [["gs-buenos-aires", "sat-P06S05"]],
-        desired_pairs_for_gs: [["gs-buenos-aires", "sat-P00S08"]],
-        actual_pairs_for_gs: [["gs-buenos-aires", "sat-P06S05"]],
-        ome_visible_scheduled_pairs_for_gs: [["gs-buenos-aires", "sat-P00S08"]],
+        desired_pairs: [["gs-buenos-aires", "sat-P00S08"]],
+        actual_pairs: [["gs-buenos-aires", "sat-P06S05"]],
+        ome_visible_scheduled_pairs: [["gs-buenos-aires", "sat-P00S08"]],
         recovery_status: {
           verify_attempt_count: 5,
           verify_exhausted: true,
@@ -100,12 +100,12 @@ describe("TopBar actuation notices", () => {
     fireEvent.click(screen.getByRole("button", { name: /1 actuation fault/i }));
 
     expect(screen.getByRole("dialog", { name: /actuation condition details/i })).toBeTruthy();
-    expect(screen.getByText("Ground station:")).toBeTruthy();
+    expect(screen.getByText("Node:")).toBeTruthy();
     expect(screen.getByText("gs-buenos-aires")).toBeTruthy();
     expect(screen.getByText("State:")).toBeTruthy();
     expect(screen.getByText("kernel_dirty")).toBeTruthy();
     expect(screen.getByText("Kernel verification exhausted")).toBeTruthy();
-    expect(screen.getByText(/new ground link changes are suppressed for this GS/i)).toBeTruthy();
+    expect(screen.getByText(/new links this node chooses are held back/i)).toBeTruthy();
     expect(screen.getByText("gs-buenos-aires -> sat-P00S08")).toBeTruthy();
     expect(screen.getByText("gs-buenos-aires -> sat-P06S05")).toBeTruthy();
     expect(screen.getByText(/interface\/qdisc\/mirred checks did not match desired state/i)).toBeTruthy();
@@ -117,15 +117,15 @@ describe("TopBar actuation notices", () => {
       ...base.actuation_notices,
       {
         ...base.actuation_notices[0]!,
-        gs_id: "gs-denver",
+        node_id: "gs-denver",
         actuation_state: "actuation_blocked",
         reason_code: "ACTUATION_BLOCKED",
         message: "Clean actuator failure awaiting operator decision",
-        blocking_new_ground_link_up: false,
+        blocking_new_link_up: false,
         affected_pairs: [["gs-denver", "sat-P01S01"]],
-        desired_pairs_for_gs: [["gs-denver", "sat-P01S02"]],
-        actual_pairs_for_gs: [["gs-denver", "sat-P01S01"]],
-        ome_visible_scheduled_pairs_for_gs: [["gs-denver", "sat-P01S02"]],
+        desired_pairs: [["gs-denver", "sat-P01S02"]],
+        actual_pairs: [["gs-denver", "sat-P01S01"]],
+        ome_visible_scheduled_pairs: [["gs-denver", "sat-P01S02"]],
       },
     ] };
 

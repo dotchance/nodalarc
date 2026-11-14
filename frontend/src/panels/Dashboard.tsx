@@ -79,10 +79,10 @@ export function Dashboard({ snapshot }: DashboardProps) {
       <div className="dashboard-feed">
         {notices.map((n) => (
           <div
-            key={`${n.gs_id}:${n.reason_code}`}
+            key={`${n.node_id}:${n.reason_code}`}
             className={`dashboard-alert dashboard-alert--${n.actuation_state === "kernel_dirty" ? "fail" : "warn"}`}
           >
-            {n.gs_id}: {schedulerOpsLabel(n.reason_code)}
+            {n.node_id}: {schedulerOpsLabel(n.reason_code)}
           </div>
         ))}
         {notices.length === 0 && (

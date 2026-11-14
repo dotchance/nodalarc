@@ -10,8 +10,8 @@ from datetime import UTC, datetime
 import pytest
 from nodalarc.models.link_decisions import GroundPolicyAudit
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
-from ome.ground_allocator import GroundAllocationResult
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
+from ome.link_allocator import LinkAllocationResult
 from ome.types import GroundVisibilityDecision, MbbTeardown
 
 
@@ -170,7 +170,7 @@ def test_isl_event_diff_maps_capacity_to_terminal_capacity_reason():
 
 def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
     pair = ("gs-den", "sat-a")
-    allocation = GroundAllocationResult(
+    allocation = LinkAllocationResult(
         associations={pair: (1, 0)},
         pending_teardowns={},
         scheduled_pairs=frozenset({pair}),
@@ -203,7 +203,7 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
 def test_ground_event_diff_marks_mbb_teardown_state():
     pair = ("gs-den", "sat-old")
     successor = ("gs-den", "sat-new")
-    allocation = GroundAllocationResult(
+    allocation = LinkAllocationResult(
         associations={pair: (0, 0)},
         pending_teardowns={pair: MbbTeardown(10, successor)},
         scheduled_pairs=frozenset({pair, successor}),
@@ -241,7 +241,7 @@ from nodalarc.models.link_decisions import UnscheduledPair as _UnscheduledPair
 
 def test_ground_event_diff_propagates_visibility_reject_reason_for_invisible_pair():
     pair = ("gs-den", "sat-a")
-    allocation = GroundAllocationResult(
+    allocation = LinkAllocationResult(
         associations={},
         pending_teardowns={},
         scheduled_pairs=frozenset(),
@@ -279,7 +279,7 @@ def test_ground_event_diff_propagates_unscheduled_reason_for_visible_but_unalloc
     a typed reason; that reason must surface on the emitted event."""
     pair = ("gs-den", "sat-a")
     incumbent = ("gs-den", "sat-b")
-    allocation = GroundAllocationResult(
+    allocation = LinkAllocationResult(
         associations={incumbent: (0, 0)},
         pending_teardowns={},
         scheduled_pairs=frozenset({incumbent}),
@@ -324,7 +324,7 @@ def test_ground_event_diff_fails_loud_when_allocator_omits_attribution_for_visib
     producer is wrong. The diff engine must refuse to emit an event with
     no scheduling reason rather than papering over the gap with None."""
     pair = ("gs-den", "sat-a")
-    allocation = GroundAllocationResult(
+    allocation = LinkAllocationResult(
         associations={},
         pending_teardowns={},
         scheduled_pairs=frozenset(),
@@ -351,7 +351,7 @@ def test_ground_event_diff_clears_unscheduled_reason_for_scheduled_pair():
     allocator's unscheduled_pairs happened to mention something for
     another pair on the same GS."""
     pair = ("gs-den", "sat-a")
-    allocation = GroundAllocationResult(
+    allocation = LinkAllocationResult(
         associations={pair: (0, 0)},
         pending_teardowns={},
         scheduled_pairs=frozenset({pair}),
@@ -385,7 +385,7 @@ def test_a_pass_between_long_delay_ground_peers_opens_a_contact_once():
     pair = ("dss-43", "mars-orbiter")
 
     def step(previous, *, visible, scheduled, teardown=False):
-        allocation = GroundAllocationResult(
+        allocation = LinkAllocationResult(
             associations={pair: (0, 0)} if scheduled else {},
             pending_teardowns={pair: MbbTeardown(10, ("dss-43", "other"))} if teardown else {},
             scheduled_pairs=frozenset({pair}) if scheduled else frozenset(),

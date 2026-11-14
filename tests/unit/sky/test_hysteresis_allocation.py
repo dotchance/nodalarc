@@ -17,9 +17,9 @@ from nodalarc.models.ground_policy import (
     HysteresisParameters,
     SelectionPolicySpec,
 )
-from ome.ground_allocator import allocate_ground_links
-from ome.ground_handover_policies import compute_effective_hysteresis_discount
-from ome.ground_selection_policies import SelectionContext, score_candidate
+from ome.handover_policies import compute_effective_hysteresis_discount
+from ome.link_allocator import allocate_links
+from ome.selection_policies import SelectionContext, score_candidate
 from ome.visibility import GroundVisibility
 
 from tests.ome_runtime_fixtures import allocator_timing_kwargs
@@ -190,7 +190,7 @@ class TestHysteresisDiscount:
         mbb_reserve: int = 1,
     ):
         sat_terminals = {gv.sat_id: 1 for gv in visible}
-        return allocate_ground_links(
+        return allocate_links(
             step=10,
             visible_per_station={"gs-test": visible},
             ground_station_ids={"gs-test"},

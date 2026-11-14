@@ -60,11 +60,6 @@ from nodalarc.physics.satellites import orbit_model_for
 
 from ome.direction_checks import PairSignals
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
-from ome.ground_allocator import (
-    GroundAllocationResult,
-    allocate_ground_links,
-)
-from ome.ground_selection_policies import validate_selection_score_scale_compatibility
 from ome.ground_visibility_engine import (
     DwellPassState,
     GroundGeometry,
@@ -78,6 +73,10 @@ from ome.isl_engine import (
     evaluate_isl_feasibility,
     schedule_isl_links,
 )
+from ome.link_allocator import (
+    LinkAllocationResult,
+    allocate_links,
+)
 from ome.propagation_engine import (
     PropagatedState,
     SessionPropagatorId,
@@ -86,6 +85,7 @@ from ome.propagation_engine import (
     propagate_satellites,
     satellite_endpoints,
 )
+from ome.selection_policies import validate_selection_score_scale_compatibility
 from ome.snapshot_builder import LinkSnapshotSource
 from ome.snapshot_builder import build_link_state_snapshot as build_link_state_snapshot
 from ome.telemetry import (
@@ -360,7 +360,7 @@ class StepResult:
     isl_scheduled: dict[tuple[str, str], bool]
     isl_feasibility: dict[tuple[str, str], IslFeasibilityResult]
     isl_links: dict[tuple[str, str], ScheduledIsl]
-    ground_allocation: GroundAllocationResult
+    ground_allocation: LinkAllocationResult
     ground_decisions: GroundVisibilityDecisionMap
     link_snapshot_source: LinkSnapshotSource
     propagated_states: dict[str, PropagatedState]
@@ -731,7 +731,7 @@ def _build_link_snapshot_source(
     isl_links: Mapping[tuple[str, str], ScheduledIsl],
     long_delay_contacts: LongDelayContacts,
     ground_decisions: GroundVisibilityDecisionMap,
-    ground_allocation: GroundAllocationResult,
+    ground_allocation: LinkAllocationResult,
 ) -> LinkSnapshotSource:
     """Derive authoritative snapshot state from current tick facts.
 
@@ -979,7 +979,7 @@ def compute_step(
 
     # 7. Scored, hysteresis-aware ground link allocation.
     with timings.measure(SEG_ALLOCATOR):
-        ground_allocation = allocate_ground_links(
+        ground_allocation = allocate_links(
             step=step,
             visible_per_station=ground_visibility.visible_per_station,
             ground_station_ids=set(ctx.gs_positions),

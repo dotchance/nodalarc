@@ -15,7 +15,7 @@ from nodalarc.models.ground_policy import (
     HysteresisParameters,
     SelectionPolicySpec,
 )
-from ome.ground_allocator import allocate_ground_links
+from ome.link_allocator import allocate_links
 from ome.visibility import GroundVisibility
 
 from tests.ome_runtime_fixtures import allocator_timing_kwargs
@@ -76,7 +76,7 @@ class TestGroundAllocatorDeterminism:
         ]
 
         visible.sort(key=lambda candidate: candidate.sat_id, reverse=reverse)
-        result = allocate_ground_links(
+        result = allocate_links(
             step=0,
             visible_per_station={gs_id: visible},
             ground_station_ids={gs_id},

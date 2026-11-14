@@ -11,7 +11,7 @@ from nodalarc.models.ground_policy import (
     HandoverPolicySpec,
     HysteresisParameters,
 )
-from ome.ground_handover_policies import HOLD_SCORE_FUNCTIONS, HandoverContext, evaluate_handover
+from ome.handover_policies import HOLD_SCORE_FUNCTIONS, HandoverContext, evaluate_handover
 from ome.visibility import GroundVisibility
 
 

@@ -35,8 +35,8 @@ from nodalarc.models.link_decisions import (
     UnscheduledPair,
 )
 
-from ome.ground_handover_policies import HandoverContext, evaluate_handover
-from ome.ground_selection_policies import SelectionContext, score_candidate
+from ome.handover_policies import HandoverContext, evaluate_handover
+from ome.selection_policies import SelectionContext, score_candidate
 from ome.types import (
     MbbTeardown,
     MbbTeardownLifecycleEvent,
@@ -48,7 +48,7 @@ from ome.visibility import GroundVisibility
 
 
 @dataclass(frozen=True)
-class GroundAllocationResult:
+class LinkAllocationResult:
     """Result of the ground allocation pass for one OME tick.
 
     ``unscheduled_pairs`` carries one entry per visible pair that the allocator
@@ -420,7 +420,7 @@ def _visible_incumbent_for_pair(
     return candidate
 
 
-def allocate_ground_links(
+def allocate_links(
     *,
     step: int,
     visible_per_station: Mapping[str, list[GroundVisibility]],
@@ -448,7 +448,7 @@ def allocate_ground_links(
     sim_time_unix: float,
     pair_delays_ms: Mapping[tuple[str, str], tuple[float, float]],
     receive_windows: ReceiveWindows,
-) -> GroundAllocationResult:
+) -> LinkAllocationResult:
     """Allocate ground links for one tick.
 
     This function is the state-machine mechanism. Operator policy enters only
@@ -1360,7 +1360,7 @@ def allocate_ground_links(
         if window is not None:
             open_windows[key] = window
 
-    return GroundAllocationResult(
+    return LinkAllocationResult(
         associations=new_associations,
         pending_teardowns=new_pending_teardowns,
         scheduled_pairs=frozenset(new_associations),

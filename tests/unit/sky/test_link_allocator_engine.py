@@ -11,7 +11,7 @@ from nodalarc.models.ground_policy import (
     HysteresisParameters,
     SelectionPolicySpec,
 )
-from ome.ground_allocator import allocate_ground_links
+from ome.link_allocator import allocate_links
 from ome.types import MbbTeardown, ReceiveWindow
 from ome.visibility import GroundVisibility
 
@@ -106,7 +106,7 @@ def _allocate(
         handover_mode="mbb" if mbb_reserve > 0 else "bbm",
     )
     policy_kwargs.update(timing or {})
-    return allocate_ground_links(
+    return allocate_links(
         step=10,
         visible_per_station={"gs-A": visible},
         ground_station_ids={"gs-A"},
@@ -255,7 +255,7 @@ def test_pending_teardown_expires_after_overlap_window():
     old_pair = ("gs-A", "sat-old")
     new_pair = ("gs-A", "sat-new")
 
-    result = allocate_ground_links(
+    result = allocate_links(
         step=13,
         visible_per_station={
             "gs-A": [
@@ -386,7 +386,7 @@ def test_acquire_avoids_satellite_terminal_vacated_by_another_station():
     """gs-A's link to sat-X dies this tick while gs-B acquires sat-X: the
     satellite-side index gs-A is still wired to must not be reused."""
     sat_caps = {"sat-X": 2}
-    result = allocate_ground_links(
+    result = allocate_links(
         step=10,
         visible_per_station={
             "gs-A": [],
@@ -441,7 +441,7 @@ def test_new_challenger_avoids_terminal_freed_by_expiring_teardown():
         ),
     ]
     sat_caps = {"sat-old": 1, "sat-new": 1, "sat-third": 1}
-    result = allocate_ground_links(
+    result = allocate_links(
         step=13,
         visible_per_station={"gs-A": visible},
         ground_station_ids={"gs-A"},
@@ -504,7 +504,7 @@ def test_unscheduled_pair_sat_capacity_exhausted():
             reject_reason="ok",
         )
     ]
-    result = allocate_ground_links(
+    result = allocate_links(
         step=0,
         visible_per_station={"gs-A": visible, "gs-B": visible},
         ground_station_ids={"gs-A", "gs-B"},
@@ -619,7 +619,7 @@ def test_unscheduled_pair_replaced_by_successor_when_teardown_expires():
     old_pair = ("gs-A", "sat-old")
     new_pair = ("gs-A", "sat-new")
 
-    result = allocate_ground_links(
+    result = allocate_links(
         step=13,  # 10 + 3 overlap = expired
         visible_per_station={
             "gs-A": [
@@ -728,7 +728,7 @@ def test_allocator_rejects_unsupported_multi_overlap_mbb_reserve():
     import pytest
 
     with pytest.raises(ValueError, match="multi-overlap allocator support"):
-        allocate_ground_links(
+        allocate_links(
             step=0,
             visible_per_station={
                 "gs-A": [
@@ -762,7 +762,7 @@ def test_missing_tenant_id_fails_loudly():
     import pytest
 
     with pytest.raises(ValueError, match="tenant_id"):
-        allocate_ground_links(
+        allocate_links(
             step=0,
             visible_per_station={
                 "gs-A": [
@@ -796,7 +796,7 @@ def test_missing_reference_body_fails_loudly():
     import pytest
 
     with pytest.raises(ValueError, match="reference_body"):
-        allocate_ground_links(
+        allocate_links(
             step=0,
             visible_per_station={
                 "gs-A": [
@@ -897,7 +897,7 @@ def test_handover_policy_none_displaces_without_hysteresis_margin():
 )
 def test_station_ranking_arbitrates_satellite_capacity(candidates, capacity, expected):
     stations = {name for name, *_ in candidates}
-    result = allocate_ground_links(
+    result = allocate_links(
         step=10,
         visible_per_station={
             name: [
@@ -936,7 +936,7 @@ def test_station_ranking_arbitrates_satellite_capacity(candidates, capacity, exp
 
 def test_default_ranking_order_prefers_candidate_specific_scarce_satellite_capacity():
     """Default ties prefer the satellite with fewer terminals for the candidate body."""
-    result = allocate_ground_links(
+    result = allocate_links(
         step=0,
         visible_per_station={
             "gs-A": [
@@ -1006,7 +1006,7 @@ def test_configured_ranking_order_can_prioritize_per_gs_rank_before_service_prio
         )
     ]
 
-    result = allocate_ground_links(
+    result = allocate_links(
         step=0,
         visible_per_station={"gs-A": visible_a, "gs-B": visible_b},
         ground_station_ids={"gs-A", "gs-B"},
@@ -1034,7 +1034,7 @@ def test_mbb_failed_successor_hard_release_drops_visible_old_pair():
     old_pair = ("gs-A", "sat-old")
     successor_pair = ("gs-A", "sat-missing")
 
-    result = allocate_ground_links(
+    result = allocate_links(
         step=11,
         visible_per_station={
             "gs-A": [
@@ -1075,7 +1075,7 @@ def test_mbb_visible_successor_missing_from_current_emits_failed_acquire_event()
     old_pair = ("gs-A", "sat-old")
     successor_pair = ("gs-A", "sat-successor")
 
-    result = allocate_ground_links(
+    result = allocate_links(
         step=11,
         visible_per_station={
             "gs-A": [
@@ -1129,7 +1129,7 @@ def test_mbb_failed_successor_soft_retain_keeps_visible_old_pair():
     kwargs = _policy_kwargs({"gs-A"}, handover_mode="mbb")
     kwargs["successor_abort_policy"] = "soft_retain"
 
-    result = allocate_ground_links(
+    result = allocate_links(
         step=11,
         visible_per_station={
             "gs-A": [
@@ -1186,7 +1186,7 @@ def test_sat_capacity_rechecked_after_same_tick_release_from_other_partition():
         reject_reason="ok",
     )
 
-    result = allocate_ground_links(
+    result = allocate_links(
         step=10,
         visible_per_station={
             "gs-A": [
@@ -1243,7 +1243,7 @@ def test_sat_capacity_arbitration_can_displace_lower_rank_same_partition_incumbe
         )
     ]
 
-    result = allocate_ground_links(
+    result = allocate_links(
         step=10,
         visible_per_station={"gs-A": visible, "gs-B": visible},
         ground_station_ids={"gs-A", "gs-B"},
@@ -1328,7 +1328,7 @@ def test_satellite_terminal_indices_are_allocated_from_matching_reference_body_p
         )
     ]
 
-    result = allocate_ground_links(
+    result = allocate_links(
         step=0,
         visible_per_station={"gs-luna": visible, "gs-earth": visible},
         ground_station_ids={"gs-earth", "gs-luna"},
@@ -1352,7 +1352,7 @@ def test_satellite_terminal_indices_are_allocated_from_matching_reference_body_p
 
 
 def test_allocator_preserves_nonzero_global_access_interface_indices():
-    result = allocate_ground_links(
+    result = allocate_links(
         step=0,
         visible_per_station={
             "gs-A": [
@@ -1388,7 +1388,7 @@ def test_existing_association_with_wrong_body_terminal_index_fails_loudly():
     pair = ("gs-luna", "sat-relay")
 
     with pytest.raises(ValueError, match="reference_body='luna'"):
-        allocate_ground_links(
+        allocate_links(
             step=0,
             visible_per_station={
                 "gs-luna": [
@@ -1422,7 +1422,7 @@ def test_allocator_rejects_unimplemented_multi_tick_bbm_gap_timeout():
     import pytest
 
     with pytest.raises(ValueError, match="bbm_acquire_timeout_ticks"):
-        allocate_ground_links(
+        allocate_links(
             step=0,
             visible_per_station={
                 "gs-A": [

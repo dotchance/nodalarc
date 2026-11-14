@@ -116,8 +116,8 @@ class LinkAllocationResult:
     teardown pairs remain scheduled and are represented in ``pending_teardowns``
     rather than as unscheduled pairs.
 
-    An association's two terminal indices are the lead node's, then the other node's
-    (``_lead_and_peer``).
+    An association's two terminal indices are in node-pair order: the terminal at
+    ``pair[0]``, then the terminal at ``pair[1]``.
     """
 
     associations: dict[tuple[str, str], tuple[int, int]]
@@ -138,8 +138,8 @@ class _Candidate:
     # node states scheduling and NodalArc chooses it. "mutual": both nodes state scheduling,
     # and the pair links only when each of them chooses it.
     kind: Literal["stated", "default", "mutual"]
-    # The node whose terminal index comes first in the association: the node that chooses a
-    # stated pair, and the first node in node-pair order otherwise. ``peer`` is the other node.
+    # The node that chooses a stated pair, and the first node in node-pair order otherwise.
+    # ``peer`` is the other node.
     lead: str
     peer: str
     lead_pool: str
@@ -192,8 +192,8 @@ def _lead_and_peer(pair: tuple[str, str], stating_nodes: AbstractSet[str]) -> tu
 
     The lead is the pair's one node that states scheduling. When neither node or both nodes
     state scheduling it is the first node in node-pair order. Either way it needs no listing
-    of this tick's usable pairs, so a held pair that is no longer usable still has an
-    orientation for its terminal indices and its events.
+    of this tick's usable pairs, so a held pair that is no longer usable still has a lead for
+    its events.
     """
 
     a_states = pair[0] in stating_nodes
@@ -201,6 +201,44 @@ def _lead_and_peer(pair: tuple[str, str], stating_nodes: AbstractSet[str]) -> tu
     if b_states and not a_states:
         return pair[1], pair[0]
     return pair[0], pair[1]
+
+
+def handover_overlap_ticks(
+    node_id: str,
+    *,
+    handover_modes: Mapping[str, str],
+    mbb_overlap_ticks: Mapping[str, int],
+) -> int:
+    """How many ticks a node keeps an old link beside its successor.
+
+    ``handover_modes`` and ``mbb_overlap_ticks`` hold the nodes that state scheduling. Such
+    a node keeps the old link for its stated overlap when it makes before it breaks, and
+    not at all otherwise. A node that states no scheduling keeps it for the shortest overlap
+    the handover state machine has.
+    """
+
+    if node_id in handover_modes:
+        return mbb_overlap_ticks[node_id] if handover_modes[node_id] == "mbb" else 0
+    return _DEFAULT_OVERLAP_TICKS
+
+
+def teardown_remaining_ticks(
+    old_pair: tuple[str, str],
+    teardown: MbbTeardown,
+    step: int,
+    *,
+    handover_modes: Mapping[str, str],
+    mbb_overlap_ticks: Mapping[str, int],
+) -> int:
+    """The ticks a pending teardown still has at ``step``: the overlap of the node that
+    hands over, less the ticks since the teardown started."""
+
+    overlap = handover_overlap_ticks(
+        _handing_node(old_pair, teardown.successor_pair),
+        handover_modes=handover_modes,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+    )
+    return max(0, overlap - (step - teardown.start_step))
 
 
 def _handing_node(old_pair: tuple[str, str], successor_pair: tuple[str, str]) -> str:
@@ -800,10 +838,9 @@ def allocate_links(
     # reception in progress (window_for below) and fall back to one only when nothing else is
     # free; the Scheduler's dispatch staging orders that release before the acquire.
     prior_holder: dict[tuple[str, int], tuple[str, str]] = {}
-    for _pair, (_lead_idx, _peer_idx) in current_associations.items():
-        _lead, _peer = _lead_and_peer(_pair, stating)
-        prior_holder[(_lead, _lead_idx)] = _pair
-        prior_holder[(_peer, _peer_idx)] = _pair
+    for _pair, _indices in current_associations.items():
+        for _node_id, _index in zip(_pair, _indices, strict=True):
+            prior_holder[(_node_id, _index)] = _pair
     # Why each association released this tick was released; the first cause recorded stands.
     release_cause: dict[tuple[str, str], GroundTerminalReleaseCause] = {}
     new_associations: dict[tuple[str, str], tuple[int, int]] = {}
@@ -858,14 +895,15 @@ def allocate_links(
         return members
 
     def index_at(pair: tuple[str, str], node_id: str) -> int:
-        lead_idx, peer_idx = new_associations[pair]
-        return lead_idx if node_id == candidate_for(pair).lead else peer_idx
+        indices = new_associations[pair]
+        return indices[0] if node_id == pair[0] else indices[1]
 
     def add_existing(pair: tuple[str, str], indices: tuple[int, int]) -> None:
         candidate = candidate_for(pair)
+        lead_first = candidate.lead == pair[0]
         ends = (
-            (candidate.lead, candidate.lead_pool, indices[0]),
-            (candidate.peer, candidate.peer_pool, indices[1]),
+            (candidate.lead, candidate.lead_pool, indices[0 if lead_first else 1]),
+            (candidate.peer, candidate.peer_pool, indices[1 if lead_first else 0]),
         )
         for node_id, pool_name, index in ends:
             if node_id not in pools:
@@ -883,9 +921,8 @@ def allocate_links(
         new_associations[pair] = indices
 
     def remove_association(pair: tuple[str, str]) -> tuple[int, int]:
-        candidate = candidate_for(pair)
         indices = new_associations.pop(pair)
-        for node_id, index in ((candidate.lead, indices[0]), (candidate.peer, indices[1])):
+        for node_id, index in zip(pair, indices, strict=True):
             occupied.setdefault(node_id, set()).discard(index)
             assoc_by_node.get(node_id, {}).pop(pair, None)
         if new_pending_teardowns.pop(pair, None) is not None:
@@ -984,7 +1021,9 @@ def allocate_links(
         retargeted(candidate.peer, peer_idx, candidate)
         occupied[candidate.lead].add(lead_idx)
         occupied[candidate.peer].add(peer_idx)
-        new_associations[candidate.pair] = (lead_idx, peer_idx)
+        new_associations[candidate.pair] = (
+            (lead_idx, peer_idx) if candidate.lead == candidate.pair[0] else (peer_idx, lead_idx)
+        )
         assoc_by_node.setdefault(candidate.lead, {})[candidate.pair] = None
         assoc_by_node.setdefault(candidate.peer, {})[candidate.pair] = None
         rejected.pop(candidate.pair, None)
@@ -1012,9 +1051,9 @@ def allocate_links(
         return "mbb" if has_free_terminal(node_id, pool_name) else "bbm"
 
     def overlap_ticks_for(node_id: str) -> int:
-        if node_id in stating:
-            return mbb_overlap_ticks[node_id] if handover_modes[node_id] == "mbb" else 0
-        return _DEFAULT_OVERLAP_TICKS
+        return handover_overlap_ticks(
+            node_id, handover_modes=handover_modes, mbb_overlap_ticks=mbb_overlap_ticks
+        )
 
     # Pairs with scheduling at both nodes. Each node takes its highest-ranked usable
     # candidates up to its cap, by its own policy and independently, with ties broken by
@@ -1755,10 +1794,8 @@ def allocate_links(
     # Windows still open for the next tick: those carried from earlier ticks that have not
     # ended, and those this tick's releases opened, on terminals no new link took.
     held = set()
-    for pair, (lead_idx, peer_idx) in new_associations.items():
-        candidate = candidate_for(pair)
-        held.add((candidate.lead, lead_idx))
-        held.add((candidate.peer, peer_idx))
+    for pair, indices in new_associations.items():
+        held.update(zip(pair, indices, strict=True))
     open_windows: ReceiveWindows = {
         key: window
         for key, window in receive_windows.items()

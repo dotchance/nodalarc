@@ -181,8 +181,11 @@ class VisibilityEvent(BaseModel):
     elevation_deg: float | None  # None for ISLs, float for ground links
     terminal_type: str  # "optical" or "rf"
     link_type: Literal["isl", "ground"]  # set by OME from node type registry
-    gs_terminal_index: int | None = None  # None for ISL events
-    sat_terminal_index: int | None = None  # None for ISL events
+    # The terminal OME assigned the link at node_a and at node_b, on a scheduled link whose
+    # terminals are chosen per association. None on a link with fixed interfaces and on a pair
+    # that is not scheduled.
+    terminal_index_a: int | None = None
+    terminal_index_b: int | None = None
     scheduling_state: SchedulingState = "active"
     visibility_reject_reason: VisibilityRejectReason
     unscheduled_reason: UnscheduledReason | None
@@ -216,10 +219,15 @@ class VisibilityEvent(BaseModel):
         if a > b:
             values["node_a"] = b
             values["node_b"] = a
-            # Each delay belongs to its transmitting end, so it follows the swap.
+            # Each delay belongs to its transmitting end and each terminal to its node, so
+            # both follow the swap.
             values["latency_a_to_b_ms"], values["latency_b_to_a_ms"] = (
                 values.get("latency_b_to_a_ms"),
                 values.get("latency_a_to_b_ms"),
+            )
+            values["terminal_index_a"], values["terminal_index_b"] = (
+                values.get("terminal_index_b"),
+                values.get("terminal_index_a"),
             )
         return values
 
@@ -788,14 +796,15 @@ class ValidationReport(BaseModel):
 
 
 class TeardownEntry(BaseModel):
-    """Single pending MBB teardown in a SchedulingCheckpoint."""
+    """Single pending MBB teardown in a SchedulingCheckpoint: the old link's two nodes and its
+    successor's, each in node-pair order."""
 
     model_config = ConfigDict(frozen=True)
 
     start_step: int
     remaining_ticks: int
-    gs_id: str
-    sat_id: str
+    node_a: str
+    node_b: str
     successor_node_a: str
     successor_node_b: str
 
@@ -815,19 +824,20 @@ class ReceiveWindowEntry(BaseModel):
 
 
 class CheckpointAssociation(BaseModel):
-    """Single ground association retained in a SchedulingCheckpoint.
+    """Single association retained in a SchedulingCheckpoint: a link's two nodes in node-pair
+    order and the terminal OME assigned it at each.
 
-    A ground station can temporarily carry multiple concurrent associations
-    during MBB overlap. Keying only by gs_id loses state; terminal indices are
-    part of the scheduling contract and must survive recovery.
+    A node can temporarily carry multiple concurrent associations during MBB overlap.
+    Keying only by one node loses state; terminal indices are part of the scheduling
+    contract and must survive recovery.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    gs_id: str
-    sat_id: str
-    gs_terminal_index: int
-    sat_terminal_index: int
+    node_a: str
+    node_b: str
+    terminal_index_a: int
+    terminal_index_b: int
 
 
 class SchedulingCheckpoint(BaseModel):

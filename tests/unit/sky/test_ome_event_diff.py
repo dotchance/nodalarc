@@ -193,8 +193,9 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
     assert len(diff.events) == 1
     event = diff.events[0]
     assert event.link_type == "ground"
-    assert event.gs_terminal_index == 1
-    assert event.sat_terminal_index == 0
+    # The association's two indices are in pair order: the terminal at each node.
+    assert event.terminal_index_a == 1
+    assert event.terminal_index_b == 0
     # The event carries the decision's committed delay of each direction, in pair order.
     assert event.latency_a_to_b_ms == decision.latency_a_to_b_ms
     assert event.latency_b_to_a_ms == decision.latency_b_to_a_ms

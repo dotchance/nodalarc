@@ -95,6 +95,7 @@ class _SessionBundle(NamedTuple):
     latitude_threshold_deg: float
     propagator_id: str
     interface_map: dict[tuple[str, str], tuple[str, str]]
+    terminal_interface_names: dict[str, dict[int, str]]
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
     long_delay_access_pairs: frozenset[tuple[str, str]]
@@ -131,27 +132,6 @@ def _validate_recovered_checkpoint(
     if checkpoint_age < 0:
         raise RuntimeError("Recovered checkpoint written_at is in the future; refusing recovery")
     return checkpoint_age
-
-
-def _checkpoint_ground_sat_pair(
-    pair: tuple[str, str],
-    ground_station_ids: set[str] | frozenset[str],
-) -> tuple[str, str]:
-    """Return `(ground_id, satellite_id)` for a checkpoint pair.
-
-    OME stores ground pairs in allocator-normalized endpoint order for stable
-    comparisons. Checkpoint payloads are semantic and must name the ground and
-    satellite roles explicitly, so serialization cannot assume tuple position.
-    """
-
-    a_is_ground = pair[0] in ground_station_ids
-    b_is_ground = pair[1] in ground_station_ids
-    if a_is_ground == b_is_ground:
-        raise ValueError(
-            f"Cannot serialize checkpoint pair {pair!r}: expected exactly one ground station "
-            f"endpoint from {sorted(ground_station_ids)!r}"
-        )
-    return pair if a_is_ground else (pair[1], pair[0])
 
 
 def _load_session_config(
@@ -193,6 +173,7 @@ def _session_bundle_from_resolution(resolution: SessionResolution) -> _SessionBu
         latitude_threshold_deg=latitude_threshold_deg,
         propagator_id=runtime.propagator_id,
         interface_map=runtime.interface_map,
+        terminal_interface_names=runtime.terminal_interface_names,
         rule_map=runtime.rule_map,
         ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
         long_delay_access_pairs=runtime.long_delay_access_pairs,
@@ -734,7 +715,8 @@ def _run_pacing(
     from nodalarc.platform_config import get_platform_config
 
     from ome.event_stream import build_session_ephemeris
-    from ome.replay_anchor import DeferredReplayAnchor
+    from ome.link_allocator import teardown_remaining_ticks
+    from ome.replay_anchor import DeferredReplayAnchor, pair_key
     from ome.snapshot_builder import (
         DeferredLinkDecisionSnapshot,
         DeferredLinkStateSnapshot,
@@ -747,46 +729,49 @@ def _run_pacing(
         step: int,
         associations: dict[tuple[str, str], tuple[int, int]],
         teardowns: MbbTeardownState,
-        mbb_overlap_ticks_by_gs: dict[str, int],
+        handover_modes: dict[str, str],
+        mbb_overlap_ticks: dict[str, int],
     ) -> SchedulingCheckpoint:
-        """Convert OME internal association/teardown state to SchedulingCheckpoint."""
+        """Convert OME internal association/teardown state to SchedulingCheckpoint.
+
+        ``handover_modes`` and ``mbb_overlap_ticks`` are the stated scheduling of the nodes
+        that state it."""
         if snapshot_seq <= 0:
             raise ValueError("SchedulingCheckpoint requires a published snapshot_seq")
         if step < 0:
             raise ValueError("SchedulingCheckpoint step must be non-negative")
 
-        ground_station_ids = frozenset(mbb_overlap_ticks_by_gs)
-        assoc_flat: dict[str, CheckpointAssociation] = {}
-        for pair, (gs_ti, sat_ti) in associations.items():
-            gs_id, sat_id = _checkpoint_ground_sat_pair(pair, ground_station_ids)
-            assoc_flat[f"{gs_id}:{sat_id}"] = CheckpointAssociation(
-                gs_id=gs_id,
-                sat_id=sat_id,
-                gs_terminal_index=gs_ti,
-                sat_terminal_index=sat_ti,
+        assoc_flat: dict[str, CheckpointAssociation] = {
+            pair_key(pair): CheckpointAssociation(
+                node_a=pair[0],
+                node_b=pair[1],
+                terminal_index_a=indices[0],
+                terminal_index_b=indices[1],
             )
+            for pair, indices in associations.items()
+        }
 
         # Internal teardown state stores the absolute start tick because the
         # allocator needs elapsed simulation ticks. The checkpoint also stores
         # remaining_ticks as an audit value so recovery tests can prove that a
         # no-time-advanced restart preserved MBB overlap semantics exactly.
-        td_flat: dict[str, TeardownEntry] = {}
-        for pair, teardown in teardowns.items():
-            gs_id, sat_id = _checkpoint_ground_sat_pair(pair, ground_station_ids)
-            if gs_id not in mbb_overlap_ticks_by_gs:
-                raise ValueError(
-                    f"Cannot build SchedulingCheckpoint for pending teardown {gs_id}:{sat_id}: "
-                    "missing per-ground-station MBB overlap policy"
-                )
-            remaining_ticks = max(0, mbb_overlap_ticks_by_gs[gs_id] - (step - teardown.start_step))
-            td_flat[f"{gs_id}:{sat_id}"] = TeardownEntry(
+        td_flat: dict[str, TeardownEntry] = {
+            pair_key(pair): TeardownEntry(
                 start_step=teardown.start_step,
-                remaining_ticks=remaining_ticks,
-                gs_id=gs_id,
-                sat_id=sat_id,
+                remaining_ticks=teardown_remaining_ticks(
+                    pair,
+                    teardown,
+                    step,
+                    handover_modes=handover_modes,
+                    mbb_overlap_ticks=mbb_overlap_ticks,
+                ),
+                node_a=pair[0],
+                node_b=pair[1],
                 successor_node_a=teardown.successor_pair[0],
                 successor_node_b=teardown.successor_pair[1],
             )
+            for pair, teardown in teardowns.items()
+        }
 
         return SchedulingCheckpoint(
             sim_time=sim_time,
@@ -1240,13 +1225,14 @@ def _run_pacing(
             DeferredLinkStateSnapshot(
                 source=step_result.link_snapshot_source,
                 interface_map=interface_map,
+                terminal_interface_names=cfg.terminal_interface_names,
+                handover_modes=step_ctx.gs_handover_modes,
+                mbb_overlap_ticks=step_ctx.gs_mbb_overlap_ticks,
                 rule_map=rule_map,
                 sim_time=step_result.sim_time,
                 seq=snapshot_seq,
                 interval_s=snapshot_interval_s,
-                fixed_positions=step_ctx.gs_positions,
                 epoch_id=epoch_id,
-                mbb_overlap_ticks_by_gs=step_ctx.gs_mbb_overlap_ticks,
                 current_step=step_result.step,
             ),
         )
@@ -1283,7 +1269,8 @@ def _run_pacing(
             step=step_result.step,
             associations=step_result.associations,
             teardowns=step_result.pending_teardowns,
-            mbb_overlap_ticks_by_gs=step_ctx.gs_mbb_overlap_ticks,
+            handover_modes=step_ctx.gs_handover_modes,
+            mbb_overlap_ticks=step_ctx.gs_mbb_overlap_ticks,
         )
         _enqueue(subj_checkpoint, ckpt)
 
@@ -1302,7 +1289,6 @@ def _run_pacing(
                 teardowns=step_result.pending_teardowns,
                 receive_windows=dict(receive_windows),
                 long_delay_contacts=dict(long_delay_contacts),
-                ground_station_ids=frozenset(step_ctx.gs_mbb_overlap_ticks),
                 written_at=time.time(),
             ),
         )

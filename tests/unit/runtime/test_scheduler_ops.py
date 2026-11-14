@@ -320,6 +320,7 @@ def test_a_station_its_predecessor_left_no_record_for_starts_unproven() -> None:
     )
     scheduler = Dispatcher(
         interface_map=INTERFACE_MAP,
+        terminal_interface_names={},
         interface_rates=ANY_INTERFACE_RATES,
         pod_locator=PodLocationMap(),
         agent_pool=None,
@@ -362,6 +363,7 @@ def test_a_successor_takes_over_the_delays_its_predecessor_last_commanded() -> N
     stream = _RetainedLinkStream({})
     predecessor = Dispatcher(
         interface_map=INTERFACE_MAP,
+        terminal_interface_names={},
         interface_rates=ANY_INTERFACE_RATES,
         pod_locator=PodLocationMap(),
         agent_pool=None,
@@ -443,6 +445,7 @@ def test_a_link_on_a_pod_wired_anew_is_not_taken_over() -> None:
 def _successor(stream: _RetainedLinkStream, wired_sandboxes: dict[str, str]) -> Dispatcher:
     scheduler = Dispatcher(
         interface_map=INTERFACE_MAP,
+        terminal_interface_names={},
         interface_rates=ANY_INTERFACE_RATES,
         pod_locator=PodLocationMap(),
         agent_pool=None,

@@ -55,8 +55,7 @@ def _session_ctx(tmp_path):
     )
     epoch_unix = session_epoch_unix(cfg.resolved.time)
     step_seconds = int(cfg.resolved.time.step_seconds)
-    ground_ids = frozenset(ctx.gs_mbb_overlap_ticks)
-    return ctx, epoch_unix, step_seconds, ground_ids
+    return ctx, epoch_unix, step_seconds
 
 
 def _run(ctx, epoch_unix, step_seconds, *, start, end, isl, gs, assoc, td, windows, contacts):
@@ -85,10 +84,10 @@ def _run(ctx, epoch_unix, step_seconds, *, start, end, isl, gs, assoc, td, windo
     return events, isl, gs, assoc, td, windows, contacts, result
 
 
-def _full_run_with_anchor(tmp_path, ground_ids_override=None):
+def _full_run_with_anchor(tmp_path):
     """Full replay 0..FINAL, capturing the anchor at ANCHOR_STEP through
     the wire codec. Returns (anchor, gap events, final state tuple)."""
-    ctx, epoch_unix, step_seconds, ground_ids = _session_ctx(tmp_path)
+    ctx, epoch_unix, step_seconds = _session_ctx(tmp_path)
     isl: dict = {}
     gs: dict = {}
     assoc: dict = {}
@@ -127,7 +126,6 @@ def _full_run_with_anchor(tmp_path, ground_ids_override=None):
                     teardowns=td,
                     receive_windows=windows,
                     long_delay_contacts=contacts,
-                    ground_station_ids=ground_ids_override or ground_ids,
                     written_at=123.0,
                 )
             )

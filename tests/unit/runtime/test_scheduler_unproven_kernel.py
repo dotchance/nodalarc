@@ -83,6 +83,7 @@ def _scheduler(agent: _NodeAgent, published: _Published) -> Dispatcher:
     located._agent_addrs["server-a"] = "server-a-agent"
     scheduler = Dispatcher(
         interface_map={PAIR: ("isl0", "isl1")},
+        terminal_interface_names={},
         interface_rates=ANY_INTERFACE_RATES,
         pod_locator=located,
         agent_pool=_AgentPool(agent),

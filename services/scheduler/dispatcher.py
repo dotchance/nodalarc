@@ -130,8 +130,8 @@ from scheduler.contact_drain import (
 )
 from scheduler.desired_state import (
     ActiveLinkInfo,
-    desired_link_from_snapshot_link,
-    desired_link_from_visibility,
+    desired_link,
+    snapshot_row_is_up,
 )
 from scheduler.dispatch_actuator import (
     end_loss_records,
@@ -258,6 +258,7 @@ class Dispatcher:
     def __init__(
         self,
         interface_map: dict[tuple[str, str], tuple[str, str]],
+        terminal_interface_names: Mapping[str, Mapping[int, str]],
         interface_rates: Mapping[tuple[str, str], InterfaceRates],
         pod_locator: PodLocationMap,
         agent_pool: AgentPool,
@@ -312,6 +313,10 @@ class Dispatcher:
         # fatal failure fatal.
         self._read_lifecycle_identity = read_lifecycle_identity
         self._interface_map = interface_map
+        # Each node's terminal interfaces by the terminal index OME assigns
+        # (ResolvedSession.terminal_interface_names). Static for the session, like the
+        # interface map: it names what can exist, and OME says what does.
+        self._terminal_interface_names = terminal_interface_names
         # Each WAN interface's own terminal rates; link shaping applies them
         # per interface, independent of the terminal at the other end.
         self._interface_rates = interface_rates
@@ -2662,7 +2667,6 @@ class Dispatcher:
         The dispatch worker never reads _desired_links directly — it
         only receives copies via the queue.
         """
-        ground_station_ids = frozenset(self._gs_capacities)
         for vis in vis_events:
             pair = (vis.node_a, vis.node_b)
             if (
@@ -2695,14 +2699,16 @@ class Dispatcher:
                     self._teardown_pairs.discard(pair)
 
                 if pair not in self._desired_links:
-                    _pair, info = desired_link_from_visibility(
+                    _pair, info = desired_link(
                         vis,
                         interface_map=self._interface_map,
-                        ground_station_ids=ground_station_ids,
+                        terminal_interface_names=self._terminal_interface_names,
                         long_delay_pairs=self._long_delay_pairs,
                         # Events of a new epoch reach the Scheduler only after the seek that
                         # started it set this epoch.
                         epoch_id=self._last_snapshot_epoch_id,
+                        authority_sim_time=vis.sim_time,
+                        authority_source="visibility_event",
                     )
                     self._desired_links[pair] = info
             elif not vis.visible:
@@ -2749,7 +2755,6 @@ class Dispatcher:
         self._last_snapshot_epoch_id = snapshot.epoch_id
         desired: dict[tuple[str, str], ActiveLinkInfo] = {}
         self._teardown_pairs.clear()
-        ground_station_ids = frozenset(self._gs_capacities)
 
         # Snapshot is replace-not-merge for both _desired_links and
         # _ome_view captures the OME's stated
@@ -2776,18 +2781,18 @@ class Dispatcher:
             else:
                 new_ome_view[pair] = (False, False, sched_state)
 
-            built = desired_link_from_snapshot_link(
+            if not snapshot_row_is_up(link, snapshot_sim_time=snapshot.sim_time):
+                continue
+            pair, info = desired_link(
                 link,
                 interface_map=self._interface_map,
-                ground_station_ids=ground_station_ids,
-                snapshot_sim_time=snapshot.sim_time,
-                snapshot_seq=snapshot.snapshot_seq,
+                terminal_interface_names=self._terminal_interface_names,
                 long_delay_pairs=self._long_delay_pairs,
                 epoch_id=snapshot.epoch_id,
+                authority_sim_time=snapshot.sim_time,
+                authority_source="link_state_snapshot",
+                authority_sequence=snapshot.snapshot_seq,
             )
-            if built is None:
-                continue
-            pair, info = built
             desired[pair] = info
             if sched_state == "teardown":
                 self._teardown_pairs.add(pair)
@@ -4458,8 +4463,8 @@ class Dispatcher:
             nodes = {node_id for pair in ground for node_id in pair}
             terminals = sorted(
                 (node_id, interface)
-                for node_id, interface in self._interface_rates
-                if node_id in nodes and interface.startswith(("term", "gnd"))
+                for node_id in nodes
+                for interface in self._terminal_interface_names.get(node_id, {}).values()
             )
             surveyed = await survey_ground_terminals(
                 terminals=terminals,

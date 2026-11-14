@@ -540,6 +540,7 @@ def _run_scheduler() -> None:
     # standby dispatches nothing.
     runtime_health.mark_loaded(runtime_config, waiting_for=f"the session writer lease {LEASE_NAME}")
     interface_map = resolved.link_interface_map()
+    terminal_interface_names = resolved.terminal_interface_names()
     interface_rates = resolved.interface_terminal_rates()
     log.debug("Interface map: %d link pairs", len(interface_map))
     session_id = require_resolved_session_run_id(resolved)
@@ -621,6 +622,7 @@ def _run_scheduler() -> None:
     def _build_dispatcher(writer_epoch: int) -> Dispatcher:
         return Dispatcher(
             interface_map=interface_map,
+            terminal_interface_names=terminal_interface_names,
             interface_rates=interface_rates,
             pod_locator=loc,
             agent_pool=pool,

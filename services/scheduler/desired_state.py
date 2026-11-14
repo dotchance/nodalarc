@@ -10,8 +10,10 @@ fails loudly when required authority is missing.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_events import LinkEndLoss
@@ -236,147 +238,119 @@ def _contact(
     return None
 
 
-def _ground_interfaces(
+_SOURCE_LABEL = {
+    "visibility_event": "VisibilityEvent",
+    "link_state_snapshot": "LinkStateSnapshot",
+}
+
+
+def link_interfaces(
     pair: tuple[str, str],
     *,
-    ground_station_ids: frozenset[str],
-    gs_terminal_index: int | None,
-    sat_terminal_index: int | None,
+    terminal_index_a: int | None,
+    terminal_index_b: int | None,
+    interface_map: Mapping[tuple[str, str], tuple[str, str]],
+    terminal_interface_names: Mapping[str, Mapping[int, str]],
+    source: str,
 ) -> tuple[str, str]:
-    if gs_terminal_index is None or sat_terminal_index is None:
+    """The pod interface at each end of an up link, in pair order.
+
+    OME names the terminal it assigned a link at each node by index, and the interface is
+    the one the resolved session gives that node's index. A link whose interfaces the
+    resolver fixed carries no index and takes them from the resolved session's fixed map.
+    No name is built from a pattern here: the resolver owns interface names. Rejected
+    alternative: build ``term{n}`` and ``gnd{n}`` from the index and a ground-station test,
+    which tied the Scheduler to one ground station and one satellite per link.
+    """
+    if (terminal_index_a is None) != (terminal_index_b is None):
         raise ValueError(
-            "Scheduled ground links require OME-provided terminal indices; "
-            f"got gs_terminal_index={gs_terminal_index!r}, "
-            f"sat_terminal_index={sat_terminal_index!r}"
+            f"{source} for {pair} names a terminal at one end only: "
+            f"terminal_index_a={terminal_index_a!r}, terminal_index_b={terminal_index_b!r}"
         )
-
-    a_is_ground = pair[0] in ground_station_ids
-    b_is_ground = pair[1] in ground_station_ids
-    if a_is_ground == b_is_ground:
-        role = "no ground endpoint" if not a_is_ground else "two ground endpoints"
-        raise ValueError(
-            f"Scheduled ground link {pair} has {role}; refusing to infer "
-            "interface ownership without exactly one configured ground station"
-        )
-
-    gs_iface = f"term{gs_terminal_index}"
-    sat_iface = f"gnd{sat_terminal_index}"
-    if a_is_ground:
-        return gs_iface, sat_iface
-    return sat_iface, gs_iface
-
-
-def desired_link_from_visibility(
-    vis: VisibilityEvent,
-    *,
-    interface_map: dict[tuple[str, str], tuple[str, str]],
-    ground_station_ids: frozenset[str],
-    long_delay_pairs: frozenset[tuple[str, str]],
-    epoch_id: int,
-) -> tuple[tuple[str, str], ActiveLinkInfo]:
-    """Build one desired link from a scheduled visible OME event."""
-    pair = (vis.node_a, vis.node_b)
-    range_km, a_to_b, b_to_a = require_ome_geometry(
-        pair,
-        range_km=vis.range_km,
-        latency_a_to_b_ms=vis.latency_a_to_b_ms,
-        latency_b_to_a_ms=vis.latency_b_to_a_ms,
-        source="VisibilityEvent",
-    )
-
-    if vis.link_type == "ground":
-        ifaces = _ground_interfaces(
-            pair,
-            ground_station_ids=ground_station_ids,
-            gs_terminal_index=vis.gs_terminal_index,
-            sat_terminal_index=vis.sat_terminal_index,
-        )
-    else:
-        ifaces = interface_map.get(pair)
-        if ifaces is None:
+    if terminal_index_a is None or terminal_index_b is None:
+        fixed = interface_map.get(pair)
+        if fixed is None:
             raise ValueError(
-                f"VisibilityEvent for {pair} has no configured ISL interfaces; "
-                "refusing to dispatch an unmapped link"
+                f"{source} for {pair} names no terminals and the resolved session fixes no "
+                "interfaces for the pair; refusing to dispatch an unmapped link"
             )
-
-    return pair, ActiveLinkInfo(
-        interface_a=ifaces[0],
-        interface_b=ifaces[1],
-        latency_a_to_b_ms=a_to_b,
-        latency_b_to_a_ms=b_to_a,
-        link_type=vis.link_type,
-        range_km=range_km,
-        authority_sim_time=vis.sim_time,
-        authority_source="visibility_event",
-        contact=_contact(
-            pair,
-            opened_at=vis.contact_opened_at,
-            long_delay_pairs=long_delay_pairs,
-            epoch_id=epoch_id,
-            source="VisibilityEvent",
-        ),
-    )
+        return fixed
+    names: list[str] = []
+    for node_id, index in zip(pair, (terminal_index_a, terminal_index_b), strict=True):
+        name = terminal_interface_names.get(node_id, {}).get(index)
+        if name is None:
+            raise ValueError(
+                f"{source} for {pair} names terminal {index} at {node_id}, which the "
+                "resolved session does not give that node"
+            )
+        names.append(name)
+    return names[0], names[1]
 
 
-def desired_link_from_snapshot_link(
-    link: LinkState,
-    *,
-    interface_map: dict[tuple[str, str], tuple[str, str]],
-    ground_station_ids: frozenset[str],
-    snapshot_sim_time: datetime,
-    snapshot_seq: int,
-    long_delay_pairs: frozenset[tuple[str, str]],
-    epoch_id: int,
-) -> tuple[tuple[str, str], ActiveLinkInfo] | None:
-    """Build one desired link from an authoritative snapshot link entry."""
+def snapshot_row_is_up(link: LinkState, *, snapshot_sim_time: datetime) -> bool:
+    """Whether a row of a LinkStateSnapshot states its link up. An up row timed apart from
+    its snapshot is a corrupt snapshot and stops dispatch."""
     if link.admin != AdminState.UP or link.carrier != CarrierState.UP:
-        return None
+        return False
     if link.sim_time != snapshot_sim_time:
         raise ValueError(
             "LinkStateSnapshot contains a link whose sim_time does not match "
             f"the snapshot authority time: link={link.sim_time.isoformat()} "
             f"snapshot={snapshot_sim_time.isoformat()}"
         )
+    return True
 
-    pair = (link.node_a, link.node_b)
+
+def desired_link(
+    source: VisibilityEvent | LinkState,
+    *,
+    interface_map: Mapping[tuple[str, str], tuple[str, str]],
+    terminal_interface_names: Mapping[str, Mapping[int, str]],
+    long_delay_pairs: frozenset[tuple[str, str]],
+    epoch_id: int,
+    authority_sim_time: datetime,
+    authority_source: Literal["visibility_event", "link_state_snapshot"],
+    authority_sequence: int | None = None,
+) -> tuple[tuple[str, str], ActiveLinkInfo]:
+    """Build one desired link from OME's statement that the link is up.
+
+    The statement is a scheduled visible VisibilityEvent or an up row of a
+    LinkStateSnapshot. Both carry the link's nodes, range, delays, terminals and contact
+    under the same names, so one builder serves both. The caller says which authority it
+    is, and at what sim time and sequence.
+    """
+    label = _SOURCE_LABEL[authority_source]
+    pair = (source.node_a, source.node_b)
     range_km, a_to_b, b_to_a = require_ome_geometry(
         pair,
-        range_km=link.range_km,
-        latency_a_to_b_ms=link.latency_a_to_b_ms,
-        latency_b_to_a_ms=link.latency_b_to_a_ms,
-        source="LinkStateSnapshot",
+        range_km=source.range_km,
+        latency_a_to_b_ms=source.latency_a_to_b_ms,
+        latency_b_to_a_ms=source.latency_b_to_a_ms,
+        source=label,
     )
-
-    if link.link_type == "ground":
-        ifaces = _ground_interfaces(
-            pair,
-            ground_station_ids=ground_station_ids,
-            gs_terminal_index=link.gs_terminal_index,
-            sat_terminal_index=link.sat_terminal_index,
-        )
-    else:
-        ifaces = interface_map.get(pair)
-        if ifaces is None:
-            raise ValueError(
-                f"LinkStateSnapshot for {pair} has no configured ISL interfaces; "
-                "refusing to dispatch an unmapped link"
-            )
-
+    interface_a, interface_b = link_interfaces(
+        pair,
+        terminal_index_a=source.terminal_index_a,
+        terminal_index_b=source.terminal_index_b,
+        interface_map=interface_map,
+        terminal_interface_names=terminal_interface_names,
+        source=label,
+    )
     return pair, ActiveLinkInfo(
-        interface_a=ifaces[0],
-        interface_b=ifaces[1],
+        interface_a=interface_a,
+        interface_b=interface_b,
         latency_a_to_b_ms=a_to_b,
         latency_b_to_a_ms=b_to_a,
-        link_type=link.link_type,
+        link_type=source.link_type,
         range_km=range_km,
-        authority_sim_time=snapshot_sim_time,
-        authority_source="link_state_snapshot",
-        authority_sequence=snapshot_seq,
+        authority_sim_time=authority_sim_time,
+        authority_source=authority_source,
+        authority_sequence=authority_sequence,
         contact=_contact(
             pair,
-            opened_at=link.contact_opened_at,
+            opened_at=source.contact_opened_at,
             long_delay_pairs=long_delay_pairs,
             epoch_id=epoch_id,
-            source="LinkStateSnapshot",
+            source=label,
         ),
     )

@@ -150,6 +150,9 @@ def test_the_snapshot_carries_each_open_contact_through_the_wire():
     snapshot = build_link_state_snapshot(
         _source({TRUNK: (True, True), LOCAL: (True, True)}, {TRUNK: T0}),
         interface_map={TRUNK: ("isl0", "isl0"), LOCAL: ("isl0", "isl1")},
+        terminal_interface_names={},
+        handover_modes={},
+        mbb_overlap_ticks={},
         sim_time=now,
         seq=7,
         interval_s=5.0,
@@ -172,6 +175,9 @@ def test_the_snapshot_refuses_a_contact_on_a_link_that_is_not_up():
         build_link_state_snapshot(
             _source({TRUNK: (True, False)}, {TRUNK: T0}),
             interface_map={TRUNK: ("isl0", "isl0")},
+            terminal_interface_names={},
+            handover_modes={},
+            mbb_overlap_ticks={},
             sim_time=T0,
             seq=1,
             interval_s=5.0,
@@ -238,7 +244,6 @@ def test_the_replay_anchor_keeps_each_contact_opening():
         teardowns={},
         receive_windows={},
         long_delay_contacts={TRUNK: T0},
-        ground_station_ids=frozenset(),
         written_at=1.0,
     )
     decoded = decode_retained_replay_anchor(encode_retained_replay_anchor(anchor))

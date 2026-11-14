@@ -28,7 +28,6 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
-from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.link_decisions import (
     GroundAllocationEvent,
@@ -46,6 +45,7 @@ from nodalarc.models.link_state import (
     SchedulingState,
 )
 
+from ome.link_allocator import teardown_remaining_ticks
 from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
 
 IslSnapshotState = Mapping[tuple[str, str], tuple[bool, bool]]
@@ -63,6 +63,7 @@ class LinkSnapshotSource:
 
     isl_state: IslSnapshotState
     ground_state: GroundSnapshotState
+    # The terminal index each association holds at pair[0] and at pair[1].
     associations: Mapping[tuple[str, str], tuple[int, int]]
     pending_teardowns: MbbTeardownState
     # Each link's committed same-instant range (km) from the tick's ISL feasibility and ground
@@ -127,12 +128,13 @@ def build_link_state_snapshot(
     source: LinkSnapshotSource,
     *,
     interface_map: dict[tuple[str, str], tuple[str, str]],
+    terminal_interface_names: Mapping[str, Mapping[int, str]],
+    handover_modes: Mapping[str, str],
+    mbb_overlap_ticks: Mapping[str, int],
     sim_time: datetime,
     seq: int,
     interval_s: float,
-    fixed_positions: Mapping[str, tuple[EcefVec3, GeoPosition]] | None = None,
     epoch_id: int = 0,
-    mbb_overlap_ticks_by_gs: Mapping[str, int] | None = None,
     current_step: int = 0,
     rule_map: Mapping[tuple[str, str], LinkRuleMetadata] | None = None,
 ) -> LinkStateSnapshot:
@@ -141,6 +143,12 @@ def build_link_state_snapshot(
     Every up link carries the range and the two one-way delays the tick committed. A missing
     value for an up link is fatal here; publishing an up link without geometry would force
     downstream components to decide whether to invent or reject physics.
+
+    A link with fixed interfaces takes them from ``interface_map``. A link whose terminals
+    the allocator chose takes each end's interface from ``terminal_interface_names``, the
+    resolved session's interface for that node's terminal index. ``handover_modes`` and
+    ``mbb_overlap_ticks`` are the stated scheduling of the nodes that state it; a pending
+    teardown's remaining ticks follow from the node that hands over.
     """
 
     def _link_range(pair: tuple[str, str]) -> float:
@@ -213,30 +221,15 @@ def build_link_state_snapshot(
 
     assoc = source.associations
     td_state = source.pending_teardowns
-    overlap_by_gs = dict(mbb_overlap_ticks_by_gs or {})
-    ground_ids = set(overlap_by_gs)
-    if fixed_positions:
-        ground_ids.update(fixed_positions)
 
-    def _ground_side(pair: tuple[str, str]) -> int:
-        # Ground pairs are lexicographically sorted, so position never
-        # identifies the ground endpoint — resolved ground identity does.
-        in_ground = [index for index, node_id in enumerate(pair) if node_id in ground_ids]
-        if len(in_ground) != 1:
+    def _terminal_interface(node_id: str, index: int) -> str:
+        try:
+            return terminal_interface_names[node_id][index]
+        except KeyError as exc:
             raise ValueError(
-                f"Cannot build LinkStateSnapshot for ground link {pair}: expected exactly "
-                f"one ground-station endpoint, found {len(in_ground)}"
-            )
-        return in_ground[0]
-
-    def _overlap_ticks_for_ground_pair(pair: tuple[str, str]) -> int:
-        for node_id in pair:
-            if node_id in overlap_by_gs:
-                return overlap_by_gs[node_id]
-        raise ValueError(
-            f"Cannot build LinkStateSnapshot for pending teardown {pair}: missing "
-            "per-ground-station MBB overlap policy"
-        )
+                f"Cannot build LinkStateSnapshot: the resolved session gives node {node_id} "
+                f"no terminal interface with index {index}"
+            ) from exc
 
     for pair, (visible, scheduled) in source.ground_state.items():
         sched_state: SchedulingState = "teardown" if pair in td_state else "active"
@@ -249,25 +242,15 @@ def build_link_state_snapshot(
         up = carrier == CarrierState.UP
         range_km = _link_range(pair) if up else None
         latencies = _committed_latencies(pair) if up else None
-        gs_ti: int | None
-        sat_ti: int | None
-        if carrier == CarrierState.UP:
-            if pair not in assoc:
-                raise ValueError(
-                    "Cannot build authoritative LinkStateSnapshot for active "
-                    f"ground link {pair}: missing OME terminal association"
-                )
-            gs_ti, sat_ti = assoc[pair]
-        else:
-            if pair in assoc:
-                gs_ti, sat_ti = assoc[pair]
-            else:
-                gs_ti = sat_ti = None
-        if gs_ti is not None:
-            gs_index = _ground_side(pair)
-            term_iface, gnd_iface = f"term{gs_ti}", f"gnd{sat_ti}"
-            interface_a = term_iface if gs_index == 0 else gnd_iface
-            interface_b = gnd_iface if gs_index == 0 else term_iface
+        if carrier == CarrierState.UP and pair not in assoc:
+            raise ValueError(
+                "Cannot build authoritative LinkStateSnapshot for active "
+                f"ground link {pair}: missing OME terminal association"
+            )
+        indices = assoc.get(pair)
+        if indices is not None:
+            interface_a = _terminal_interface(pair[0], indices[0])
+            interface_b = _terminal_interface(pair[1], indices[1])
         else:
             interface_a = ""
             interface_b = ""
@@ -276,8 +259,12 @@ def build_link_state_snapshot(
         if pair in td_state:
             teardown = td_state[pair]
             successor = teardown.successor_pair
-            td_remaining = max(
-                0, _overlap_ticks_for_ground_pair(pair) - (current_step - teardown.start_step)
+            td_remaining = teardown_remaining_ticks(
+                pair,
+                teardown,
+                current_step,
+                handover_modes=handover_modes,
+                mbb_overlap_ticks=mbb_overlap_ticks,
             )
         rule_meta = _link_rule_metadata(pair)
         links.append(
@@ -293,8 +280,8 @@ def build_link_state_snapshot(
                 latency_a_to_b_ms=latencies[0] if latencies else None,
                 latency_b_to_a_ms=latencies[1] if latencies else None,
                 link_type="ground",
-                gs_terminal_index=gs_ti,
-                sat_terminal_index=sat_ti,
+                terminal_index_a=indices[0] if indices is not None else None,
+                terminal_index_b=indices[1] if indices is not None else None,
                 scheduling_state=sched_state,
                 teardown_remaining_ticks=td_remaining,
                 successor_pair=successor,
@@ -334,26 +321,28 @@ class DeferredLinkStateSnapshot:
 
     source: LinkSnapshotSource
     interface_map: dict[tuple[str, str], tuple[str, str]]
+    terminal_interface_names: Mapping[str, Mapping[int, str]]
+    handover_modes: Mapping[str, str]
+    mbb_overlap_ticks: Mapping[str, int]
     rule_map: Mapping[tuple[str, str], LinkRuleMetadata] | None
     sim_time: datetime
     seq: int
     interval_s: float
-    fixed_positions: Mapping[str, tuple[EcefVec3, GeoPosition]] | None
     epoch_id: int
-    mbb_overlap_ticks_by_gs: Mapping[str, int] | None
     current_step: int
 
     def build(self) -> LinkStateSnapshot:
         return build_link_state_snapshot(
             self.source,
             interface_map=self.interface_map,
+            terminal_interface_names=self.terminal_interface_names,
+            handover_modes=self.handover_modes,
+            mbb_overlap_ticks=self.mbb_overlap_ticks,
             rule_map=self.rule_map,
             sim_time=self.sim_time,
             seq=self.seq,
             interval_s=self.interval_s,
-            fixed_positions=self.fixed_positions,
             epoch_id=self.epoch_id,
-            mbb_overlap_ticks_by_gs=self.mbb_overlap_ticks_by_gs,
             current_step=self.current_step,
         )
 

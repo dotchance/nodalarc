@@ -321,7 +321,7 @@ class GroundVisibilityDecisionWire(BaseModel):
       `geometry_only` and no terminal-level constraints were applied.
       The instance index (which physical terminal got the
       assignment) is carried separately on `VisibilityEvent` /
-      `LinkState` as `gs_terminal_index` / `sat_terminal_index`.
+      `LinkState` as `terminal_index_a` / `terminal_index_b`.
 
     Invariant (enforced by the model validator below): if
     `reject_reason` names a terminal-bound constraint

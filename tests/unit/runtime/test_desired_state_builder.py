@@ -11,9 +11,9 @@ import pytest
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import AdminState, CarrierState, LinkState, RoutingState
 from scheduler.desired_state import (
-    desired_link_from_snapshot_link,
-    desired_link_from_visibility,
+    desired_link,
     require_ome_geometry,
+    snapshot_row_is_up,
 )
 
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
@@ -54,6 +54,51 @@ def test_require_ome_geometry_returns_range_and_each_direction():
     assert _geometry(2222.25, 7.412, 7.415) == (2222.25, 7.412, 7.415)
 
 
+def _from_event(event, *, interface_map=None, terminal_interface_names=None):
+    return desired_link(
+        event,
+        interface_map=interface_map or {},
+        terminal_interface_names=terminal_interface_names or {},
+        long_delay_pairs=frozenset(),
+        epoch_id=0,
+        authority_sim_time=event.sim_time,
+        authority_source="visibility_event",
+    )
+
+
+def _from_row(link, *, snapshot_seq, interface_map=None, terminal_interface_names=None):
+    return desired_link(
+        link,
+        interface_map=interface_map or {},
+        terminal_interface_names=terminal_interface_names or {},
+        long_delay_pairs=frozenset(),
+        epoch_id=0,
+        authority_sim_time=SIM,
+        authority_source="link_state_snapshot",
+        authority_sequence=snapshot_seq,
+    )
+
+
+def _terminal_event(node_a, node_b, *, terminal_index_a, terminal_index_b):
+    return VisibilityEvent(
+        sim_time=SIM,
+        node_a=node_a,
+        node_b=node_b,
+        visible=True,
+        scheduled=True,
+        range_km=1800.0,
+        latency_a_to_b_ms=6.0,
+        latency_b_to_a_ms=6.0,
+        elevation_deg=38.0,
+        terminal_type="rf",
+        link_type="ground",
+        terminal_index_a=terminal_index_a,
+        terminal_index_b=terminal_index_b,
+        visibility_reject_reason="ok",
+        unscheduled_reason=None,
+    )
+
+
 def test_visibility_event_builds_desired_link_without_recomputing_geometry():
     event = VisibilityEvent(
         sim_time=SIM,
@@ -71,13 +116,7 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
         unscheduled_reason=None,
     )
 
-    pair, info = desired_link_from_visibility(
-        event,
-        interface_map={PAIR: ("isl0", "isl1")},
-        ground_station_ids=frozenset(),
-        long_delay_pairs=frozenset(),
-        epoch_id=0,
-    )
+    pair, info = _from_event(event, interface_map={PAIR: ("isl0", "isl1")})
 
     assert pair == PAIR
     assert info.interface_a == "isl0"
@@ -90,111 +129,73 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
     assert info.authority_source == "visibility_event"
 
 
-def test_ground_visibility_event_uses_terminal_indices():
-    event = VisibilityEvent(
-        sim_time=SIM,
-        node_a="gs-a",
-        node_b="sat-a",
-        visible=True,
-        scheduled=True,
-        range_km=1500.0,
-        latency_a_to_b_ms=5.0,
-        latency_b_to_a_ms=5.0,
-        elevation_deg=45.0,
-        terminal_type="rf",
-        link_type="ground",
-        gs_terminal_index=2,
-        sat_terminal_index=1,
-        visibility_reject_reason="ok",
-        unscheduled_reason=None,
-    )
+def test_a_terminal_index_names_the_interface_the_resolved_session_gives_that_node():
+    """The names below follow no pattern, so they can only come from the node's own list."""
+    event = _terminal_event("gs-a", "sat-a", terminal_index_a=2, terminal_index_b=1)
 
-    pair, info = desired_link_from_visibility(
+    pair, info = _from_event(
         event,
-        interface_map={},
-        ground_station_ids=frozenset({"gs-a"}),
-        long_delay_pairs=frozenset(),
-        epoch_id=0,
+        terminal_interface_names={
+            "gs-a": {0: "uplink5", 2: "uplink7"},
+            "sat-a": {1: "feeder4", 2: "feeder9"},
+        },
     )
 
     assert pair == ("gs-a", "sat-a")
-    assert info.interface_a == "term2"
-    assert info.interface_b == "gnd1"
+    assert info.interface_a == "uplink7"
+    assert info.interface_b == "feeder4"
     assert info.link_type == "ground"
 
 
-def test_ground_visibility_event_maps_interfaces_by_endpoint_role_for_sat_first_pair():
-    event = VisibilityEvent(
-        sim_time=SIM,
-        node_a="luna-sat-p01s00",
-        node_b="lunar-ground-gs-nearside-relay-site",
-        visible=True,
-        scheduled=True,
-        range_km=1800.0,
-        latency_a_to_b_ms=6.0,
-        latency_b_to_a_ms=6.0,
-        elevation_deg=38.0,
-        terminal_type="rf",
-        link_type="ground",
-        gs_terminal_index=0,
-        sat_terminal_index=3,
-        visibility_reject_reason="ok",
-        unscheduled_reason=None,
+def test_each_end_takes_its_own_nodes_interface_whichever_node_sorts_first():
+    """The same two nodes as a site-first pair and as a satellite-first pair."""
+    names = {
+        "luna-sat-p01s00": {3: "gnd3"},
+        "lunar-ground-gs-nearside-relay-site": {0: "term0"},
+        "a-ground-site": {0: "term0"},
+    }
+    sat_first = _terminal_event(
+        "luna-sat-p01s00",
+        "lunar-ground-gs-nearside-relay-site",
+        terminal_index_a=3,
+        terminal_index_b=0,
+    )
+    site_first = _terminal_event(
+        "a-ground-site", "luna-sat-p01s00", terminal_index_a=0, terminal_index_b=3
     )
 
-    pair, info = desired_link_from_visibility(
-        event,
-        interface_map={},
-        ground_station_ids=frozenset({"lunar-ground-gs-nearside-relay-site"}),
-        long_delay_pairs=frozenset(),
-        epoch_id=0,
-    )
-
+    pair, info = _from_event(sat_first, terminal_interface_names=names)
     assert pair == ("luna-sat-p01s00", "lunar-ground-gs-nearside-relay-site")
-    assert info.interface_a == "gnd3"
-    assert info.interface_b == "term0"
-    assert info.link_type == "ground"
+    assert (info.interface_a, info.interface_b) == ("gnd3", "term0")
+
+    pair, info = _from_event(site_first, terminal_interface_names=names)
+    assert pair == ("a-ground-site", "luna-sat-p01s00")
+    assert (info.interface_a, info.interface_b) == ("term0", "gnd3")
 
 
-def test_ground_visibility_event_requires_exactly_one_ground_endpoint():
-    event = VisibilityEvent(
-        sim_time=SIM,
-        node_a="sat-a",
-        node_b="sat-b",
-        visible=True,
-        scheduled=True,
-        range_km=1800.0,
-        latency_a_to_b_ms=6.0,
-        latency_b_to_a_ms=6.0,
-        elevation_deg=38.0,
-        terminal_type="rf",
-        link_type="ground",
-        gs_terminal_index=0,
-        sat_terminal_index=3,
-        visibility_reject_reason="ok",
-        unscheduled_reason=None,
-    )
+def test_a_terminal_the_resolved_session_does_not_give_the_node_fails_loudly():
+    names = {"sat-a": {0: "gnd0"}, "sat-b": {3: "gnd3"}}
 
-    with pytest.raises(ValueError, match="no ground endpoint"):
-        desired_link_from_visibility(
-            event,
-            interface_map={},
-            ground_station_ids=frozenset({"gs-a"}),
-            long_delay_pairs=frozenset(),
-            epoch_id=0,
+    with pytest.raises(ValueError, match="names terminal 5 at sat-a"):
+        _from_event(
+            _terminal_event("sat-a", "sat-b", terminal_index_a=5, terminal_index_b=3),
+            terminal_interface_names=names,
         )
 
-    with pytest.raises(ValueError, match="two ground endpoints"):
-        desired_link_from_visibility(
-            event,
-            interface_map={},
-            ground_station_ids=frozenset({"sat-a", "sat-b"}),
-            long_delay_pairs=frozenset(),
-            epoch_id=0,
+    with pytest.raises(ValueError, match="names terminal 3 at sat-b"):
+        _from_event(
+            _terminal_event("sat-a", "sat-b", terminal_index_a=0, terminal_index_b=3),
+            terminal_interface_names={"sat-a": {0: "gnd0"}},
+        )
+
+    with pytest.raises(ValueError, match="a terminal at one end only"):
+        _from_event(
+            _terminal_event("sat-a", "sat-b", terminal_index_a=0, terminal_index_b=None),
+            terminal_interface_names=names,
         )
 
 
-def test_missing_isl_interface_map_fails_loudly():
+def test_a_link_with_no_terminals_and_no_fixed_interfaces_fails_loudly():
     event = VisibilityEvent(
         sim_time=SIM,
         node_a=PAIR[0],
@@ -211,17 +212,11 @@ def test_missing_isl_interface_map_fails_loudly():
         unscheduled_reason=None,
     )
 
-    with pytest.raises(ValueError, match="no configured ISL interfaces"):
-        desired_link_from_visibility(
-            event,
-            interface_map={},
-            ground_station_ids=frozenset(),
-            long_delay_pairs=frozenset(),
-            epoch_id=0,
-        )
+    with pytest.raises(ValueError, match="fixes no interfaces for the pair"):
+        _from_event(event)
 
 
-def test_snapshot_link_builds_desired_link_and_skips_down_links():
+def test_snapshot_row_builds_desired_link_and_a_down_row_is_not_up():
     down = LinkState(
         node_a=PAIR[0],
         node_b=PAIR[1],
@@ -236,18 +231,7 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
         link_type="isl",
         sim_time=SIM,
     )
-    assert (
-        desired_link_from_snapshot_link(
-            down,
-            interface_map={PAIR: ("isl0", "isl1")},
-            ground_station_ids=frozenset(),
-            snapshot_sim_time=SIM,
-            snapshot_seq=42,
-            long_delay_pairs=frozenset(),
-            epoch_id=0,
-        )
-        is None
-    )
+    assert not snapshot_row_is_up(down, snapshot_sim_time=SIM)
 
     up = down.model_copy(
         update={
@@ -258,15 +242,8 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
             "latency_b_to_a_ms": 11.121,
         }
     )
-    pair, info = desired_link_from_snapshot_link(
-        up,
-        interface_map={PAIR: ("isl0", "isl1")},
-        ground_station_ids=frozenset(),
-        snapshot_sim_time=SIM,
-        snapshot_seq=42,
-        long_delay_pairs=frozenset(),
-        epoch_id=0,
-    )
+    assert snapshot_row_is_up(up, snapshot_sim_time=SIM)
+    pair, info = _from_row(up, snapshot_seq=42, interface_map={PAIR: ("isl0", "isl1")})
     assert pair == PAIR
     assert info.range_km == 3333.0
     assert info.latencies_ms == (11.118, 11.121)
@@ -275,13 +252,13 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
     assert info.authority_sequence == 42
 
 
-def test_snapshot_ground_link_maps_interfaces_by_endpoint_role_for_sat_first_pair():
+def test_snapshot_row_with_terminals_takes_each_nodes_interface():
     pair = ("luna-sat-p01s00", "lunar-ground-gs-nearside-relay-site")
     link = LinkState(
         node_a=pair[0],
         node_b=pair[1],
-        interface_a="",
-        interface_b="",
+        interface_a="gnd3",
+        interface_b="term0",
         admin=AdminState.UP,
         carrier=CarrierState.UP,
         routing=RoutingState.UNKNOWN,
@@ -290,18 +267,14 @@ def test_snapshot_ground_link_maps_interfaces_by_endpoint_role_for_sat_first_pai
         latency_b_to_a_ms=6.0,
         link_type="ground",
         sim_time=SIM,
-        gs_terminal_index=0,
-        sat_terminal_index=3,
+        terminal_index_a=3,
+        terminal_index_b=0,
     )
 
-    built_pair, info = desired_link_from_snapshot_link(
+    built_pair, info = _from_row(
         link,
-        interface_map={},
-        ground_station_ids=frozenset({"lunar-ground-gs-nearside-relay-site"}),
-        snapshot_sim_time=SIM,
         snapshot_seq=11,
-        long_delay_pairs=frozenset(),
-        epoch_id=0,
+        terminal_interface_names={pair[0]: {3: "gnd3"}, pair[1]: {0: "term0"}},
     )
 
     assert built_pair == pair
@@ -310,7 +283,7 @@ def test_snapshot_ground_link_maps_interfaces_by_endpoint_role_for_sat_first_pai
     assert info.authority_source == "link_state_snapshot"
 
 
-def test_snapshot_link_sim_time_mismatch_fails_loudly():
+def test_snapshot_row_sim_time_mismatch_fails_loudly():
     link = LinkState(
         node_a=PAIR[0],
         node_b=PAIR[1],
@@ -327,12 +300,4 @@ def test_snapshot_link_sim_time_mismatch_fails_loudly():
     )
 
     with pytest.raises(ValueError, match="sim_time does not match"):
-        desired_link_from_snapshot_link(
-            link,
-            interface_map={PAIR: ("isl0", "isl1")},
-            ground_station_ids=frozenset(),
-            snapshot_sim_time=SIM,
-            snapshot_seq=42,
-            long_delay_pairs=frozenset(),
-            epoch_id=0,
-        )
+        snapshot_row_is_up(link, snapshot_sim_time=SIM)

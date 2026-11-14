@@ -38,7 +38,7 @@ from ome.types import (
 )
 
 
-def _pair_key(pair: tuple[str, str]) -> str:
+def pair_key(pair: tuple[str, str]) -> str:
     return f"{pair[0]}:{pair[1]}"
 
 
@@ -59,49 +59,34 @@ def build_replay_anchor(
     teardowns: MbbTeardownState,
     receive_windows: ReceiveWindows,
     long_delay_contacts: LongDelayContacts,
-    ground_station_ids: frozenset[str],
     written_at: float,
 ) -> ReplayAnchor:
     """Freeze the replay-carried state as of ``step`` into the wire model.
 
-    Association and teardown entries reuse the checkpoint's wire shapes;
-    the pair is reconstructed from gs_id/sat_id fields on restore, so the
-    ground endpoint must be identified here exactly as the checkpoint
-    builder does.
+    Association and teardown entries reuse the checkpoint's wire shapes: each names its
+    two nodes in node-pair order, with an association's terminal index at each.
     """
 
-    def _ground_sat(pair: tuple[str, str]) -> tuple[str, str]:
-        in_ground = [node for node in pair if node in ground_station_ids]
-        if len(in_ground) != 1:
-            raise ValueError(
-                f"Replay anchor pair {pair!r} must contain exactly one "
-                f"ground-station endpoint, found {len(in_ground)}"
-            )
-        gs_id = in_ground[0]
-        sat_id = pair[1] if pair[0] == gs_id else pair[0]
-        return gs_id, sat_id
-
-    assoc_flat: dict[str, CheckpointAssociation] = {}
-    for pair, (gs_ti, sat_ti) in associations.items():
-        gs_id, sat_id = _ground_sat(pair)
-        assoc_flat[_pair_key(pair)] = CheckpointAssociation(
-            gs_id=gs_id,
-            sat_id=sat_id,
-            gs_terminal_index=gs_ti,
-            sat_terminal_index=sat_ti,
+    assoc_flat: dict[str, CheckpointAssociation] = {
+        pair_key(pair): CheckpointAssociation(
+            node_a=pair[0],
+            node_b=pair[1],
+            terminal_index_a=indices[0],
+            terminal_index_b=indices[1],
         )
+        for pair, indices in associations.items()
+    }
 
     td_flat: dict[str, TeardownEntry] = {}
     for pair, teardown in teardowns.items():
-        gs_id, sat_id = _ground_sat(pair)
-        td_flat[_pair_key(pair)] = TeardownEntry(
+        td_flat[pair_key(pair)] = TeardownEntry(
             start_step=teardown.start_step,
             # remaining_ticks on the wire shape is a checkpoint-side audit
             # value; the anchor restores from start_step, which is the
             # internal source of truth the allocator computes from.
             remaining_ticks=0,
-            gs_id=gs_id,
-            sat_id=sat_id,
+            node_a=pair[0],
+            node_b=pair[1],
             successor_node_a=teardown.successor_pair[0],
             successor_node_b=teardown.successor_pair[1],
         )
@@ -109,8 +94,8 @@ def build_replay_anchor(
     return ReplayAnchor(
         epoch_id=epoch_id,
         step=step,
-        isl_state={_pair_key(p): v for p, v in isl_state.items()},
-        gs_state={_pair_key(p): v for p, v in gs_state.items()},
+        isl_state={pair_key(p): v for p, v in isl_state.items()},
+        gs_state={pair_key(p): v for p, v in gs_state.items()},
         associations=assoc_flat,
         pending_teardowns=td_flat,
         receive_windows={
@@ -124,7 +109,7 @@ def build_replay_anchor(
             )
             for (node_id, index), window in receive_windows.items()
         },
-        long_delay_contacts={_pair_key(p): opened for p, opened in long_delay_contacts.items()},
+        long_delay_contacts={pair_key(p): opened for p, opened in long_delay_contacts.items()},
         written_at=written_at,
     )
 
@@ -147,7 +132,7 @@ def replay_state_from_anchor(
     isl_state = {_key_pair(k): (bool(v[0]), bool(v[1])) for k, v in anchor.isl_state.items()}
     gs_state = {_key_pair(k): (v[0], v[1], v[2]) for k, v in anchor.gs_state.items()}
     associations = {
-        _key_pair(k): (entry.gs_terminal_index, entry.sat_terminal_index)
+        _key_pair(k): (entry.terminal_index_a, entry.terminal_index_b)
         for k, entry in anchor.associations.items()
     }
     teardowns: MbbTeardownState = {
@@ -187,7 +172,6 @@ class DeferredReplayAnchor:
     teardowns: MbbTeardownState
     receive_windows: ReceiveWindows
     long_delay_contacts: LongDelayContacts
-    ground_station_ids: frozenset[str]
     written_at: float
 
     def build(self) -> ReplayAnchor:
@@ -200,6 +184,5 @@ class DeferredReplayAnchor:
             teardowns=self.teardowns,
             receive_windows=self.receive_windows,
             long_delay_contacts=self.long_delay_contacts,
-            ground_station_ids=self.ground_station_ids,
             written_at=self.written_at,
         )

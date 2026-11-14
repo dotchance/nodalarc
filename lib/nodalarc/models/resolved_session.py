@@ -741,10 +741,12 @@ class ResolvedEndpoint(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class ResolvedAccessTerminalSelection:
-    """One selected access mount and its resolver-owned interface indices."""
+    """One selected access mount, its resolver-owned interface indices and the interface
+    behind each index, in the same order."""
 
     block: ResolvedTerminalBlock
     interface_indices: tuple[int, ...]
+    interface_names: tuple[str, ...]
 
 
 class ResolvedLinkRule(BaseModel):
@@ -1420,7 +1422,7 @@ class ResolvedSession(BaseModel):
             if not terminal_ids:
                 continue
             expected_prefix = "term" if node.kind == "ground_station" else "gnd"
-            interfaces_by_terminal: dict[str, list[int]] = {}
+            interfaces_by_terminal: dict[str, list[tuple[int, str]]] = {}
             for interface in node.wan_interfaces:
                 if interface.terminal_id not in terminal_ids:
                     continue
@@ -1435,13 +1437,16 @@ class ResolvedSession(BaseModel):
                         f"selected access interface {node.node_id}:{interface.name} "
                         "does not end in a numeric global index"
                     )
-                interfaces_by_terminal.setdefault(interface.terminal_id, []).append(int(suffix))
+                interfaces_by_terminal.setdefault(interface.terminal_id, []).append(
+                    (int(suffix), interface.name)
+                )
 
             selections: list[ResolvedAccessTerminalSelection] = []
             for block in node.terminal_inventory:
                 if block.terminal_id not in terminal_ids:
                     continue
-                indices = tuple(interfaces_by_terminal.get(block.terminal_id, ()))
+                interfaces = interfaces_by_terminal.get(block.terminal_id, ())
+                indices = tuple(index for index, _name in interfaces)
                 if len(indices) != block.count:
                     raise ValueError(
                         f"selected access mount {node.node_id}:{block.terminal_id} declares "
@@ -1453,7 +1458,11 @@ class ResolvedSession(BaseModel):
                         f"duplicate global interface indices {indices}"
                     )
                 selections.append(
-                    ResolvedAccessTerminalSelection(block=block, interface_indices=indices)
+                    ResolvedAccessTerminalSelection(
+                        block=block,
+                        interface_indices=indices,
+                        interface_names=tuple(name for _index, name in interfaces),
+                    )
                 )
             missing = sorted(terminal_ids - {item.block.terminal_id for item in selections})
             if missing:
@@ -1463,6 +1472,24 @@ class ResolvedSession(BaseModel):
                 )
             result[node.node_id] = tuple(selections)
         return result
+
+    def terminal_interface_names(self) -> dict[str, dict[int, str]]:
+        """Each node's selected access terminal interfaces, by terminal index.
+
+        OME names the terminals of a link by index. This is the one lookup that turns a
+        node's terminal index into the pod interface the resolver created for it, so no
+        consumer builds an interface name from an index.
+        """
+        return {
+            node_id: {
+                index: name
+                for selection in selections
+                for index, name in zip(
+                    selection.interface_indices, selection.interface_names, strict=True
+                )
+            }
+            for node_id, selections in self.selected_access_terminals_by_node().items()
+        }
 
     def ground_index_by_node_id(self) -> dict[str, int]:
         """Resolution-order index over ground stations (wiring-manifest fact).

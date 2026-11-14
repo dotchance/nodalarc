@@ -883,9 +883,10 @@ def test_cap_full_names_the_pool_size_when_the_pool_binds_before_the_rule_cap():
     assert (refused.unscheduled_reason, refused.node_id, refused.cap) == ("cap_full", "b", 0)
 
 
-def test_an_association_orders_its_two_indices_by_the_lead_node():
-    """The lead is the one node that states scheduling, and the first node in node-pair order
-    when neither or both do."""
+def test_an_association_holds_its_two_indices_in_node_pair_order():
+    """The first index is the terminal at the pair's first node and the second the terminal at
+    its second node, whichever node states scheduling. The event, the snapshot and the
+    Scheduler read them in that order."""
     pools = {"a": {POOL: (5,)}, "b": {POOL: (7,)}}
     neither = _allocate(_usable({("a", "b"): 5.0}), pools=pools)
     assert neither.associations == {("a", "b"): (5, 7)}
@@ -895,7 +896,7 @@ def test_an_association_orders_its_two_indices_by_the_lead_node():
         pools=pools,
         stating=frozenset({"b"}),
     )
-    assert second_states.associations == {("a", "b"): (7, 5)}
+    assert second_states.associations == {("a", "b"): (5, 7)}
 
     both = frozenset({"a", "b"})
     score = {"a": {("a", "b"): 40.0}, "b": {("a", "b"): 40.0}}

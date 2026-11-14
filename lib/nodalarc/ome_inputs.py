@@ -74,6 +74,9 @@ class ResolvedOmeInputs:
     period: float
     propagator_id: SessionPropagatorId
     interface_map: dict[tuple[str, str], tuple[str, str]]
+    # Each node's selected access terminal interfaces by terminal index
+    # (``ResolvedSession.terminal_interface_names``).
+    terminal_interface_names: dict[str, dict[int, str]]
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
     # The ground pairs (station, satellite) the resolver classed long-delay, sorted like every
@@ -192,6 +195,7 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         period=period,
         propagator_id=propagator_id,
         interface_map=resolved.link_interface_map(),
+        terminal_interface_names=resolved.terminal_interface_names(),
         rule_map=_rule_map_from_resolved(resolved),
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
         long_delay_access_pairs=frozenset(

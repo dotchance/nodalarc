@@ -96,13 +96,14 @@ def _assert_tick_round_trips(cfg, ctx, result, step: int, step_seconds: float):
     link_snapshot = DeferredLinkStateSnapshot(
         source=result.link_snapshot_source,
         interface_map=cfg.interface_map,
+        terminal_interface_names=cfg.terminal_interface_names,
+        handover_modes=ctx.gs_handover_modes,
+        mbb_overlap_ticks=ctx.gs_mbb_overlap_ticks,
         rule_map=cfg.rule_map,
         sim_time=result.sim_time,
         seq=step,
         interval_s=step_seconds,
-        fixed_positions=ctx.gs_positions,
         epoch_id=0,
-        mbb_overlap_ticks_by_gs=ctx.gs_mbb_overlap_ticks,
         current_step=result.step,
     ).build()
     wire = link_snapshot.model_dump_json()

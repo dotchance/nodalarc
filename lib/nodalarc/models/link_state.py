@@ -80,8 +80,11 @@ class LinkState(BaseModel):
     link_rule_id: str | None = None
     topology_mode: TopologyMode | None = None
     endpoint_segments: tuple[str, str] | None = None
-    gs_terminal_index: int | None = None
-    sat_terminal_index: int | None = None
+    # The terminal OME assigned the link at node_a and at node_b, on a link whose terminals are
+    # chosen per association. None on a link with fixed interfaces and on a pair that holds no
+    # association.
+    terminal_index_a: int | None = None
+    terminal_index_b: int | None = None
     scheduling_state: SchedulingState = "active"
     teardown_remaining_ticks: int | None = None
     successor_pair: tuple[str, str] | None = None
